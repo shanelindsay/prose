@@ -9,7 +9,6 @@
        - marked 9 (markdown → HTML)
 
      Draft persistence: window.storage (artifact runtime API).
-     Jump to desktop: prose://open?content=<urlencoded-markdown>
 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -34,15 +33,10 @@
     --border: #e4e4e7;
     --text: #1a1a1a;
     --muted: #71717a;
-    --btn-bg: #18181b;
-    --btn-text: #fafafa;
-    --btn-hover: #27272a;
     --btn-secondary-bg: #f4f4f5;
     --btn-secondary-text: #18181b;
     --btn-secondary-hover: #e4e4e7;
-    --warning-bg: #fef9c3;
     --warning-text: #713f12;
-    --warning-border: #fde047;
     --copied-bg: #dcfce7;
     --copied-text: #14532d;
 
@@ -63,15 +57,10 @@
     --border: #3f3f46;
     --text: #fafafa;
     --muted: #a1a1aa;
-    --btn-bg: #fafafa;
-    --btn-text: #18181b;
-    --btn-hover: #e4e4e7;
     --btn-secondary-bg: #27272a;
     --btn-secondary-text: #fafafa;
     --btn-secondary-hover: #3f3f46;
-    --warning-bg: rgba(253, 224, 71, 0.12);
     --warning-text: #fde047;
-    --warning-border: rgba(253, 224, 71, 0.3);
     --copied-bg: rgba(34, 197, 94, 0.15);
     --copied-text: #bbf7d0;
   }
@@ -119,12 +108,6 @@
     text-decoration: none;
     line-height: 1.4;
   }
-
-  .btn-primary {
-    background: var(--btn-bg);
-    color: var(--btn-text);
-  }
-  .btn-primary:hover { background: var(--btn-hover); color: var(--btn-text); }
 
   .btn-secondary {
     background: var(--btn-secondary-bg);
@@ -176,16 +159,6 @@
   .word-count {
     font-size: 11px;
     color: var(--muted);
-  }
-
-  /* Warning bar */
-  .warning-bar {
-    padding: 6px 12px;
-    background: var(--warning-bg);
-    color: var(--warning-text);
-    border-top: 1px solid var(--warning-border);
-    font-size: 11px;
-    flex-shrink: 0;
   }
 
   /* Editor area */
@@ -350,8 +323,6 @@
 
   var DRAFT_KEY  = 'prose-artifact-draft';
   var THEME_KEY  = 'prose-artifact-theme';
-  var MAX_BYTES  = 5 * 1024 * 1024; // 5 MB — matches parseProseUrl cap in index.ts
-  var WARN_BYTES = 4 * 1024 * 1024; // warn at 4 MB
 
   // ── Markdown rendering ───────────────────────────────────────────────────
   // marked.use() is the v5+ API; setOptions is deprecated in v9.
@@ -380,15 +351,6 @@
   function wordCount(text) {
     if (!text || !text.trim()) return 0;
     return text.trim().split(/\s+/).length;
-  }
-
-  function byteLen(str) {
-    try { return new Blob([str]).size; }
-    catch(_) { return str.length; }
-  }
-
-  function proseUrl(content) {
-    return 'prose://open?content=' + encodeURIComponent(content);
   }
 
   // ── Inline SVG icons ─────────────────────────────────────────────────────
@@ -432,12 +394,6 @@
 
   function IcMoon() { return h(Icon, null,
     h('path', { d:'M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' })
-  ); }
-
-  function IcExternal() { return h(Icon, null,
-    h('path', { d:'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6' }),
-    h('polyline', { points:'15 3 21 3 21 9' }),
-    h('line', { x1:'10', y1:'14', x2:'21', y2:'3' })
   ); }
 
   // ── Main component ───────────────────────────────────────────────────────
@@ -530,14 +486,8 @@
     }, [content]);
 
     var words = wordCount(content);
-    var bytes = byteLen(content);
-    var nearCap = bytes > WARN_BYTES;
-    var overCap = bytes >= MAX_BYTES;
 
     var preview = useMemo(function() { return renderMd(content); }, [content]);
-    // Skip URL encoding when over the 5MB cap — the button is disabled anyway,
-    // and encodeURIComponent on a multi-MB string causes input lag in the editor.
-    var pUrl = useMemo(function() { return overCap ? '' : proseUrl(content); }, [content, overCap]);
 
     var showEdit    = view === 'split' || view === 'edit';
     var showPreview = view === 'split' || view === 'preview';
@@ -581,28 +531,11 @@
           copied ? 'Copied' : (copyFailed ? 'Failed' : 'Copy markdown')
         ),
 
-        // Open in Prose via prose:// URL scheme
-        h('a', {
-          className: 'btn btn-primary',
-          href: overCap ? undefined : pUrl,
-          title: overCap
-            ? 'Document exceeds 5 MB — use Copy markdown instead'
-            : 'Open in Prose desktop app',
-          style: overCap ? { opacity: 0.5, pointerEvents: 'none' } : undefined
-        }, h(IcExternal), 'Open in Prose'),
-
         h('button', {
           className: 'btn btn-ghost',
           onClick: handleTheme,
           title: theme === 'dark' ? 'Light mode' : 'Dark mode'
         }, theme === 'dark' ? h(IcSun) : h(IcMoon))
-      ),
-
-      // Size warning
-      nearCap && h('div', { className: 'warning-bar' },
-        overCap
-          ? 'Document exceeds the 5 MB limit for Open in Prose. Use Copy markdown instead.'
-          : 'Document is nearing the 5 MB limit for Open in Prose.'
       ),
 
       // Editor / Preview

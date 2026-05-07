@@ -203,52 +203,36 @@ If both `show_widget` and `visualize:show_widget` return "tool not found", rende
 | Mac App Store build of Prose | Sandbox blocks MCP. Offer pasted-content workflow. Don't suggest install. |
 | Prose not running | Suggest launching, or work with pasted content. |
 
-## Artifact editor — in-conversation markdown editing
+## Artifact editor — the default surface for substantive markdown
 
-The Prose artifact editor is a lightweight markdown editor that runs inside Claude's artifact pane. Use it when the user wants to draft or edit markdown in the conversation without switching to the desktop app.
+The Prose artifact editor is a lightweight markdown editor that renders in Claude's artifact pane. **It is the default presentation surface for substantive markdown content** — not an opt-in, not a fallback, not a heuristic.
 
-### When to render the artifact
+### When to render
 
-Render the artifact when:
+When you would otherwise output a self-contained markdown document — a README, post, draft, notes file, structured response with headings or lists, or anything multi-paragraph the user would plausibly want to copy or save — render it via the artifact instead of as inline markdown.
 
-- The user wants to draft something short-lived in the conversation ("write a README here", "help me draft this email", "can I edit this in the chat").
-- The user is iterating on a document collaboratively with you and wants to see changes as you make them.
-- The user explicitly asks for an in-chat editor or mentions they don't want to open Prose.
-- MCP is unavailable (MAS build, Prose not installed) and the user still wants to edit markdown.
+Inline markdown is reserved for:
 
-**Do not** render the artifact for serious editing sessions where the user has a real file open in Prose. For those, the MCP workflow (`read_document` → `suggest_edit`) is better — it lands edits directly in the user's document with diff review.
+- Short conversational replies (a sentence or two).
+- Single code-block snippets where the prose around them is minimal.
+- Direct answers to lookup questions (`how do I X?`).
 
-### How to render the artifact
+If you are uncertain whether a response is "substantive enough", render the artifact. The cost of the artifact pane is low; the cost of presenting a long document inline is that the user can't easily copy, save, or keep editing it.
 
-Read the artifact source from `resources/prose-artifact/prose-editor.html` in this skill bundle and render it as a React artifact. The file is self-contained HTML — copy it verbatim as the artifact content. Do not wrap it in a `<!DOCTYPE html>` document or add extra boilerplate.
+**Exception**: when the user has a real file open in Prose and is asking you to work on *that document*, use the MCP workflow (`read_document` → `suggest_edit`) instead. The artifact is for drafting *new* markdown content in the conversation; the MCP path edits the user's existing files. Don't fork them into the artifact and lose their context.
 
-When rendering, narrate briefly in one sentence: what the artifact is and that they can click "Open in Prose" to hand the document off to the desktop app when they're done.
+### How to render
 
-### What the artifact does
+Read the file `prose-editor.html` from this skill bundle (sibling of `SKILL.md`) and render its contents verbatim as a React artifact. It is a self-contained single-file HTML React app — paste exactly as-is. Do not wrap it in a `<!DOCTYPE html>` document. Do not modify the React component, the CDN script tags, or the SRI integrity hashes.
 
-- **Edit pane**: a textarea for raw markdown input.
-- **Preview pane**: live rendered preview via `marked` (GitHub Flavored Markdown).
-- **Split / Edit / Preview toggle**: switch between views.
-- **Copy markdown**: copies raw markdown to clipboard — works without Prose installed.
-- **Download**: downloads the markdown source as a `.md` file.
-- **Open in Prose**: fires a `prose://open?content=...` deep link. Prose desktop opens a new tab with the content. Works for all desktop users (MAS and direct download) — no MCP required. If Prose is not installed, the OS shows its standard "no app registered" dialog.
-- **Draft persistence**: the draft is saved to `window.storage` (Claude's artifact persistence API) so it survives conversation turns and page reloads.
-- **Light/dark theme**: matches system preference by default; toggle is in the toolbar.
+Set the artifact's initial markdown content by replacing the empty-string default in `useState(stor.get(DRAFT_KEY) || '')` with the markdown you want to seed. Or — simpler — render the artifact empty and immediately follow with the markdown content in a code block; the user can paste it in.
 
-### prose:// deep link behavior
+In your conversational reply, briefly state in one sentence what the artifact contains and that they can edit, copy, or download it.
 
-The `prose://open?content=...` URL scheme is registered by Prose on first launch (`app.setAsDefaultProtocolClient('prose')`). When clicked:
+### What the artifact provides
 
-- macOS: routes through the `open-url` app event.
-- Windows/Linux: passes as a command-line argument on second-instance launch.
-
-Content is URL-decoded and validated by `parseProseUrl()` in Prose's main process. The 5 MB hard cap lives there — the artifact warns at 4 MB (well before the cap). Real-world drafts from a Claude conversation are typically under 50 KB.
-
-### Handoff to desktop Prose
-
-Once the user is done drafting in the artifact and wants to continue in the desktop app:
-
-1. They click "Open in Prose" — Prose opens a new tab with the content.
-2. They save the file from Prose (File → Save or Cmd+S).
-
-If they don't have Prose installed, "Copy markdown" copies the source for pasting into any editor.
+- **Edit / Split / Preview** view toggle — raw markdown textarea, live `marked`-rendered preview (sanitized via DOMPurify), or both side-by-side.
+- **Copy markdown** — copies raw markdown to the clipboard. Falls back to a "Failed" indicator if clipboard access is denied.
+- **Download** — downloads the markdown source as a `.md` file.
+- **Theme toggle** — light/dark; system preference is the default; user choice persists via `window.storage`.
+- **Draft persistence** — the textarea content is saved to `window.storage` so the draft survives conversation turns and page reloads.
