@@ -145,15 +145,23 @@ const MAX_URL_CONTENT_BYTES = 5 * 1024 * 1024
 function parseProseUrl(url: string): string | null {
   try {
     const parsed = new URL(url)
-    if (parsed.protocol !== 'prose:' || parsed.hostname !== 'open') return null
+    if (parsed.protocol !== 'prose:' || parsed.hostname !== 'open') {
+      console.warn('[prose://] Rejected URL — protocol/hostname mismatch:',
+        JSON.stringify({ protocol: parsed.protocol, hostname: parsed.hostname }))
+      return null
+    }
     const content = parsed.searchParams.get('content')
-    if (!content) return null
+    if (!content) {
+      console.warn('[prose://] Rejected URL — no content param')
+      return null
+    }
     if (Buffer.byteLength(content, 'utf8') > MAX_URL_CONTENT_BYTES) {
       console.warn('[prose://] Rejected oversized payload')
       return null
     }
     return content
-  } catch {
+  } catch (err) {
+    console.warn('[prose://] URL parse threw:', err)
     return null
   }
 }
@@ -187,6 +195,11 @@ app.on('open-url', (event, url) => {
     mainWindow.webContents.send('prose:openFromUrl', content)
   } else {
     pendingUrlContent = content
+    // If no window exists (macOS app running with all windows closed), create one.
+    // The new window's renderer:ready handshake will drain pendingUrlContent.
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow()
+    }
   }
 })
 

@@ -877,13 +877,17 @@ export function App() {
   useEffect(() => {
     if (!window.api?.onOpenFromUrl) return
     const unsubscribe = window.api.onOpenFromUrl(async (content: string) => {
-      const { parseMarkdown } = await import('../../lib/markdown')
-      const parsed = parseMarkdown(content)
-      await createNewTab({
-        content: parsed.content,
-        frontmatter: parsed.frontmatter,
-        isDirty: true
-      })
+      try {
+        const { parseMarkdown } = await import('../../lib/markdown')
+        const parsed = parseMarkdown(content)
+        await createNewTab({
+          content: parsed.content,
+          frontmatter: parsed.frontmatter,
+          isDirty: true
+        })
+      } catch (err) {
+        console.error('[prose:openFromUrl] Handler threw:', err)
+      }
     })
     return unsubscribe
   }, [createNewTab])
