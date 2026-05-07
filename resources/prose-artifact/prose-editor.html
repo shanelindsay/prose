@@ -1,16 +1,17 @@
-<!-- Prose Artifact Editor
-     Single-file React artifact for Claude's artifact pane.
-     No DOCTYPE — rendered directly by Claude's artifact runtime.
-     No top-level padding, transparent background.
+<!-- Prose Editor Widget
+     Single-file inline widget rendered via visualize:show_widget.
+     No DOCTYPE — the widget runtime injects this into the chat stream.
 
      External dependencies (all from cdnjs.cloudflare.com):
        - React 18
        - ReactDOM 18
        - marked 9 (markdown → HTML)
+       - DOMPurify 3 (sanitize marked output before render)
 
-     Draft persistence: window.storage (artifact runtime API).
      Initial content: text contents of <script id="prose-initial-markdown" type="text/plain">.
-     Jump to desktop: prose://open?content=<urlencoded-markdown>
+     Handoff: "Save to Prose" calls the widget runtime's global sendPrompt(text)
+     to inject a structured turn into the chat. Claude parses it and calls the
+     create_and_open_file MCP tool. See SKILL.md for the message contract.
 -->
 <script id="prose-initial-markdown" type="text/plain"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -42,9 +43,7 @@
     --btn-secondary-bg: #f4f4f5;
     --btn-secondary-text: #18181b;
     --btn-secondary-hover: #e4e4e7;
-    --warning-bg: #fef9c3;
     --warning-text: #713f12;
-    --warning-border: #fde047;
     --copied-bg: #dcfce7;
     --copied-text: #14532d;
 
@@ -71,9 +70,7 @@
     --btn-secondary-bg: #27272a;
     --btn-secondary-text: #fafafa;
     --btn-secondary-hover: #3f3f46;
-    --warning-bg: rgba(253, 224, 71, 0.12);
     --warning-text: #fde047;
-    --warning-border: rgba(253, 224, 71, 0.3);
     --copied-bg: rgba(34, 197, 94, 0.15);
     --copied-text: #bbf7d0;
   }
@@ -178,16 +175,6 @@
   .word-count {
     font-size: 11px;
     color: var(--muted);
-  }
-
-  /* Warning bar */
-  .warning-bar {
-    padding: 6px 12px;
-    background: var(--warning-bg);
-    color: var(--warning-text);
-    border-top: 1px solid var(--warning-border);
-    font-size: 11px;
-    flex-shrink: 0;
   }
 
   /* Editor area */
@@ -352,8 +339,6 @@
 
   var DRAFT_KEY  = 'prose-artifact-draft';
   var THEME_KEY  = 'prose-artifact-theme';
-  var MAX_BYTES  = 5 * 1024 * 1024; // 5 MB — matches parseProseUrl cap in src/main/index.ts
-  var WARN_BYTES = 4 * 1024 * 1024; // warn at 4 MB
 
   // Initial markdown content seeded by Claude into a <script type="text/plain">
   // so seeding doesn't require any JS escaping. Read once at startup.
@@ -389,15 +374,6 @@
   function wordCount(text) {
     if (!text || !text.trim()) return 0;
     return text.trim().split(/\s+/).length;
-  }
-
-  function byteLen(str) {
-    try { return new Blob([str]).size; }
-    catch(_) { return str.length; }
-  }
-
-  function proseUrl(content) {
-    return 'prose://open?content=' + encodeURIComponent(content);
   }
 
   // ── Inline SVG icons ─────────────────────────────────────────────────────
@@ -443,10 +419,11 @@
     h('path', { d:'M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' })
   ); }
 
-  function IcExternal() { return h(Icon, null,
-    h('path', { d:'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6' }),
-    h('polyline', { points:'15 3 21 3 21 9' }),
-    h('line', { x1:'10', y1:'14', x2:'21', y2:'3' })
+  // Cloud upload arrow — "Save to Prose"
+  function IcSave() { return h(Icon, null,
+    h('path', { d:'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' }),
+    h('polyline', { points:'17 8 12 3 7 8' }),
+    h('line', { x1:'12', y1:'3', x2:'12', y2:'15' })
   ); }
 
   // ── Main component ───────────────────────────────────────────────────────
@@ -474,15 +451,23 @@
     var _copyFailed = useState(false);
     var copyFailed = _copyFailed[0]; var setCopyFailed = _copyFailed[1];
 
+    var _saved = useState(false);
+    var saved = _saved[0]; var setSaved = _saved[1];
+
+    var _saveFailed = useState(false);
+    var saveFailed = _saveFailed[0]; var setSaveFailed = _saveFailed[1];
+
     var saveTimer = useRef(null);
     var copiedTimer = useRef(null);
+    var savedTimer = useRef(null);
 
-    // Clear pending timers on unmount so artifact teardown doesn't fire
+    // Clear pending timers on unmount so widget teardown doesn't fire
     // setState on a gone component.
     useEffect(function() {
       return function() {
         if (saveTimer.current) clearTimeout(saveTimer.current);
         if (copiedTimer.current) clearTimeout(copiedTimer.current);
+        if (savedTimer.current) clearTimeout(savedTimer.current);
       };
     }, []);
 
@@ -580,15 +565,40 @@
       }
     }, [content]);
 
+    // Save to Prose — push a structured turn into the chat via the widget
+    // runtime's sendPrompt(text) global. Claude parses the message and calls
+    // the create_and_open_file MCP tool. See SKILL.md for the contract.
+    var handleSaveToProse = useCallback(function() {
+      function showSuccess() {
+        setSaved(true);
+        setSaveFailed(false);
+        if (savedTimer.current) clearTimeout(savedTimer.current);
+        savedTimer.current = setTimeout(function() { setSaved(false); }, 2500);
+      }
+      function showFailure() {
+        setSaveFailed(true);
+        setSaved(false);
+        if (savedTimer.current) clearTimeout(savedTimer.current);
+        savedTimer.current = setTimeout(function() { setSaveFailed(false); }, 2500);
+      }
+      if (typeof sendPrompt !== 'function') {
+        console.warn('[prose-artifact] sendPrompt not available — widget runtime missing handoff API');
+        showFailure();
+        return;
+      }
+      try {
+        var msg = 'Save this draft to Prose:\n\n```markdown\n' + content + '\n```';
+        sendPrompt(msg);
+        showSuccess();
+      } catch(err) {
+        console.warn('[prose-artifact] sendPrompt threw:', err);
+        showFailure();
+      }
+    }, [content]);
+
     var words = wordCount(content);
-    var bytes = byteLen(content);
-    var nearCap = bytes > WARN_BYTES;
-    var overCap = bytes >= MAX_BYTES;
 
     var preview = useMemo(function() { return renderMd(content); }, [content]);
-    // Skip URL encoding when over the 5MB cap — the button is disabled anyway,
-    // and encodeURIComponent on a multi-MB string causes input lag.
-    var pUrl = useMemo(function() { return overCap ? '' : proseUrl(content); }, [content, overCap]);
 
     var showEdit    = view === 'split' || view === 'edit';
     var showPreview = view === 'split' || view === 'preview';
@@ -632,29 +642,24 @@
           copied ? 'Copied' : (copyFailed ? 'Failed' : 'Copy markdown')
         ),
 
-        // Open in Prose via prose:// URL scheme (Claude Desktop allows this;
-        // claude.ai's iframe sandbox may silently drop it).
-        h('a', {
-          className: 'btn btn-primary',
-          href: overCap ? undefined : pUrl,
-          title: overCap
-            ? 'Document exceeds 5 MB — use Copy markdown instead'
-            : 'Open in Prose desktop app',
-          style: overCap ? { opacity: 0.5, pointerEvents: 'none' } : undefined
-        }, h(IcExternal), 'Open in Prose'),
+        // Save to Prose — pushes a structured turn into the chat via sendPrompt.
+        // Claude parses and calls create_and_open_file MCP. See SKILL.md.
+        h('button', {
+          className: 'btn btn-primary' + (saved ? ' btn--copied' : ''),
+          onClick: handleSaveToProse,
+          title: saveFailed
+            ? 'Could not reach the chat runtime — try again'
+            : 'Send this draft to Prose desktop'
+        },
+          saved ? h(IcCheck) : h(IcSave),
+          saved ? 'Sent' : (saveFailed ? 'Failed' : 'Save to Prose')
+        ),
 
         h('button', {
           className: 'btn btn-ghost',
           onClick: handleTheme,
           title: theme === 'dark' ? 'Light mode' : 'Dark mode'
         }, theme === 'dark' ? h(IcSun) : h(IcMoon))
-      ),
-
-      // Size warning
-      nearCap && h('div', { className: 'warning-bar' },
-        overCap
-          ? 'Document exceeds the 5 MB Open in Prose limit. Use Copy markdown instead.'
-          : 'Document is nearing the 5 MB Open in Prose limit.'
       ),
 
       // Editor / Preview

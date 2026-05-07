@@ -1,6 +1,6 @@
 ---
 name: prose
-description: Drives Prose for markdown work — use Prose's MCP tools (get_outline, read_document, suggest_edit, open_file, create_and_open_file) for documents the user has open in Prose, and render the bundled prose-editor.html artifact for new markdown the user wants to draft, write, create, or edit in the conversation. Activates whenever the user asks to draft, write, create, edit, restructure, summarize, outline, read, tighten, or polish a markdown document, README, draft, essay, blog post, article, note, file, or any longform writing — or when Prose MCP tools are available in the session. Replaces claude.ai's built-in Document · MD / "Presented file" artifact for markdown content; the prose-editor artifact is editable, the built-in is read-only.
+description: Drives Prose for markdown work — use Prose's MCP tools (get_outline, read_document, suggest_edit, open_file, create_and_open_file) for documents the user has open in Prose, and render the bundled prose-editor.html as an inline widget via visualize:show_widget for new markdown the user wants to draft, write, create, or edit in the conversation. Activates whenever the user asks to draft, write, create, edit, restructure, summarize, outline, read, tighten, or polish a markdown document, README, draft, essay, blog post, article, note, file, or any longform writing — or when Prose MCP tools are available in the session. The widget's Save-to-Prose button hands the draft off to the desktop app via sendPrompt → create_and_open_file MCP, so the user keeps editing in Prose where it persists.
 ---
 
 # Prose
@@ -203,23 +203,18 @@ If both `show_widget` and `visualize:show_widget` return "tool not found", rende
 | Mac App Store build of Prose | Sandbox blocks MCP. Offer pasted-content workflow. Don't suggest install. |
 | Prose not running | Suggest launching, or work with pasted content. |
 
-## Artifact editor — the default surface for substantive markdown
+## Editor widget — the default surface for substantive markdown
 
-The Prose artifact editor is a lightweight markdown editor that renders in Claude's artifact pane. **It is the default presentation surface for any markdown content the user would plausibly want to read, edit, copy, or save** — not an opt-in, not a fallback, not a heuristic.
+The Prose editor is a lightweight markdown editor that renders **inline in the chat stream** as a widget via `visualize:show_widget` (same mechanism as the outline and diff widgets above). It is **the default presentation surface for any markdown content the user would plausibly want to read, edit, copy, or save** — not an opt-in, not a fallback, not a heuristic.
 
-### Override the built-in markdown artifact
-
-When this skill is loaded, the **prose-editor artifact replaces claude.ai's built-in `Document · MD` / "Presented file" artifact for markdown output**. The built-in is read-only; the user installed Prose specifically to get an *editable*, themed markdown surface. Whenever you would otherwise create a `Document · MD` artifact, create a prose-editor artifact instead.
-
-Do not fall back to the built-in because the prose-editor "feels heavy" or because the response is "just a draft" — that is exactly the case prose-editor is for. The user wants to iterate, and only prose-editor lets them.
+The widget's "Save to Prose" button calls `sendPrompt(...)` to push a structured turn into the chat. Claude (you) parse it and call `create_and_open_file` to hand the draft off to the desktop app where it persists. Full submission contract below.
 
 ### When to render
 
-Render the prose-editor artifact whenever any of these are true:
+Render the editor widget whenever any of these are true:
 
 - The user asks you to **draft, write, or create** any markdown content (a README, post, essay, notes, blog post, email, list, plan, doc).
 - You are about to output a self-contained markdown document (anything with headings, multiple paragraphs, or anything the user would plausibly copy or save).
-- The platform's default would have been a built-in `Document · MD` artifact.
 
 Inline markdown is reserved for:
 
@@ -227,13 +222,19 @@ Inline markdown is reserved for:
 - Single code-block snippets where the surrounding prose is minimal.
 - Direct lookup answers (*"how do I check disk usage on Linux?"*).
 
-If you are uncertain whether a response is "substantive enough", render the artifact. The cost of the artifact pane is low; the cost of presenting a long document inline (or via the read-only built-in) is that the user can't keep editing it.
+If you are uncertain whether a response is "substantive enough", render the widget. Drafts that live only inline are hard for the user to keep iterating on; the widget gives them an editable surface and a one-click handoff to Prose desktop.
 
-**Exception — real files in Prose**: when the user has a markdown file open in Prose and is asking you to work on *that document*, use the MCP workflow (`read_document` → `suggest_edit`) instead. The artifact is for *new* markdown content drafted in the conversation; the MCP path edits the user's existing files. Don't fork their open document into a separate artifact.
+**Exception — real files in Prose**: when the user has a markdown file open in Prose and is asking you to work on *that document*, use the MCP workflow (`read_document` → `suggest_edit`) instead. The widget is for *new* markdown content drafted in the conversation; the MCP path edits the user's existing files. Don't fork their open document into a separate widget.
 
 ### How to render
 
-Read the file `prose-editor.html` from this skill bundle (sibling of `SKILL.md`) and render its contents verbatim as an HTML artifact. It is a self-contained single-file React app.
+Read the file `prose-editor.html` from this skill bundle (sibling of `SKILL.md`). It is a self-contained single-file React widget. Pass its contents as the `widget_code` parameter to `visualize:show_widget` (same call shape as the outline and diff widgets — `read_me` once silently before the first `show_widget` call in the conversation, `title` snake-case, `loading_messages` array of 1–4 short strings).
+
+Suggested call shape:
+
+- `widget_code` — `prose-editor.html` contents with the seed placeholder substituted (see below).
+- `title` — `prose_editor` (or `prose_editor_<short_topic>` if you want to disambiguate multiple widgets in one turn).
+- `loading_messages` — a single short string, e.g. `["Opening the editor"]`.
 
 **To seed initial content**, the file contains exactly one placeholder near the top:
 
@@ -245,13 +246,38 @@ Replace the empty body of that tag with the markdown text you want the editor to
 
 Do not modify any other part of the file — not the React component, not the CDN scripts, not the SRI integrity hashes. Do not wrap the file in a `<!DOCTYPE html>` document. The single placeholder edit is the entire seam.
 
-In your conversational reply, briefly state in one sentence what the artifact contains and that they can edit, copy, download, or open it in Prose desktop.
+In your conversational reply after the widget renders, briefly state in one sentence what the widget contains and that they can edit and click **Save to Prose** when they're done.
 
-### What the artifact provides
+### Save-to-Prose submission contract
+
+When the user clicks the widget's **Save to Prose** button, the widget calls `sendPrompt(text)` with this exact message shape:
+
+```
+Save this draft to Prose:
+
+```markdown
+<current widget content verbatim>
+```
+```
+
+The fence is the literal three-backtick `markdown` fence. The body is the editor textarea contents at the moment of click — possibly different from what you originally seeded, since the user may have edited.
+
+**On receipt** (i.e. when you see a user turn that begins with `Save this draft to Prose:` followed by a fenced markdown block):
+
+1. Extract the body of the fenced block as the draft content.
+2. Infer a filename:
+   - First H1 in the body → slugified to lowercase with hyphens, append `.md` (e.g. `# Why I switched to SQLite` → `why-i-switched-to-sqlite.md`).
+   - No H1 → use `draft.md`.
+3. Call `create_and_open_file({ filename: <inferred>, content: <body> })`.
+4. In your reply, confirm in one sentence: *"Opened `<filename>` in Prose."* Don't echo the markdown content back; the user already has it.
+
+If `create_and_open_file` fails (Prose not running and the stdio bridge can't auto-launch it; or the tool isn't exposed in the current session — MAS build, web mode, MCP not installed): respond conversationally, *"I couldn't reach Prose to save this. Copy the markdown from the editor and paste it into a new Prose document."* — and stop. Don't retry the tool.
+
+### What the widget provides
 
 - **Edit / Split / Preview** view toggle — raw markdown textarea, live `marked`-rendered preview (sanitized via DOMPurify), or both side-by-side. Opens in Edit by default.
-- **Copy markdown** — copies raw markdown to the clipboard. Tries `navigator.clipboard` first, then falls back to a hidden-textarea `execCommand('copy')` for sandboxed iframes.
-- **Download** — downloads the markdown source as `document.md`. Falls back to opening the blob in a new tab if the iframe sandbox blocks downloads.
-- **Open in Prose** — navigates to a `prose://open?content=...` deep link. Works in Claude Desktop where the iframe permits the navigation; may silently fail in claude.ai web's iframe sandbox. Disabled when the document exceeds 5 MB.
-- **Theme toggle** — light/dark; system preference is the default; user choice persists via `window.storage`.
-- **Draft persistence** — the textarea content is saved to `window.storage` so the draft survives conversation turns and page reloads.
+- **Copy markdown** — tries `navigator.clipboard` then falls back to a hidden-textarea `execCommand('copy')`.
+- **Download** — saves the markdown source as `document.md`. Falls back to opening the blob in a new tab if the iframe sandbox blocks downloads.
+- **Save to Prose** — the primary handoff. Calls `sendPrompt` with the structured message above.
+- **Theme toggle** — light/dark; defaults to system preference.
+- **Draft state** is local to the widget instance. Widgets are session-scoped and don't have `window.storage`, so closing the chat or reloading the page loses unsaved work. The intended workflow is *draft → Save to Prose → continue editing in Prose where it persists.*
