@@ -202,6 +202,20 @@ function getFileFromArgs(): string | null {
   return null
 }
 
+// Check command line args for a prose:// URL (Windows/Linux first-launch).
+// macOS uses the open-url event instead; the second-instance handler covers
+// the already-running case. Without this, the URL is silently dropped when
+// the OS launches Prose for the first time to handle the link.
+function getProseUrlFromArgs(): string | null {
+  const args = process.argv.slice(is.dev ? 2 : 1)
+  for (const arg of args) {
+    if (arg.startsWith('prose://')) {
+      return parseProseUrl(arg)
+    }
+  }
+  return null
+}
+
 function createWindow(): BrowserWindow {
   const mainWindow = new BrowserWindow({
     width: 1200,
@@ -406,6 +420,11 @@ app.whenReady().then(async () => {
   // Check for file from command line args (Windows/Linux)
   if (!fileToOpen) {
     fileToOpen = getFileFromArgs()
+  }
+
+  // Check for prose:// URL from command line (Windows/Linux first-launch)
+  if (!pendingUrlContent) {
+    pendingUrlContent = getProseUrlFromArgs()
   }
 
   const mainWindow = createWindow()
