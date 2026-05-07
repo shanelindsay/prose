@@ -1,6 +1,6 @@
 ---
 name: prose
-description: Drives Prose for markdown work — use Prose's MCP tools (get_outline, read_document, suggest_edit, open_file, create_and_open_file) for documents the user has open in Prose, and render the bundled prose-editor.html as an inline widget via visualize:show_widget for new markdown the user wants to draft, write, create, or edit in the conversation. Activates whenever the user asks to draft, write, create, edit, restructure, summarize, outline, read, tighten, or polish a markdown document, README, draft, essay, blog post, article, note, file, or any longform writing — or when Prose MCP tools are available in the session. The widget's Save-to-Prose button hands the draft off to the desktop app via sendPrompt → create_and_open_file MCP, so the user keeps editing in Prose where it persists.
+description: Drives Prose for markdown work. For ANY markdown content the user wants to draft, write, create, or edit in the conversation (a README, draft, essay, blog post, article, note, file, or any longform writing), render the bundled prose-editor.html as an inline widget via visualize:show_widget — NOT as a Document · MD / "Presented file" artifact. The widget replaces the built-in markdown artifact for this skill: Document · MD is read-only, the prose-editor widget is editable AND has a Save-to-Prose button that hands the draft off to the Prose desktop app via sendPrompt → create_and_open_file MCP. For documents the user has open in Prose, use Prose's MCP tools (get_outline, read_document, suggest_edit, open_file, create_and_open_file) instead. Activates whenever the user asks to draft, write, create, edit, restructure, summarize, outline, read, tighten, or polish markdown — or when Prose MCP tools are available in the session.
 ---
 
 # Prose
@@ -206,6 +206,12 @@ If both `show_widget` and `visualize:show_widget` return "tool not found", rende
 ## Editor widget — the default surface for substantive markdown
 
 The Prose editor is a lightweight markdown editor that renders **inline in the chat stream** as a widget via `visualize:show_widget` (same mechanism as the outline and diff widgets above). It is **the default presentation surface for any markdown content the user would plausibly want to read, edit, copy, or save** — not an opt-in, not a fallback, not a heuristic.
+
+### Override the built-in Document · MD
+
+When this skill is loaded, **render markdown via `visualize:show_widget`, not as a `Document · MD` / "Presented file" artifact.** Whenever you would otherwise create a markdown document artifact, render the prose-editor widget instead. The built-in is read-only; the widget is editable AND has a one-click handoff to Prose desktop (Save to Prose → sendPrompt → `create_and_open_file` MCP). The user installed this skill specifically to avoid the read-only fallback — honor that.
+
+Do not skip the widget because the response is "just a draft" or feels short. That is exactly the case the widget is for: drafts the user wants to keep editing.
 
 The widget's "Save to Prose" button calls `sendPrompt(...)` to push a structured turn into the chat. Claude (you) parse it and call `create_and_open_file` to hand the draft off to the desktop app where it persists. Full submission contract below.
 
