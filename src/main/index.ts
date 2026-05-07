@@ -321,8 +321,17 @@ app.on('certificate-error', (event, _webContents, _url, _error, _certificate, ca
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('ist.solo.prose')
 
-  // Register as default handler for prose:// URL scheme
-  app.setAsDefaultProtocolClient('prose')
+  // Register as default handler for prose:// URL scheme.
+  // Skip in dev: this would register the dev Electron binary as the system
+  // handler, which clobbers the registration of any built Prose.app the user
+  // has installed. Built apps declare the scheme via electron-builder.yml's
+  // `protocols` block, which writes CFBundleURLTypes into Info.plist and is
+  // picked up by macOS LaunchServices on first launch.
+  if (!is.dev) {
+    app.setAsDefaultProtocolClient('prose')
+  } else {
+    console.log('[main] Skipping prose:// registration in dev mode')
+  }
 
   // Validate that early Sentry init path matches Electron's resolved path
   validatePathConsistency()
