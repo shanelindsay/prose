@@ -233,16 +233,25 @@ If you are uncertain whether a response is "substantive enough", render the arti
 
 ### How to render
 
-Read the file `prose-editor.html` from this skill bundle (sibling of `SKILL.md`) and render its contents verbatim as an HTML artifact. It is a self-contained single-file React app — paste exactly as-is. Do not wrap it in a `<!DOCTYPE html>` document. Do not modify the React component, the CDN script tags, or the SRI integrity hashes.
+Read the file `prose-editor.html` from this skill bundle (sibling of `SKILL.md`) and render its contents verbatim as an HTML artifact. It is a self-contained single-file React app.
 
-Set the artifact's initial markdown content by replacing the empty-string default in `useState(stor.get(DRAFT_KEY) || '')` with the markdown you want to seed. Or — simpler — render the artifact empty and immediately follow with the drafted markdown content in a fenced code block; the user can paste it in.
+**To seed initial content**, the file contains exactly one placeholder near the top:
 
-In your conversational reply, briefly state in one sentence what the artifact contains and that they can edit, copy, or download it.
+```html
+<script id="prose-initial-markdown" type="text/plain"></script>
+```
+
+Replace the empty body of that tag with the markdown text you want the editor to open with. **No JavaScript escaping** — the contents are inert plain text. Markdown special characters (backticks, asterisks, brackets, quotes) all pass through untouched. The only sequence to avoid inside the placeholder is `</script>`; if your draft contains a literal `</script>`, escape the slash to `<\/script>`.
+
+Do not modify any other part of the file — not the React component, not the CDN scripts, not the SRI integrity hashes. Do not wrap the file in a `<!DOCTYPE html>` document. The single placeholder edit is the entire seam.
+
+In your conversational reply, briefly state in one sentence what the artifact contains and that they can edit, copy, download, or open it in Prose desktop.
 
 ### What the artifact provides
 
-- **Edit / Split / Preview** view toggle — raw markdown textarea, live `marked`-rendered preview (sanitized via DOMPurify), or both side-by-side.
-- **Copy markdown** — copies raw markdown to the clipboard. Falls back to a "Failed" indicator if clipboard access is denied.
-- **Download** — downloads the markdown source as a `.md` file.
+- **Edit / Split / Preview** view toggle — raw markdown textarea, live `marked`-rendered preview (sanitized via DOMPurify), or both side-by-side. Opens in Edit by default.
+- **Copy markdown** — copies raw markdown to the clipboard. Tries `navigator.clipboard` first, then falls back to a hidden-textarea `execCommand('copy')` for sandboxed iframes.
+- **Download** — downloads the markdown source as `document.md`. Falls back to opening the blob in a new tab if the iframe sandbox blocks downloads.
+- **Open in Prose** — navigates to a `prose://open?content=...` deep link. Works in Claude Desktop where the iframe permits the navigation; may silently fail in claude.ai web's iframe sandbox. Disabled when the document exceeds 5 MB.
 - **Theme toggle** — light/dark; system preference is the default; user choice persists via `window.storage`.
 - **Draft persistence** — the textarea content is saved to `window.storage` so the draft survives conversation turns and page reloads.
