@@ -202,3 +202,53 @@ If both `show_widget` and `visualize:show_widget` return "tool not found", rende
 | Prose running, MCP not installed (OSS build) | "Open Prose → Settings → Integrations → Install MCP Server, then restart Claude." |
 | Mac App Store build of Prose | Sandbox blocks MCP. Offer pasted-content workflow. Don't suggest install. |
 | Prose not running | Suggest launching, or work with pasted content. |
+
+## Artifact editor — in-conversation markdown editing
+
+The Prose artifact editor is a lightweight markdown editor that runs inside Claude's artifact pane. Use it when the user wants to draft or edit markdown in the conversation without switching to the desktop app.
+
+### When to render the artifact
+
+Render the artifact when:
+
+- The user wants to draft something short-lived in the conversation ("write a README here", "help me draft this email", "can I edit this in the chat").
+- The user is iterating on a document collaboratively with you and wants to see changes as you make them.
+- The user explicitly asks for an in-chat editor or mentions they don't want to open Prose.
+- MCP is unavailable (MAS build, Prose not installed) and the user still wants to edit markdown.
+
+**Do not** render the artifact for serious editing sessions where the user has a real file open in Prose. For those, the MCP workflow (`read_document` → `suggest_edit`) is better — it lands edits directly in the user's document with diff review.
+
+### How to render the artifact
+
+Read the artifact source from `resources/prose-artifact/prose-editor.html` in this skill bundle and render it as a React artifact. The file is self-contained HTML — copy it verbatim as the artifact content. Do not wrap it in a `<!DOCTYPE html>` document or add extra boilerplate.
+
+When rendering, narrate briefly in one sentence: what the artifact is and that they can click "Open in Prose" to hand the document off to the desktop app when they're done.
+
+### What the artifact does
+
+- **Edit pane**: a textarea for raw markdown input.
+- **Preview pane**: live rendered preview via `marked` (GitHub Flavored Markdown).
+- **Split / Edit / Preview toggle**: switch between views.
+- **Copy markdown**: copies raw markdown to clipboard — works without Prose installed.
+- **Download**: downloads the markdown source as a `.md` file.
+- **Open in Prose**: fires a `prose://open?content=...` deep link. Prose desktop opens a new tab with the content. Works for all desktop users (MAS and direct download) — no MCP required. If Prose is not installed, the OS shows its standard "no app registered" dialog.
+- **Draft persistence**: the draft is saved to `window.storage` (Claude's artifact persistence API) so it survives conversation turns and page reloads.
+- **Light/dark theme**: matches system preference by default; toggle is in the toolbar.
+
+### prose:// deep link behavior
+
+The `prose://open?content=...` URL scheme is registered by Prose on first launch (`app.setAsDefaultProtocolClient('prose')`). When clicked:
+
+- macOS: routes through the `open-url` app event.
+- Windows/Linux: passes as a command-line argument on second-instance launch.
+
+Content is URL-decoded and validated by `parseProseUrl()` in Prose's main process. The 5 MB hard cap lives there — the artifact warns at 4 MB (well before the cap). Real-world drafts from a Claude conversation are typically under 50 KB.
+
+### Handoff to desktop Prose
+
+Once the user is done drafting in the artifact and wants to continue in the desktop app:
+
+1. They click "Open in Prose" — Prose opens a new tab with the content.
+2. They save the file from Prose (File → Save or Cmd+S).
+
+If they don't have Prose installed, "Copy markdown" copies the source for pasting into any editor.
