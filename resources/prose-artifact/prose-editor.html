@@ -424,6 +424,15 @@
     var saveTimer = useRef(null);
     var copiedTimer = useRef(null);
 
+    // Clear pending timers on unmount so artifact teardown doesn't fire
+    // setState on a gone component.
+    useEffect(function() {
+      return function() {
+        if (saveTimer.current) clearTimeout(saveTimer.current);
+        if (copiedTimer.current) clearTimeout(copiedTimer.current);
+      };
+    }, []);
+
     // System theme changes
     useEffect(function() {
       var mq = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
@@ -482,7 +491,9 @@
         a.click();
         document.body.removeChild(a);
         setTimeout(function() { URL.revokeObjectURL(url); }, 150);
-      } catch(_) {}
+      } catch(err) {
+        console.error('[prose-artifact] download failed:', err);
+      }
     }, [content]);
 
     var words = wordCount(content);
