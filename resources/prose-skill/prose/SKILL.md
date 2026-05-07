@@ -1,6 +1,6 @@
 ---
 name: prose
-description: Use Prose's MCP tools (get_outline, read_document, suggest_edit, open_file, create_and_open_file) to read, outline, and propose edits to markdown documents in Prose. Activates whenever the user asks to edit, restructure, summarize, outline, read, tighten, polish, or work on a markdown document, draft, essay, blog post, article, note, or any longform writing — or when Prose MCP tools are available in the session.
+description: Drives Prose for markdown work — use Prose's MCP tools (get_outline, read_document, suggest_edit, open_file, create_and_open_file) for documents the user has open in Prose, and render the bundled prose-editor.html artifact for new markdown the user wants to draft, write, create, or edit in the conversation. Activates whenever the user asks to draft, write, create, edit, restructure, summarize, outline, read, tighten, or polish a markdown document, README, draft, essay, blog post, article, note, file, or any longform writing — or when Prose MCP tools are available in the session. Replaces claude.ai's built-in Document · MD / "Presented file" artifact for markdown content; the prose-editor artifact is editable, the built-in is read-only.
 ---
 
 # Prose
@@ -205,27 +205,37 @@ If both `show_widget` and `visualize:show_widget` return "tool not found", rende
 
 ## Artifact editor — the default surface for substantive markdown
 
-The Prose artifact editor is a lightweight markdown editor that renders in Claude's artifact pane. **It is the default presentation surface for substantive markdown content** — not an opt-in, not a fallback, not a heuristic.
+The Prose artifact editor is a lightweight markdown editor that renders in Claude's artifact pane. **It is the default presentation surface for any markdown content the user would plausibly want to read, edit, copy, or save** — not an opt-in, not a fallback, not a heuristic.
+
+### Override the built-in markdown artifact
+
+When this skill is loaded, the **prose-editor artifact replaces claude.ai's built-in `Document · MD` / "Presented file" artifact for markdown output**. The built-in is read-only; the user installed Prose specifically to get an *editable*, themed markdown surface. Whenever you would otherwise create a `Document · MD` artifact, create a prose-editor artifact instead.
+
+Do not fall back to the built-in because the prose-editor "feels heavy" or because the response is "just a draft" — that is exactly the case prose-editor is for. The user wants to iterate, and only prose-editor lets them.
 
 ### When to render
 
-When you would otherwise output a self-contained markdown document — a README, post, draft, notes file, structured response with headings or lists, or anything multi-paragraph the user would plausibly want to copy or save — render it via the artifact instead of as inline markdown.
+Render the prose-editor artifact whenever any of these are true:
+
+- The user asks you to **draft, write, or create** any markdown content (a README, post, essay, notes, blog post, email, list, plan, doc).
+- You are about to output a self-contained markdown document (anything with headings, multiple paragraphs, or anything the user would plausibly copy or save).
+- The platform's default would have been a built-in `Document · MD` artifact.
 
 Inline markdown is reserved for:
 
 - Short conversational replies (a sentence or two).
-- Single code-block snippets where the prose around them is minimal.
-- Direct answers to lookup questions (`how do I X?`).
+- Single code-block snippets where the surrounding prose is minimal.
+- Direct lookup answers (*"how do I check disk usage on Linux?"*).
 
-If you are uncertain whether a response is "substantive enough", render the artifact. The cost of the artifact pane is low; the cost of presenting a long document inline is that the user can't easily copy, save, or keep editing it.
+If you are uncertain whether a response is "substantive enough", render the artifact. The cost of the artifact pane is low; the cost of presenting a long document inline (or via the read-only built-in) is that the user can't keep editing it.
 
-**Exception**: when the user has a real file open in Prose and is asking you to work on *that document*, use the MCP workflow (`read_document` → `suggest_edit`) instead. The artifact is for drafting *new* markdown content in the conversation; the MCP path edits the user's existing files. Don't fork them into the artifact and lose their context.
+**Exception — real files in Prose**: when the user has a markdown file open in Prose and is asking you to work on *that document*, use the MCP workflow (`read_document` → `suggest_edit`) instead. The artifact is for *new* markdown content drafted in the conversation; the MCP path edits the user's existing files. Don't fork their open document into a separate artifact.
 
 ### How to render
 
-Read the file `prose-editor.html` from this skill bundle (sibling of `SKILL.md`) and render its contents verbatim as a React artifact. It is a self-contained single-file HTML React app — paste exactly as-is. Do not wrap it in a `<!DOCTYPE html>` document. Do not modify the React component, the CDN script tags, or the SRI integrity hashes.
+Read the file `prose-editor.html` from this skill bundle (sibling of `SKILL.md`) and render its contents verbatim as an HTML artifact. It is a self-contained single-file React app — paste exactly as-is. Do not wrap it in a `<!DOCTYPE html>` document. Do not modify the React component, the CDN script tags, or the SRI integrity hashes.
 
-Set the artifact's initial markdown content by replacing the empty-string default in `useState(stor.get(DRAFT_KEY) || '')` with the markdown you want to seed. Or — simpler — render the artifact empty and immediately follow with the markdown content in a code block; the user can paste it in.
+Set the artifact's initial markdown content by replacing the empty-string default in `useState(stor.get(DRAFT_KEY) || '')` with the markdown you want to seed. Or — simpler — render the artifact empty and immediately follow with the drafted markdown content in a fenced code block; the user can paste it in.
 
 In your conversational reply, briefly state in one sentence what the artifact contains and that they can edit, copy, or download it.
 
