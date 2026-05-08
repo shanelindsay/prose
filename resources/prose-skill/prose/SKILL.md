@@ -281,9 +281,11 @@ If `create_and_open_file` fails (Prose not running and the stdio bridge can't au
 
 ### What the widget provides
 
-- **Edit / Split / Preview** view toggle — raw markdown textarea, live `marked`-rendered preview (sanitized via DOMPurify), or both side-by-side. Opens in Edit by default.
+- **Markdown textarea** — full-height editor seeded with your initial content, monospace font.
+- **Word count** — updates live as the user types.
 - **Copy markdown** — tries `navigator.clipboard` then falls back to a hidden-textarea `execCommand('copy')`.
-- **Download** — saves the markdown source as `document.md`. Falls back to opening the blob in a new tab if the iframe sandbox blocks downloads.
+- **Download** — saves the textarea content as `document.md`. Falls back to opening the blob in a new tab if the iframe sandbox blocks downloads.
 - **Save to Prose** — the primary handoff. Calls `sendPrompt` with the structured message above.
 - **Theme toggle** — light/dark; defaults to system preference.
-- **Draft state** is local to the widget instance. Widgets are session-scoped and don't have `window.storage`, so closing the chat or reloading the page loses unsaved work. The intended workflow is *draft → Save to Prose → continue editing in Prose where it persists.*
+
+The widget is intentionally minimal: vanilla JS, no external scripts, no React, no live preview. It is a focused drafting surface — the rendered view lives in Prose desktop, where the user lands after Save. Widgets are session-scoped (no `window.storage`), so the workflow is *draft → Save to Prose → keep editing in Prose where it persists.*

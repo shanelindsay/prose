@@ -1,12 +1,7 @@
 <!-- Prose Editor Widget
-     Single-file inline widget rendered via visualize:show_widget.
+     Single-file vanilla widget rendered via visualize:show_widget.
+     No external scripts (claude.ai widget runtime treats those unevenly).
      No DOCTYPE — the widget runtime injects this into the chat stream.
-
-     External dependencies (all from cdnjs.cloudflare.com):
-       - React 18
-       - ReactDOM 18
-       - marked 9 (markdown → HTML)
-       - DOMPurify 3 (sanitize marked output before render)
 
      Initial content: text contents of <script id="prose-initial-markdown" type="text/plain">.
      Handoff: "Save to Prose" calls the widget runtime's global sendPrompt(text)
@@ -14,24 +9,11 @@
      create_and_open_file MCP tool. See SKILL.md for the message contract.
 -->
 <script id="prose-initial-markdown" type="text/plain"></script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js" integrity="sha512-8Q6Y9XnTbOE+JNvjBQwJ2H8S+UV4uA6hiRykhdtIyDYZ2TprdNmWOUaKdGzOhyr4dCyk287OejbPvwl7lrfqrQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js" integrity="sha512-MOCpqoRoisCTwJ8vQQiciZv0qcpROCidek3GTFS6KTk2+y7munJIlKCVkFCYY+p3ErYFXCjmFjnfTTRSC1OHWQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js" integrity="sha512-pmjEJQ7CveksANaAKdCJZMig7eAcCFFzE1b5XnlnxdB/vU3AOStJ5SF7w4tFuqskuU31ETnAaWTYRQOYg2WHKw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js" integrity="sha512-H+rglffZ6f5gF7UJgvH4Naa+fGCgjrHKMgoFOGmcPTRwR6oILo5R+gtzNrpDp7iMV3udbymBVjkeZGNz1Em4rQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-  /* CSS custom properties on the root wrapper — works without <html> */
   .prose-app {
-    --font: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, 'Courier New', monospace;
-    --font-size: 13px;
-    --line-height: 1.6;
-
-    /* Light theme defaults */
     --surface: #ffffff;
     --surface-alt: #f4f4f5;
     --border: #e4e4e7;
@@ -43,21 +25,20 @@
     --btn-secondary-bg: #f4f4f5;
     --btn-secondary-text: #18181b;
     --btn-secondary-hover: #e4e4e7;
-    --warning-text: #713f12;
     --copied-bg: #dcfce7;
     --copied-text: #14532d;
-
-    font-family: var(--font);
-    font-size: var(--font-size);
-    line-height: var(--line-height);
-    background: transparent;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 13px;
+    line-height: 1.55;
     color: var(--text);
-    height: 100vh;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
+    height: 540px;
   }
-
-  /* Dark theme — toggled by data-theme attribute on .prose-app */
   .prose-app[data-theme="dark"] {
     --surface: #18181b;
     --surface-alt: #27272a;
@@ -70,631 +51,218 @@
     --btn-secondary-bg: #27272a;
     --btn-secondary-text: #fafafa;
     --btn-secondary-hover: #3f3f46;
-    --warning-text: #fde047;
-    --copied-bg: rgba(34, 197, 94, 0.15);
+    --copied-bg: rgba(34, 197, 94, 0.18);
     --copied-text: #bbf7d0;
   }
 
-  /* body/html reset — needed when scaffold wraps with <html> */
-  body { margin: 0; padding: 0; background: transparent; }
-  #root { height: 100vh; }
-
-  /* Toolbar */
-  .toolbar {
+  .prose-toolbar {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 8px 12px;
     border-bottom: 1px solid var(--border);
-    background: var(--surface);
+    background: var(--surface-alt);
     flex-shrink: 0;
   }
+  .prose-brand { font-weight: 600; font-size: 13px; }
+  .prose-toolbar__spacer { flex: 1; }
+  .prose-words { font-size: 11px; color: var(--muted); }
 
-  .toolbar__brand {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--muted);
-    margin-right: 4px;
-  }
-
-  .toolbar__spacer { flex: 1; }
-
-  /* Buttons */
-  .btn {
-    font-family: var(--font);
+  .prose-btn {
+    appearance: none;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 5px 10px;
+    font: inherit;
     font-size: 12px;
-    font-weight: 500;
-    padding: 4px 10px;
-    border-radius: 5px;
-    border: none;
     cursor: pointer;
+    background: transparent;
+    color: var(--text);
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    white-space: nowrap;
-    transition: background 0.1s, color 0.1s;
-    text-decoration: none;
-    line-height: 1.4;
+    gap: 6px;
   }
+  .prose-btn:hover { background: var(--surface-alt); }
+  .prose-btn--primary { background: var(--btn-bg); color: var(--btn-text); border-color: var(--btn-bg); }
+  .prose-btn--primary:hover { background: var(--btn-hover); border-color: var(--btn-hover); }
+  .prose-btn--secondary { background: var(--btn-secondary-bg); color: var(--btn-secondary-text); border-color: var(--border); }
+  .prose-btn--secondary:hover { background: var(--btn-secondary-hover); }
+  .prose-btn--copied { background: var(--copied-bg); color: var(--copied-text); border-color: var(--copied-bg); }
 
-  .btn-primary {
-    background: var(--btn-bg);
-    color: var(--btn-text);
-  }
-  .btn-primary:hover { background: var(--btn-hover); color: var(--btn-text); }
-
-  .btn-secondary {
-    background: var(--btn-secondary-bg);
-    color: var(--btn-secondary-text);
-    border: 1px solid var(--border);
-  }
-  .btn-secondary:hover { background: var(--btn-secondary-hover); }
-
-  .btn-ghost {
-    background: transparent;
-    color: var(--muted);
-    border: 1px solid transparent;
-    padding: 4px 7px;
-  }
-  .btn-ghost:hover { background: var(--surface-alt); color: var(--text); }
-
-  .btn--copied {
-    background: var(--copied-bg) !important;
-    color: var(--copied-text) !important;
-    border-color: transparent !important;
-  }
-
-  /* View toggle */
-  .view-toggle {
-    display: flex;
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    overflow: hidden;
-  }
-
-  .view-toggle__btn {
-    font-family: var(--font);
-    font-size: 11px;
-    font-weight: 500;
-    padding: 3px 8px;
-    border: none;
-    cursor: pointer;
-    background: transparent;
-    color: var(--muted);
-    transition: background 0.1s, color 0.1s;
-  }
-
-  .view-toggle__btn--active {
-    background: var(--surface-alt);
-    color: var(--text);
-  }
-
-  /* Word count */
-  .word-count {
-    font-size: 11px;
-    color: var(--muted);
-  }
-
-  /* Editor area */
-  .editor-area {
-    display: flex;
-    flex: 1;
-    overflow: hidden;
-    min-height: 0;
-  }
-
-  /* Editor pane */
-  .editor-pane {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    border-right: 1px solid var(--border);
-  }
-  .editor-pane--full { border-right: none; }
-
-  .pane-label {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--muted);
-    padding: 5px 12px;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface-alt);
-    flex-shrink: 0;
-  }
-
-  .editor-textarea {
-    flex: 1;
+  .prose-textarea {
+    appearance: none;
+    border: 0;
+    outline: 0;
     width: 100%;
+    flex: 1;
     resize: none;
-    border: none;
-    outline: none;
-    font-family: var(--font);
-    font-size: var(--font-size);
-    line-height: var(--line-height);
+    padding: 14px 16px;
+    font: inherit;
     background: var(--surface);
     color: var(--text);
-    padding: 16px;
+    line-height: 1.6;
     min-height: 0;
   }
-  .editor-textarea::placeholder { color: var(--muted); }
-
-  /* Preview pane */
-  .preview-pane {
-    flex: 1;
-    overflow-y: auto;
-    background: var(--surface);
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .preview-scroll {
-    padding: 16px;
-    flex: 1;
-  }
-
-  /* Markdown preview content */
-  .md {
-    font-family: var(--font);
-    font-size: var(--font-size);
-    line-height: var(--line-height);
-    color: var(--text);
-  }
-
-  .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 {
-    font-weight: 600;
-    margin: 1.2em 0 0.4em;
-    line-height: 1.3;
-  }
-  .md h1:first-child, .md h2:first-child, .md h3:first-child { margin-top: 0; }
-  .md h1 { font-size: 1.5em; }
-  .md h2 { font-size: 1.25em; }
-  .md h3 { font-size: 1.1em; }
-  .md h4, .md h5, .md h6 { font-size: 1em; }
-
-  .md p { margin: 0.6em 0; }
-  .md p:first-child { margin-top: 0; }
-
-  .md ul, .md ol { margin: 0.4em 0 0.4em 1.5em; padding: 0; }
-  .md li { margin: 0.2em 0; }
-
-  .md code {
-    background: var(--surface-alt);
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    padding: 1px 4px;
-    font-family: var(--font);
-    font-size: 0.9em;
-  }
-
-  .md pre {
-    background: var(--surface-alt);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 12px;
-    overflow-x: auto;
-    margin: 0.6em 0;
-  }
-  .md pre code { background: none; border: none; padding: 0; font-size: inherit; }
-
-  .md blockquote {
-    border-left: 3px solid var(--border);
-    padding-left: 12px;
-    color: var(--muted);
-    margin: 0.6em 0;
-  }
-
-  .md a { color: var(--text); text-decoration: underline; }
-
-  .md hr { border: none; border-top: 1px solid var(--border); margin: 1.2em 0; }
-
-  .md table { border-collapse: collapse; width: 100%; margin: 0.6em 0; font-size: 0.95em; }
-  .md th, .md td { border: 1px solid var(--border); padding: 5px 10px; text-align: left; }
-  .md th { background: var(--surface-alt); font-weight: 600; }
-
-  .md-empty { color: var(--muted); font-style: italic; font-size: var(--font-size); padding: 0; }
+  .prose-textarea::placeholder { color: var(--muted); }
 </style>
 
-<div id="root"></div>
+<div id="prose-root"></div>
 
 <script>
 (function() {
-  'use strict';
+  var root = document.getElementById('prose-root');
+  var seedEl = document.getElementById('prose-initial-markdown');
+  var initial = seedEl ? seedEl.textContent : '';
 
-  var h = React.createElement;
-  var useState = React.useState;
-  var useEffect = React.useEffect;
-  var useRef = React.useRef;
-  var useCallback = React.useCallback;
-  var useMemo = React.useMemo;
+  // Theme detection — system preference, with no persistence (widgets are session-scoped).
+  var theme = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
+    ? 'dark' : 'light';
 
-  // ── Storage abstraction ──────────────────────────────────────────────────
-  // Checks window.storage first (artifact runtime), falls back to
-  // localStorage for local development. Component code never references
-  // localStorage directly.
-  var stor = {
-    get: function(key) {
+  // Build DOM
+  var app = document.createElement('div');
+  app.className = 'prose-app';
+  app.setAttribute('data-theme', theme);
+
+  var toolbar = document.createElement('div');
+  toolbar.className = 'prose-toolbar';
+
+  var brand = document.createElement('span');
+  brand.className = 'prose-brand';
+  brand.textContent = 'Prose';
+  toolbar.appendChild(brand);
+
+  var spacer = document.createElement('div');
+  spacer.className = 'prose-toolbar__spacer';
+  toolbar.appendChild(spacer);
+
+  var words = document.createElement('span');
+  words.className = 'prose-words';
+  toolbar.appendChild(words);
+
+  var downloadBtn = document.createElement('button');
+  downloadBtn.className = 'prose-btn';
+  downloadBtn.textContent = 'Download';
+  downloadBtn.title = 'Download as .md file';
+  toolbar.appendChild(downloadBtn);
+
+  var copyBtn = document.createElement('button');
+  copyBtn.className = 'prose-btn prose-btn--secondary';
+  copyBtn.textContent = 'Copy markdown';
+  copyBtn.title = 'Copy raw markdown to clipboard';
+  toolbar.appendChild(copyBtn);
+
+  var saveBtn = document.createElement('button');
+  saveBtn.className = 'prose-btn prose-btn--primary';
+  saveBtn.textContent = 'Save to Prose';
+  saveBtn.title = 'Send this draft to Prose desktop';
+  toolbar.appendChild(saveBtn);
+
+  var themeBtn = document.createElement('button');
+  themeBtn.className = 'prose-btn';
+  themeBtn.textContent = theme === 'dark' ? 'Light' : 'Dark';
+  themeBtn.title = 'Toggle theme';
+  toolbar.appendChild(themeBtn);
+
+  var textarea = document.createElement('textarea');
+  textarea.className = 'prose-textarea';
+  textarea.placeholder = 'Start writing in Markdown...';
+  textarea.value = initial;
+  textarea.spellcheck = true;
+
+  app.appendChild(toolbar);
+  app.appendChild(textarea);
+  root.appendChild(app);
+
+  // ── Helpers ──────────────────────────────────────────────
+  function updateWords() {
+    var n = textarea.value.trim() ? textarea.value.trim().split(/\s+/).length : 0;
+    words.textContent = n === 1 ? '1 word' : n + ' words';
+  }
+  updateWords();
+  textarea.addEventListener('input', updateWords);
+
+  function flash(btn, label, cls, ms) {
+    var prevText = btn.textContent;
+    var prevCls = btn.className;
+    btn.textContent = label;
+    btn.className = prevCls + ' ' + cls;
+    setTimeout(function() {
+      btn.textContent = prevText;
+      btn.className = prevCls;
+    }, ms || 2000);
+  }
+
+  // ── Theme ────────────────────────────────────────────────
+  themeBtn.addEventListener('click', function() {
+    theme = theme === 'dark' ? 'light' : 'dark';
+    app.setAttribute('data-theme', theme);
+    themeBtn.textContent = theme === 'dark' ? 'Light' : 'Dark';
+  });
+
+  // ── Copy ─────────────────────────────────────────────────
+  copyBtn.addEventListener('click', function() {
+    var text = textarea.value;
+    function fallback() {
       try {
-        if (window.storage && typeof window.storage.getItem === 'function') {
-          return window.storage.getItem(key);
-        }
-        if (typeof localStorage !== 'undefined') return localStorage.getItem(key);
-      } catch(_) {}
-      return null;
-    },
-    set: function(key, val) {
-      try {
-        if (window.storage && typeof window.storage.setItem === 'function') {
-          window.storage.setItem(key, val); return;
-        }
-        if (typeof localStorage !== 'undefined') localStorage.setItem(key, val);
-      } catch(_) {}
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed'; ta.style.opacity = '0';
+        ta.setAttribute('readonly', '');
+        document.body.appendChild(ta);
+        ta.select();
+        ta.setSelectionRange(0, text.length);
+        var ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return ok;
+      } catch (_) { return false; }
     }
-  };
-
-  var DRAFT_KEY  = 'prose-artifact-draft';
-  var THEME_KEY  = 'prose-artifact-theme';
-
-  // Initial markdown content seeded by Claude into a <script type="text/plain">
-  // so seeding doesn't require any JS escaping. Read once at startup.
-  var INITIAL_MARKDOWN = (function() {
-    var el = document.getElementById('prose-initial-markdown');
-    return el ? el.textContent : '';
-  })();
-
-  // ── Markdown rendering ───────────────────────────────────────────────────
-  // marked.use() is the v5+ API; setOptions is deprecated in v9.
-  if (typeof marked !== 'undefined') {
-    marked.use({ breaks: true, gfm: true });
-  }
-
-  function renderMd(text) {
-    if (!text || !text.trim()) return '';
-    try {
-      var html = marked.parse(text);
-      // Sanitize: marked v9 with GFM passes raw HTML through. Without
-      // DOMPurify, a user typing <img src=x onerror=...> into the textarea
-      // gets script execution in the preview. Per CLAUDE.md: never insert
-      // dynamic data into innerHTML unsanitized. If DOMPurify failed to
-      // load (CDN block, SRI mismatch), surface a visible error instead
-      // of a blank pane — silent failure leaves the user wondering.
-      if (typeof DOMPurify === 'undefined') {
-        return '<p style="color: var(--warning-text); font-style: italic;">Preview unavailable: sanitizer failed to load.</p>';
-      }
-      return DOMPurify.sanitize(html);
-    }
-    catch(_) { return '<p>Preview error</p>'; }
-  }
-
-  function wordCount(text) {
-    if (!text || !text.trim()) return 0;
-    return text.trim().split(/\s+/).length;
-  }
-
-  // ── Inline SVG icons ─────────────────────────────────────────────────────
-  var SVG_PROPS = { fill: 'none', stroke: 'currentColor', strokeWidth: '2',
-                    strokeLinecap: 'round', strokeLinejoin: 'round' };
-
-  function Icon(props) {
-    var sz = props.size || 13;
-    return h('svg', Object.assign({}, SVG_PROPS,
-      { width: sz, height: sz, viewBox: '0 0 24 24', style: { flexShrink: 0 } }),
-      props.children
-    );
-  }
-
-  function IcCopy()  { return h(Icon, null,
-    h('rect', { x:'9', y:'9', width:'13', height:'13', rx:'2', ry:'2' }),
-    h('path', { d:'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' })
-  ); }
-
-  function IcCheck() { return h(Icon, { strokeWidth:'2.5' },
-    h('polyline', { points:'20 6 9 17 4 12' })
-  ); }
-
-  function IcDownload() { return h(Icon, null,
-    h('path', { d:'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' }),
-    h('polyline', { points:'7 10 12 15 17 10' }),
-    h('line', { x1:'12', y1:'15', x2:'12', y2:'3' })
-  ); }
-
-  function IcSun() { return h(Icon, null,
-    h('circle', { cx:'12', cy:'12', r:'4' }),
-    h('line', { x1:'12', y1:'2',    x2:'12', y2:'6' }),
-    h('line', { x1:'12', y1:'18',   x2:'12', y2:'22' }),
-    h('line', { x1:'4.22', y1:'4.22',   x2:'7.05',  y2:'7.05' }),
-    h('line', { x1:'16.95', y1:'16.95', x2:'19.78', y2:'19.78' }),
-    h('line', { x1:'2',  y1:'12', x2:'6',  y2:'12' }),
-    h('line', { x1:'18', y1:'12', x2:'22', y2:'12' }),
-    h('line', { x1:'4.22',  y1:'19.78', x2:'7.05',  y2:'16.95' }),
-    h('line', { x1:'16.95', y1:'7.05',  x2:'19.78', y2:'4.22' })
-  ); }
-
-  function IcMoon() { return h(Icon, null,
-    h('path', { d:'M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z' })
-  ); }
-
-  // Cloud upload arrow — "Save to Prose"
-  function IcSave() { return h(Icon, null,
-    h('path', { d:'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' }),
-    h('polyline', { points:'17 8 12 3 7 8' }),
-    h('line', { x1:'12', y1:'3', x2:'12', y2:'15' })
-  ); }
-
-  // ── Main component ───────────────────────────────────────────────────────
-  function ProseEditor() {
-    // Initialise theme from storage, then system preference. Lazy initializer
-    // so the storage read only fires on the first render — useState ignores
-    // the value on subsequent renders, so an eager IIFE was wasted work.
-    var _theme = useState(function() {
-      var saved = stor.get(THEME_KEY);
-      if (saved === 'dark' || saved === 'light') return saved;
-      return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
-        ? 'dark' : 'light';
-    });
-    var theme = _theme[0]; var setTheme = _theme[1];
-
-    var _content = useState(function() { return stor.get(DRAFT_KEY) || INITIAL_MARKDOWN; });
-    var content = _content[0]; var setContent = _content[1];
-
-    var _view = useState('edit');
-    var view = _view[0]; var setView = _view[1];
-
-    var _copied = useState(false);
-    var copied = _copied[0]; var setCopied = _copied[1];
-
-    var _copyFailed = useState(false);
-    var copyFailed = _copyFailed[0]; var setCopyFailed = _copyFailed[1];
-
-    var _saved = useState(false);
-    var saved = _saved[0]; var setSaved = _saved[1];
-
-    var _saveFailed = useState(false);
-    var saveFailed = _saveFailed[0]; var setSaveFailed = _saveFailed[1];
-
-    var saveTimer = useRef(null);
-    var copiedTimer = useRef(null);
-    var savedTimer = useRef(null);
-
-    // Clear pending timers on unmount so widget teardown doesn't fire
-    // setState on a gone component.
-    useEffect(function() {
-      return function() {
-        if (saveTimer.current) clearTimeout(saveTimer.current);
-        if (copiedTimer.current) clearTimeout(copiedTimer.current);
-        if (savedTimer.current) clearTimeout(savedTimer.current);
-      };
-    }, []);
-
-    // System theme changes
-    useEffect(function() {
-      var mq = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
-      if (!mq || !mq.addEventListener) return;
-      var handler = function(e) {
-        // Only follow system if user hasn't pinned a preference this session
-        var pinned = stor.get(THEME_KEY);
-        if (!pinned) setTheme(e.matches ? 'dark' : 'light');
-      };
-      mq.addEventListener('change', handler);
-      return function() { mq.removeEventListener('change', handler); };
-    }, []);
-
-    var handleTheme = useCallback(function() {
-      setTheme(function(t) {
-        var next = t === 'dark' ? 'light' : 'dark';
-        stor.set(THEME_KEY, next);
-        return next;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function() {
+        flash(copyBtn, 'Copied', 'prose-btn--copied');
+      }, function() {
+        if (fallback()) flash(copyBtn, 'Copied', 'prose-btn--copied');
+        else flash(copyBtn, 'Failed', '');
       });
-    }, []);
+    } else if (fallback()) {
+      flash(copyBtn, 'Copied', 'prose-btn--copied');
+    } else {
+      flash(copyBtn, 'Failed', '');
+    }
+  });
 
-    var handleChange = useCallback(function(e) {
-      var val = e.target.value;
-      setContent(val);
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(function() { stor.set(DRAFT_KEY, val); }, 300);
-    }, []);
+  // ── Download ─────────────────────────────────────────────
+  downloadBtn.addEventListener('click', function() {
+    var url;
+    try {
+      var blob = new Blob([textarea.value], { type: 'text/markdown' });
+      url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url; a.download = 'document.md';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function() { URL.revokeObjectURL(url); }, 150);
+    } catch (err) {
+      console.warn('[prose-widget] download failed, opening blob in new tab:', err);
+      try { if (url) window.open(url, '_blank'); } catch (_) {}
+    }
+  });
 
-    var handleCopy = useCallback(function() {
-      function showSuccess() {
-        setCopied(true);
-        setCopyFailed(false);
-        if (copiedTimer.current) clearTimeout(copiedTimer.current);
-        copiedTimer.current = setTimeout(function() { setCopied(false); }, 2000);
-      }
-      function showFailure() {
-        setCopyFailed(true);
-        setCopied(false);
-        if (copiedTimer.current) clearTimeout(copiedTimer.current);
-        copiedTimer.current = setTimeout(function() { setCopyFailed(false); }, 2000);
-      }
-      // Sandboxed iframes (claude.ai artifact pane) often deny navigator.clipboard
-      // even on a user gesture. Fall back to the legacy execCommand path which
-      // works in more contexts. Stays inside this single click handler so the
-      // "user gesture" requirement is preserved.
-      function fallbackCopy() {
-        try {
-          var ta = document.createElement('textarea');
-          ta.value = content;
-          ta.style.position = 'fixed';
-          ta.style.opacity = '0';
-          ta.setAttribute('readonly', '');
-          document.body.appendChild(ta);
-          ta.select();
-          ta.setSelectionRange(0, content.length);
-          var ok = document.execCommand('copy');
-          document.body.removeChild(ta);
-          return ok;
-        } catch(_) { return false; }
-      }
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(content).then(showSuccess).catch(function(err) {
-          console.warn('[prose-artifact] navigator.clipboard rejected, trying fallback:', err);
-          if (fallbackCopy()) showSuccess(); else showFailure();
-        });
-      } else if (fallbackCopy()) {
-        showSuccess();
-      } else {
-        showFailure();
-      }
-    }, [content]);
-
-    var handleDownload = useCallback(function() {
-      var url;
-      try {
-        var blob = new Blob([content], { type: 'text/markdown' });
-        url = URL.createObjectURL(blob);
-        var a = document.createElement('a');
-        a.href = url; a.download = 'document.md';
-        // Append + remove + deferred revoke: revoking the object URL
-        // synchronously after click() races the browser's blob fetch in
-        // Firefox / Chromium under load and silently drops the download.
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(function() { URL.revokeObjectURL(url); }, 150);
-      } catch(err) {
-        // Sandboxed iframes without allow-downloads silently swallow anchor.click().
-        // Fall back to a popup so the user can right-click → Save As.
-        console.warn('[prose-artifact] download failed, opening blob in new tab:', err);
-        try { if (url) window.open(url, '_blank'); } catch(_) {}
-      }
-    }, [content]);
-
-    // Save to Prose — push a structured turn into the chat via the widget
-    // runtime's sendPrompt(text) global. Claude parses the message and calls
-    // the create_and_open_file MCP tool. See SKILL.md for the contract.
-    var handleSaveToProse = useCallback(function() {
-      function showSuccess() {
-        setSaved(true);
-        setSaveFailed(false);
-        if (savedTimer.current) clearTimeout(savedTimer.current);
-        savedTimer.current = setTimeout(function() { setSaved(false); }, 2500);
-      }
-      function showFailure() {
-        setSaveFailed(true);
-        setSaved(false);
-        if (savedTimer.current) clearTimeout(savedTimer.current);
-        savedTimer.current = setTimeout(function() { setSaveFailed(false); }, 2500);
-      }
-      if (typeof sendPrompt !== 'function') {
-        console.warn('[prose-artifact] sendPrompt not available — widget runtime missing handoff API');
-        showFailure();
-        return;
-      }
-      try {
-        var msg = 'Save this draft to Prose:\n\n```markdown\n' + content + '\n```';
-        sendPrompt(msg);
-        showSuccess();
-      } catch(err) {
-        console.warn('[prose-artifact] sendPrompt threw:', err);
-        showFailure();
-      }
-    }, [content]);
-
-    var words = wordCount(content);
-
-    var preview = useMemo(function() { return renderMd(content); }, [content]);
-
-    var showEdit    = view === 'split' || view === 'edit';
-    var showPreview = view === 'split' || view === 'preview';
-
-    return h('div', { className: 'prose-app', 'data-theme': theme },
-
-      // Toolbar
-      h('div', { className: 'toolbar' },
-        h('span', { className: 'toolbar__brand' }, 'Prose'),
-
-        h('div', { className: 'view-toggle' },
-          ['edit', 'split', 'preview'].map(function(v) {
-            return h('button', {
-              key: v,
-              className: 'view-toggle__btn' + (view === v ? ' view-toggle__btn--active' : ''),
-              onClick: function() { setView(v); },
-              title: v.charAt(0).toUpperCase() + v.slice(1)
-            }, v.charAt(0).toUpperCase() + v.slice(1));
-          })
-        ),
-
-        h('div', { className: 'toolbar__spacer' }),
-
-        h('span', { className: 'word-count' },
-          words === 1 ? '1 word' : words + ' words'
-        ),
-
-        h('button', {
-          className: 'btn btn-ghost',
-          onClick: handleDownload,
-          title: 'Download as .md file'
-        }, h(IcDownload), 'Download'),
-
-        // Copy markdown — always visible, works without Prose installed
-        h('button', {
-          className: 'btn btn-secondary' + (copied ? ' btn--copied' : ''),
-          onClick: handleCopy,
-          title: copyFailed ? 'Clipboard access denied' : 'Copy raw markdown to clipboard'
-        },
-          copied ? h(IcCheck) : h(IcCopy),
-          copied ? 'Copied' : (copyFailed ? 'Failed' : 'Copy markdown')
-        ),
-
-        // Save to Prose — pushes a structured turn into the chat via sendPrompt.
-        // Claude parses and calls create_and_open_file MCP. See SKILL.md.
-        h('button', {
-          className: 'btn btn-primary' + (saved ? ' btn--copied' : ''),
-          onClick: handleSaveToProse,
-          title: saveFailed
-            ? 'Could not reach the chat runtime — try again'
-            : 'Send this draft to Prose desktop'
-        },
-          saved ? h(IcCheck) : h(IcSave),
-          saved ? 'Sent' : (saveFailed ? 'Failed' : 'Save to Prose')
-        ),
-
-        h('button', {
-          className: 'btn btn-ghost',
-          onClick: handleTheme,
-          title: theme === 'dark' ? 'Light mode' : 'Dark mode'
-        }, theme === 'dark' ? h(IcSun) : h(IcMoon))
-      ),
-
-      // Editor / Preview
-      h('div', { className: 'editor-area' },
-
-        showEdit && h('div', {
-          className: 'editor-pane' + (view === 'edit' ? ' editor-pane--full' : '')
-        },
-          view === 'split' && h('div', { className: 'pane-label' }, 'Markdown'),
-          h('textarea', {
-            className: 'editor-textarea',
-            value: content,
-            onChange: handleChange,
-            placeholder: 'Start writing in Markdown...',
-            spellCheck: false,
-            autoCapitalize: 'off',
-            autoCorrect: 'off'
-          })
-        ),
-
-        showPreview && h('div', { className: 'preview-pane' },
-          view === 'split' && h('div', { className: 'pane-label' }, 'Preview'),
-          h('div', { className: 'preview-scroll' },
-            content.trim()
-              ? h('div', { className: 'md', dangerouslySetInnerHTML: { __html: preview } })
-              : h('p', { className: 'md-empty' }, 'Preview will appear here')
-          )
-        )
-      )
-    );
-  }
-
-  // Mount
-  var root = ReactDOM.createRoot(document.getElementById('root'));
-  root.render(h(ProseEditor, null));
-
+  // ── Save to Prose (the handoff) ──────────────────────────
+  saveBtn.addEventListener('click', function() {
+    if (typeof sendPrompt !== 'function') {
+      console.warn('[prose-widget] sendPrompt not available — widget runtime missing handoff API');
+      flash(saveBtn, 'Failed', '');
+      return;
+    }
+    try {
+      var msg = 'Save this draft to Prose:\n\n```markdown\n' + textarea.value + '\n```';
+      sendPrompt(msg);
+      flash(saveBtn, 'Sent', 'prose-btn--copied', 2500);
+    } catch (err) {
+      console.warn('[prose-widget] sendPrompt threw:', err);
+      flash(saveBtn, 'Failed', '');
+    }
+  });
 })();
 </script>
