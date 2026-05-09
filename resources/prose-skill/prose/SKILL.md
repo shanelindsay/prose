@@ -5,59 +5,25 @@ description: Drives Prose for markdown work. For ANY markdown content the user w
 
 # Prose
 
-Prose is a focused Markdown editor for macOS with native Claude integration via MCP (Model Context Protocol). This skill drives Prose from a Claude conversation: drafting new markdown via an inlined editor widget, and outlining / reading / proposing inline edits to documents the user already has open.
+Markdown editor for macOS with Claude integration. This skill handles two paths: rendering an inline editor widget for new markdown drafts, and using MCP tools to read or edit documents the user already has open in Prose.
 
-## Quick reference (read this first)
+## Quick reference
 
-Two main modes; pick by what the user is doing:
+| Situation | Path |
+|---|---|
+| User asks to draft / write / create new markdown content | **Render the editor widget below** via `visualize:show_widget`. Substitute `__INITIAL_MARKDOWN__` with the draft (HTML-escape `& < > "`), call `show_widget`. Do NOT create a `Document · MD` artifact — this skill exists to override that. Do NOT read `prose-editor.html`, list bundle files, or shell-substitute. The block below is the source of truth. |
+| User asks to work on a document already open in Prose | Use MCP tools (`get_outline`, `read_document`, `suggest_edit`). Render outline + diff widgets per the *Outline + diff widgets* section. |
+| Both true (user has a doc open AND wants new content) | New content = widget. The MCP path edits what's on disk. |
 
-1. **The user wants you to draft / write / create new markdown content** (a README, post, draft, essay, notes, or any longform writing in the conversation). → **Render the inlined editor widget** via `visualize:show_widget`. The widget HTML is in the **WIDGET HTML** section immediately below. Take it verbatim, replace the literal token `__INITIAL_MARKDOWN__` with the draft (HTML-escape `& < > "`), call `visualize:show_widget`. **Don't read `prose-editor.html` from the skill bundle, don't list bundle files, don't shell-substitute** — the inline block is the source of truth.
-2. **The user wants you to work on an existing document open in Prose** (edit, outline, summarize, tighten, restructure). → Use the MCP tools (`get_outline`, `read_document`, `suggest_edit`). Render outline + diff widgets per the *Rendering* section.
+## How to render the editor widget
 
-If the user-facing request fits both modes — e.g. they have a doc open AND ask you to draft something new — the new draft is a NEW thing, render the editor widget. The MCP path is for editing what's already on disk.
+1. Take the **WIDGET HTML** block below verbatim.
+2. Replace the literal token `__INITIAL_MARKDOWN__` (one occurrence, inside a `<textarea>`) with the draft. HTML-escape `& < > "` only — backticks, asterisks, brackets, slashes pass through.
+3. Call `visualize:show_widget` with that HTML as `widget_code`. Use `title: "prose_editor"` and `loading_messages: ["Opening the editor"]`. Make the silent `read_me` call once per conversation if you haven't already.
 
-## Editor widget — the default surface for substantive markdown
+In your reply after rendering, briefly state in one sentence what the widget contains and that they can edit and click **Open in Prose** when ready.
 
-The Prose editor renders **inline in the chat stream** as a widget via `visualize:show_widget`. It is **the default presentation surface for any markdown content the user would plausibly want to read, edit, copy, or save** — not an opt-in, not a fallback, not a heuristic.
-
-### Override the built-in Document · MD
-
-When this skill is loaded, **render markdown via `visualize:show_widget`, not as a `Document · MD` / "Presented file" artifact.** Whenever you would otherwise create a markdown document artifact, render the prose-editor widget instead. The built-in is read-only; the widget is editable AND has a one-click handoff to Prose desktop (Open in Prose → sendPrompt → `create_and_open_file` MCP). The user installed this skill specifically to avoid the read-only fallback — honor that.
-
-Do not skip the widget because the response is "just a draft" or feels short. That is exactly the case the widget is for: drafts the user wants to keep editing.
-
-### When to render
-
-Render the editor widget whenever any of these are true:
-
-- The user asks you to **draft, write, or create** any markdown content (a README, post, essay, notes, blog post, email, list, plan, doc).
-- You are about to output a self-contained markdown document (anything with headings, multiple paragraphs, or anything the user would plausibly copy or save).
-
-Inline markdown is reserved for:
-
-- Short conversational replies (a sentence or two).
-- Single code-block snippets where the surrounding prose is minimal.
-- Direct lookup answers (*"how do I check disk usage on Linux?"*).
-
-If you are uncertain whether a response is "substantive enough", render the widget. Drafts that live only inline are hard for the user to keep iterating on; the widget gives them an editable surface and a one-click handoff to Prose desktop.
-
-**Exception — real files in Prose**: when the user has a markdown file open in Prose and is asking you to work on *that document*, use the MCP workflow (`read_document` → `suggest_edit`) instead. The widget is for *new* markdown content drafted in the conversation; the MCP path edits the user's existing files. Don't fork their open document into a separate widget.
-
-### How to render — single round trip
-
-The widget HTML is **inlined below** in the WIDGET HTML section. **Do not read `prose-editor.html` from the skill bundle separately. Do not list bundle files. Do not use bash.** The block below is the source of truth for what to pass to `visualize:show_widget`.
-
-To render, do exactly two things in one turn:
-
-1. Take the entire HTML block in the **WIDGET HTML** section verbatim.
-2. Replace the literal token `__INITIAL_MARKDOWN__` (it appears once, inside a `<textarea>`) with your draft markdown content. **HTML-escape the four characters `& < > "`** in your content before substitution — the placeholder sits inside textarea text, where these characters are special. Backticks, asterisks, brackets, slashes pass through untouched.
-3. Call `visualize:show_widget` with the substituted block as `widget_code`. Pass `title` like `prose_editor` (snake_case, no spaces) and `loading_messages` like `["Opening the editor"]`. Make the silent `read_me` call once per conversation if you haven't already.
-
-If your draft contains a literal `__INITIAL_MARKDOWN__` token (extremely rare), escape one underscore to `_\_INITIAL_MARKDOWN__` before substituting.
-
-In your conversational reply after the widget renders, briefly state in one sentence what the widget contains and that they can edit and click **Open in Prose** when ready.
-
-### WIDGET HTML
+## WIDGET HTML
 
 ```html
 <!-- WIDGET_HTML_BEGIN -->
@@ -65,115 +31,75 @@ In your conversational reply after the widget renders, briefly state in one sent
 <!-- WIDGET_HTML_END -->
 ```
 
-### Open-in-Prose submission contract
+## Open-in-Prose handoff
 
-When the user clicks the widget's **Open in Prose** button, the widget calls `sendPrompt(text)` with this exact message shape:
+The widget's "Open in Prose" button calls `sendPrompt(text)` with this message:
 
 ```
 Open this in Prose:
 
 ```markdown
-<current widget content verbatim>
+<editor textarea contents at the moment of click>
 ```
 ```
 
-The fence is the literal three-backtick `markdown` fence. The body is the editor textarea contents at the moment of click — possibly different from what you originally seeded, since the user may have edited.
+When you receive a turn that begins with `Open this in Prose:` followed by a fenced markdown block:
 
-**On receipt** (i.e. when you see a user turn that begins with `Open this in Prose:` followed by a fenced markdown block):
+1. Extract the body of the fenced block.
+2. Infer a filename — first H1 slugified (`# Why I switched to SQLite` → `why-i-switched-to-sqlite.md`), or `draft.md` if no H1.
+3. Call `create_and_open_file({ filename, content })`.
+4. Reply with one line: *"Opened `<filename>` in Prose."* Don't echo the markdown.
 
-1. Extract the body of the fenced block as the draft content.
-2. Infer a filename:
-   - First H1 in the body → slugified to lowercase with hyphens, append `.md` (e.g. `# Why I switched to SQLite` → `why-i-switched-to-sqlite.md`).
-   - No H1 → use `draft.md`.
-3. Call `create_and_open_file({ filename: <inferred>, content: <body> })`.
-4. In your reply, confirm in one sentence: *"Opened `<filename>` in Prose."* Don't echo the markdown content back; the user already has it.
+If `create_and_open_file` isn't available (MAS build, web mode, MCP not installed) or fails (Prose not running and the bridge can't auto-launch), reply: *"I couldn't reach Prose to open this. Copy the markdown from the editor and paste it into a new Prose document."* Don't retry.
 
-If `create_and_open_file` fails (Prose not running and the stdio bridge can't auto-launch it; or the tool isn't exposed in the current session — MAS build, web mode, MCP not installed): respond conversationally, *"I couldn't reach Prose to open this. Copy the markdown from the editor and paste it into a new Prose document."* — and stop. Don't retry the tool.
+## When to use the widget vs inline markdown
 
-### What the widget provides
+Render the widget for any self-contained markdown document — README, post, essay, notes, draft, blog post, email, list, plan, anything with headings or multiple paragraphs.
 
-- **Markdown textarea** — full-height editor seeded with your initial content, monospace font, with live word count. Light/dark theme follows the host (claude.ai's `prefers-color-scheme`).
-- **Copy markdown** — tries `navigator.clipboard` then falls back to a hidden-textarea `execCommand('copy')`.
-- **Open in Prose** — the primary handoff. Calls `sendPrompt` with the structured message above.
+Inline markdown only for: short conversational replies (a sentence or two), single code-block snippets in a conversational reply, direct lookup answers (*"how do I check disk usage on Linux?"*).
 
-The widget is intentionally minimal: vanilla JS, no external scripts, no live preview, no theme toggle (host preference is honored automatically). It is a focused drafting surface — the rendered view lives in Prose desktop, where the user lands after Open. Widgets are session-scoped (no `window.storage`), so the workflow is *draft → Open in Prose → keep editing in Prose where it persists.*
+When in doubt, render the widget. Drafts that live only inline are hard to keep iterating on.
 
-## Connectivity
+**Exception**: if the user has a markdown file open in Prose and is asking you to work on *that document*, use the MCP path (`read_document` → `suggest_edit`) instead. Don't fork their open document into a separate widget.
 
-Don't probe before doing real work — your **first MCP call doubles as the connectivity check**. Make whatever call the user's request actually needs (`get_outline`, `read_document`, etc.) and read the response state:
+## Connectivity (MCP path only)
 
-- **Returns the expected payload** → Prose is running with MCP connected. Continue.
-- **"tool not found" / not in toolset** → MCP isn't installed. Tell the user: open Prose → Settings → Integrations → click "Install MCP Server", then restart Claude.
-- **Error: server not reachable / connection refused** → MCP is installed but Prose isn't running. Ask the user to launch Prose, or offer to work with pasted content.
-- **Mac App Store build of Prose** → MCP is unavailable by sandbox design. Explain this and offer to work with pasted content. Don't attempt install instructions.
+Don't probe — your first MCP call doubles as the check. Read the response state:
 
-Never silently underperform. If MCP isn't usable, surface why and offer an alternative.
+- Expected payload → MCP is connected. Continue.
+- "tool not found" → MCP isn't installed. Tell the user: open Prose → Settings → Integrations → click "Install MCP Server", then restart Claude.
+- Connection refused → MCP installed but Prose isn't running. Ask the user to launch it.
+- Mac App Store build → MCP unavailable by sandbox design. Offer pasted-content workflow; don't suggest install.
 
-## Tools
+If MCP isn't usable, surface why and offer an alternative.
+
+## MCP tools
 
 | Tool | Purpose |
 |------|---------|
-| `get_outline` | Returns document headings as a structured list. |
-| `read_document` | Returns the full document as a list of nodes. Each node has an `id` (use this for edit targeting), the node `type`, and its `text` content. |
-| `suggest_edit` | Proposes a replacement for a single node. The user sees an inline diff in Prose and accepts or rejects there — Prose's MCP does not expose programmatic accept. |
-| `open_file` | Opens an existing file in Prose by absolute path. |
-| `create_and_open_file` | Creates a new file with given content at a given path and opens it in Prose. |
+| `get_outline` | Returns headings: `{ outline: [{ level, text, line }, ...], summary? }`. `summary` only appears for documents with fewer than 3 headings. |
+| `read_document` | Returns `{ nodes: [{ id, type, content }, ...], markdown }`. **Note**: nodes carry `content`, not `text`. |
+| `suggest_edit` | `{ nodeId (req), content (req), comment?, search? }` → `{ suggested: true, suggestionId }`. User accepts/rejects in Prose. Always pass `search` (the original node text) so the server can match if `nodeId` is stale. |
+| `open_file` | Opens a file by absolute path. |
+| `create_and_open_file` | Writes a file (default save dir, auto-suffixes on collision) and opens it. `filename` is just a name, not a path. |
 
-## Response shapes
+`get_outline` and `read_document` are read-only. `create_and_open_file` and `open_file` switch the active document and dismiss any pending `suggest_edit` overlay — render diffs LAST in multi-tool flows. The MCP exposes only these 5 tools; there's no "get current file path".
 
-`get_outline` returns:
+## Editing nodes
 
-```
-{ outline: [{ level: number, text: string, line: number }, ...], summary?: string }
-```
+`suggest_edit` is node-targeted. Workflow: `read_document` → pick the node → `suggest_edit` with both `nodeId` and `search`. **One call per turn** — Prose handles one suggestion at a time. Don't loop waiting for accept/reject; just return.
 
-Each entry is a heading. `level` is 1–6 (H1–H6), `text` is the heading text, `line` is its approximate line number. The `summary` field appears only when the document has fewer than 3 headings.
+Prefer minimal diffs (smallest containing node). For heading edits, verify the heading text verbatim against `get_outline` first. If `suggest_edit` returns "no match", re-read the document and retry with a fresh `nodeId`.
 
-`read_document` returns `{ nodes: [{ id, type, content }, ...], markdown }`. The `id` is what `suggest_edit` targets via `nodeId`. `markdown` is the full document text if you need it without iterating nodes. **Note**: nodes carry `content`, not `text` — don't look for a `text` field.
+## Outline + diff widgets (for MCP work)
 
-`suggest_edit` returns `{ suggested: true, suggestionId }` on success.
-
-## Side effects and limitations
-
-- `create_and_open_file` and `open_file` switch the active document and dismiss any pending `suggest_edit` overlay. Order multi-tool flows accordingly: render the diff last if you want the user to land on it.
-- `create_and_open_file` saves to Prose's configured default save location (typically `~/Documents`). The `filename` parameter is just a name, not a path; if it collides, Prose auto-suffixes (`Untitled.md` → `Untitled 2.md`).
-- The MCP exposes only the 5 tools above — there is **no** "get current file path" tool. If you need the active document's path (e.g., to switch back after `create_and_open_file`), ask the user or use a path they've already mentioned. Don't guess.
-- `get_outline` and `read_document` are read-only; safe to call any time without disturbing UI state.
-
-## Editing
-
-`suggest_edit` is **node-targeted**. Parameters:
-
-- `nodeId` (**required**) — from `read_document`.
-- `content` (**required**) — replaces the node's *entire* content.
-- `comment` (optional) — short rationale shown in the diff UI (≤ 20 words).
-- `search` (optional but recommended) — the original node text. Pass it whenever you have it; the server uses it as a text-match fallback if `nodeId` is stale.
-
-Workflow: `read_document` → pick the node → `suggest_edit` with both `nodeId` and `search`. One call per turn — Prose's overlay handles one suggestion at a time. Don't loop waiting for accept/reject; just return.
-
-If `suggest_edit` returns "node not found" / "no match", call `read_document` again, locate the node by its current text, and retry with the fresh `nodeId`.
-
-Prefer minimal diffs — replace the smallest node that contains the change. When restructuring or editing headings, verify heading text verbatim against `get_outline` first.
-
-## Rendering — outline + diff widgets (for MCP work)
-
-Both templates inlined below. **The widget IS the response shape for outlines and diffs — not an optional enhancement.** Do not fall back to a Markdown list because the widget feels heavy or because Markdown is "simpler." Only fall back when `show_widget` is genuinely unavailable on this surface (every variant returns "tool not found").
-
-### Calling `show_widget`
-
-`show_widget` (also exposed as `visualize:show_widget`) requires three parameters:
-
-- `widget_code` — the substituted HTML from the templates below.
-- `title` — short snake_case identifier (e.g., `prose_outline`, `prose_diff_<short_node_id>`). No spaces or special characters; also used as the download filename.
-- `loading_messages` — array of 1–4 short strings (~5 words each). Keep them dry and factual for this writing-tools context. Examples: `["Laying out the headings"]` for outline, `["Highlighting what changed"]` for diff.
-
-The platform expects a `read_me` call **once silently** before your first `show_widget` call in the conversation. Don't narrate it — just make the call before rendering.
+Both render via `visualize:show_widget` — same `read_me` prerequisite, same `title` / `loading_messages` parameters. The widget IS the response shape; don't fall back to plain Markdown unless `show_widget` is genuinely unavailable.
 
 ### Outline widget
 
-**When**: after `get_outline` returns three or more entries. For fewer than 3 headings, use the `summary` field and answer in 1–2 conversational sentences.
+After `get_outline` returns three or more entries. (For fewer than 3, use the `summary` field and answer in 1–2 conversational sentences.)
 
-**Outer template** — substitute `{{HEADING_ITEMS}}` with one item per heading:
+Substitute `{{HEADING_ITEMS}}` with one item per heading:
 
 ```html
 <style>
@@ -181,16 +107,12 @@ The platform expects a `read_me` call **once silently** before your first `show_
   .prose-outline {
     --bg: #ffffff; --text: #1a1a1a; --border: #e4e4e7; --muted: #71717a;
     font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 13px; line-height: 1.6; color: var(--text);
-    max-width: 720px;
+    font-size: 13px; line-height: 1.6; color: var(--text); max-width: 720px;
   }
   @media (prefers-color-scheme: dark) {
     .prose-outline { --bg: #18181b; --text: #fafafa; --border: #3f3f46; --muted: #a1a1aa; }
   }
-  .prose-outline__card {
-    border: 1px solid var(--border); border-radius: 8px;
-    padding: 14px 16px; background: var(--bg);
-  }
+  .prose-outline__card { border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; background: var(--bg); }
   .prose-outline__label { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 10px; }
   .prose-outline__item { padding: 3px 0; color: var(--text); font-size: 13px; }
 </style>
@@ -202,23 +124,19 @@ The platform expects a `read_me` call **once silently** before your first `show_
 </div>
 ```
 
-**Item template** — one per heading. `INDENT` = `(level - 1) * 16`. `TEXT` = HTML-escape `& < > "` in the heading text:
+Per-heading item — `INDENT` = `(level - 1) * 16`, `TEXT` = HTML-escape:
 
 ```html
 <div class="prose-outline__item" style="padding-left: {{INDENT}}px;">{{TEXT}}</div>
 ```
 
-Pass the substituted HTML as `widget_code` per the calling rules above.
-
 ### Diff widget
 
-**When**: after `suggest_edit` returns `{ suggested: true, suggestionId }`. Render every time, not just for "interesting" edits.
+After `suggest_edit` returns success. Render every time, not just for "interesting" edits.
 
-**Compute** an inline word-level diff between the original node text and your new `content`. Both texts appear in full, side-by-side, with only the differing word runs highlighted in place — the eye skims unchanged surrounding text and lands on what changed.
+Compute an inline word-level diff between the original node text and your new `content`. Both texts appear in full, side-by-side, with only the differing word runs highlighted in place. Word-level granularity (a contiguous run of word characters or punctuation) — for `integraton` → `integration`, mark the whole word, not just the missing letter. Whole-paragraph rewrites where every word changed can mark the entire text as one span.
 
-**Granularity**: word-level (a contiguous run of word characters or a contiguous run of punctuation). Don't mark character-level differences inside a word — for `integraton` → `integration`, mark the whole word, not just the missing `i`. For whole-paragraph rewrites where every word changed, marking the entire text as one span is acceptable.
-
-**Template** — substitute `{{OLD_TEXT}}`, `{{NEW_TEXT}}`, `{{COMMENT_BLOCK}}`:
+Substitute `{{OLD_TEXT}}`, `{{NEW_TEXT}}`, `{{COMMENT_BLOCK}}`:
 
 ```html
 <style>
@@ -264,32 +182,22 @@ Pass the substituted HTML as `widget_code` per the calling rules above.
 </div>
 ```
 
-**Substitution rules**:
+`{{OLD_TEXT}}` — full original text HTML-escaped, then wrap each removed run in `<span class="prose-diff__removed">…</span>`. Unchanged text stays unmarked. `{{NEW_TEXT}}` — same idea with `prose-diff__added`. Unchanged text in OLD_TEXT and NEW_TEXT must match exactly.
 
-- `{{OLD_TEXT}}` — full original text (HTML-escape `& < > "`), then wrap each removed run with `<span class="prose-diff__removed">…</span>`. Unchanged surrounding text stays unmarked.
-- `{{NEW_TEXT}}` — full new text (HTML-escape first), then wrap each added run with `<span class="prose-diff__added">…</span>`. Unchanged text stays unmarked and matches the unmarked text in `{{OLD_TEXT}}` exactly.
-- `{{COMMENT_BLOCK}}` — empty string when no `comment` was passed to `suggest_edit`. When present:
+`{{COMMENT_BLOCK}}` — empty when no `comment`. When present:
+```html
+<div class="prose-diff__comment">{{COMMENT}}</div>
+```
+with `{{COMMENT}}` HTML-escaped.
 
-  ```html
-  <div class="prose-diff__comment">{{COMMENT}}</div>
-  ```
-
-  with `{{COMMENT}}` HTML-escaped.
-
-Pass the substituted HTML as `widget_code` per the calling rules above. Then in the conversational reply, briefly state what the change does (one sentence). Then wait for the user.
-
-### When widgets really aren't available
-
-If both `show_widget` and `visualize:show_widget` return "tool not found", render the same information as plain Markdown:
-
-- Outline → nested list using `level` for indentation.
-- Diff → describe the change in one or two sentences.
+After rendering the diff, briefly state what the change does (one sentence). Then wait for the user.
 
 ## Graceful degradation
 
 | Condition | Behavior |
 |-----------|----------|
-| Prose running, MCP connected | Full assistance via MCP tools. |
+| Prose running, MCP connected | Full assistance. |
 | Prose running, MCP not installed (OSS build) | "Open Prose → Settings → Integrations → Install MCP Server, then restart Claude." |
-| Mac App Store build of Prose | Sandbox blocks MCP. Offer pasted-content workflow. Don't suggest install. |
+| Mac App Store build | Sandbox blocks MCP. Offer pasted content. Don't suggest install. |
 | Prose not running | Suggest launching, or work with pasted content. |
+| `show_widget` unavailable on this surface | Outline → nested Markdown list (use `level` for indent). Diff → describe in 1–2 sentences. |
