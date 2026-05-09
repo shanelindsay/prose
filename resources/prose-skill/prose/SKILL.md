@@ -5,7 +5,98 @@ description: Drives Prose for markdown work. For ANY markdown content the user w
 
 # Prose
 
-Prose is a focused Markdown editor for macOS with native Claude integration via MCP (Model Context Protocol). This skill drives Prose from a Claude conversation: outlining documents, reading content, and proposing inline edits the user can accept or reject in the diff UI.
+Prose is a focused Markdown editor for macOS with native Claude integration via MCP (Model Context Protocol). This skill drives Prose from a Claude conversation: drafting new markdown via an inlined editor widget, and outlining / reading / proposing inline edits to documents the user already has open.
+
+## Quick reference (read this first)
+
+Two main modes; pick by what the user is doing:
+
+1. **The user wants you to draft / write / create new markdown content** (a README, post, draft, essay, notes, or any longform writing in the conversation). → **Render the inlined editor widget** via `visualize:show_widget`. The widget HTML is in the **WIDGET HTML** section immediately below. Take it verbatim, replace the literal token `__INITIAL_MARKDOWN__` with the draft (HTML-escape `& < > "`), call `visualize:show_widget`. **Don't read `prose-editor.html` from the skill bundle, don't list bundle files, don't shell-substitute** — the inline block is the source of truth.
+2. **The user wants you to work on an existing document open in Prose** (edit, outline, summarize, tighten, restructure). → Use the MCP tools (`get_outline`, `read_document`, `suggest_edit`). Render outline + diff widgets per the *Rendering* section.
+
+If the user-facing request fits both modes — e.g. they have a doc open AND ask you to draft something new — the new draft is a NEW thing, render the editor widget. The MCP path is for editing what's already on disk.
+
+## Editor widget — the default surface for substantive markdown
+
+The Prose editor renders **inline in the chat stream** as a widget via `visualize:show_widget`. It is **the default presentation surface for any markdown content the user would plausibly want to read, edit, copy, or save** — not an opt-in, not a fallback, not a heuristic.
+
+### Override the built-in Document · MD
+
+When this skill is loaded, **render markdown via `visualize:show_widget`, not as a `Document · MD` / "Presented file" artifact.** Whenever you would otherwise create a markdown document artifact, render the prose-editor widget instead. The built-in is read-only; the widget is editable AND has a one-click handoff to Prose desktop (Open in Prose → sendPrompt → `create_and_open_file` MCP). The user installed this skill specifically to avoid the read-only fallback — honor that.
+
+Do not skip the widget because the response is "just a draft" or feels short. That is exactly the case the widget is for: drafts the user wants to keep editing.
+
+### When to render
+
+Render the editor widget whenever any of these are true:
+
+- The user asks you to **draft, write, or create** any markdown content (a README, post, essay, notes, blog post, email, list, plan, doc).
+- You are about to output a self-contained markdown document (anything with headings, multiple paragraphs, or anything the user would plausibly copy or save).
+
+Inline markdown is reserved for:
+
+- Short conversational replies (a sentence or two).
+- Single code-block snippets where the surrounding prose is minimal.
+- Direct lookup answers (*"how do I check disk usage on Linux?"*).
+
+If you are uncertain whether a response is "substantive enough", render the widget. Drafts that live only inline are hard for the user to keep iterating on; the widget gives them an editable surface and a one-click handoff to Prose desktop.
+
+**Exception — real files in Prose**: when the user has a markdown file open in Prose and is asking you to work on *that document*, use the MCP workflow (`read_document` → `suggest_edit`) instead. The widget is for *new* markdown content drafted in the conversation; the MCP path edits the user's existing files. Don't fork their open document into a separate widget.
+
+### How to render — single round trip
+
+The widget HTML is **inlined below** in the WIDGET HTML section. **Do not read `prose-editor.html` from the skill bundle separately. Do not list bundle files. Do not use bash.** The block below is the source of truth for what to pass to `visualize:show_widget`.
+
+To render, do exactly two things in one turn:
+
+1. Take the entire HTML block in the **WIDGET HTML** section verbatim.
+2. Replace the literal token `__INITIAL_MARKDOWN__` (it appears once, inside a `<textarea>`) with your draft markdown content. **HTML-escape the four characters `& < > "`** in your content before substitution — the placeholder sits inside textarea text, where these characters are special. Backticks, asterisks, brackets, slashes pass through untouched.
+3. Call `visualize:show_widget` with the substituted block as `widget_code`. Pass `title` like `prose_editor` (snake_case, no spaces) and `loading_messages` like `["Opening the editor"]`. Make the silent `read_me` call once per conversation if you haven't already.
+
+If your draft contains a literal `__INITIAL_MARKDOWN__` token (extremely rare), escape one underscore to `_\_INITIAL_MARKDOWN__` before substituting.
+
+In your conversational reply after the widget renders, briefly state in one sentence what the widget contains and that they can edit and click **Open in Prose** when ready.
+
+### WIDGET HTML
+
+```html
+<!-- WIDGET_HTML_BEGIN -->
+<!-- (build:skill inlines resources/prose-artifact/prose-editor.html here) -->
+<!-- WIDGET_HTML_END -->
+```
+
+### Open-in-Prose submission contract
+
+When the user clicks the widget's **Open in Prose** button, the widget calls `sendPrompt(text)` with this exact message shape:
+
+```
+Open this in Prose:
+
+```markdown
+<current widget content verbatim>
+```
+```
+
+The fence is the literal three-backtick `markdown` fence. The body is the editor textarea contents at the moment of click — possibly different from what you originally seeded, since the user may have edited.
+
+**On receipt** (i.e. when you see a user turn that begins with `Open this in Prose:` followed by a fenced markdown block):
+
+1. Extract the body of the fenced block as the draft content.
+2. Infer a filename:
+   - First H1 in the body → slugified to lowercase with hyphens, append `.md` (e.g. `# Why I switched to SQLite` → `why-i-switched-to-sqlite.md`).
+   - No H1 → use `draft.md`.
+3. Call `create_and_open_file({ filename: <inferred>, content: <body> })`.
+4. In your reply, confirm in one sentence: *"Opened `<filename>` in Prose."* Don't echo the markdown content back; the user already has it.
+
+If `create_and_open_file` fails (Prose not running and the stdio bridge can't auto-launch it; or the tool isn't exposed in the current session — MAS build, web mode, MCP not installed): respond conversationally, *"I couldn't reach Prose to open this. Copy the markdown from the editor and paste it into a new Prose document."* — and stop. Don't retry the tool.
+
+### What the widget provides
+
+- **Markdown textarea** — full-height editor seeded with your initial content, monospace font, with live word count. Light/dark theme follows the host (claude.ai's `prefers-color-scheme`).
+- **Copy markdown** — tries `navigator.clipboard` then falls back to a hidden-textarea `execCommand('copy')`.
+- **Open in Prose** — the primary handoff. Calls `sendPrompt` with the structured message above.
+
+The widget is intentionally minimal: vanilla JS, no external scripts, no live preview, no theme toggle (host preference is honored automatically). It is a focused drafting surface — the rendered view lives in Prose desktop, where the user lands after Open. Widgets are session-scoped (no `window.storage`), so the workflow is *draft → Open in Prose → keep editing in Prose where it persists.*
 
 ## Connectivity
 
@@ -64,9 +155,9 @@ If `suggest_edit` returns "node not found" / "no match", call `read_document` ag
 
 Prefer minimal diffs — replace the smallest node that contains the change. When restructuring or editing headings, verify heading text verbatim against `get_outline` first.
 
-## Rendering — widgets are the response shape
+## Rendering — outline + diff widgets (for MCP work)
 
-Both widget templates are inlined below. **The widget IS the response shape for outlines and diffs — not an optional enhancement.** Do not fall back to a Markdown list because the widget feels heavy or because Markdown is "simpler." Only fall back when `show_widget` is genuinely unavailable on this surface (every variant returns "tool not found").
+Both templates inlined below. **The widget IS the response shape for outlines and diffs — not an optional enhancement.** Do not fall back to a Markdown list because the widget feels heavy or because Markdown is "simpler." Only fall back when `show_widget` is genuinely unavailable on this surface (every variant returns "tool not found").
 
 ### Calling `show_widget`
 
@@ -202,87 +293,3 @@ If both `show_widget` and `visualize:show_widget` return "tool not found", rende
 | Prose running, MCP not installed (OSS build) | "Open Prose → Settings → Integrations → Install MCP Server, then restart Claude." |
 | Mac App Store build of Prose | Sandbox blocks MCP. Offer pasted-content workflow. Don't suggest install. |
 | Prose not running | Suggest launching, or work with pasted content. |
-
-## Editor widget — the default surface for substantive markdown
-
-The Prose editor is a lightweight markdown editor that renders **inline in the chat stream** as a widget via `visualize:show_widget` (same mechanism as the outline and diff widgets above). It is **the default presentation surface for any markdown content the user would plausibly want to read, edit, copy, or save** — not an opt-in, not a fallback, not a heuristic.
-
-### Override the built-in Document · MD
-
-When this skill is loaded, **render markdown via `visualize:show_widget`, not as a `Document · MD` / "Presented file" artifact.** Whenever you would otherwise create a markdown document artifact, render the prose-editor widget instead. The built-in is read-only; the widget is editable AND has a one-click handoff to Prose desktop (Open in Prose → sendPrompt → `create_and_open_file` MCP). The user installed this skill specifically to avoid the read-only fallback — honor that.
-
-Do not skip the widget because the response is "just a draft" or feels short. That is exactly the case the widget is for: drafts the user wants to keep editing.
-
-The widget's "Open in Prose" button calls `sendPrompt(...)` to push a structured turn into the chat. Claude (you) parse it and call `create_and_open_file` to hand the draft off to the desktop app where it persists. Full submission contract below.
-
-### When to render
-
-Render the editor widget whenever any of these are true:
-
-- The user asks you to **draft, write, or create** any markdown content (a README, post, essay, notes, blog post, email, list, plan, doc).
-- You are about to output a self-contained markdown document (anything with headings, multiple paragraphs, or anything the user would plausibly copy or save).
-
-Inline markdown is reserved for:
-
-- Short conversational replies (a sentence or two).
-- Single code-block snippets where the surrounding prose is minimal.
-- Direct lookup answers (*"how do I check disk usage on Linux?"*).
-
-If you are uncertain whether a response is "substantive enough", render the widget. Drafts that live only inline are hard for the user to keep iterating on; the widget gives them an editable surface and a one-click handoff to Prose desktop.
-
-**Exception — real files in Prose**: when the user has a markdown file open in Prose and is asking you to work on *that document*, use the MCP workflow (`read_document` → `suggest_edit`) instead. The widget is for *new* markdown content drafted in the conversation; the MCP path edits the user's existing files. Don't fork their open document into a separate widget.
-
-### How to render — single round trip
-
-The widget HTML is **inlined below** in the WIDGET HTML section. **Do not read `prose-editor.html` from the skill bundle separately. Do not list bundle files. Do not use bash.** The block below is the source of truth for what to pass to `visualize:show_widget`.
-
-To render, do exactly two things in one turn:
-
-1. Take the entire HTML block in the **WIDGET HTML** section verbatim.
-2. Replace the literal token `__INITIAL_MARKDOWN__` (it appears once, inside a `<textarea>`) with your draft markdown content. **HTML-escape the four characters `& < > "`** in your content before substitution — the placeholder sits inside textarea text, where these characters are special. Backticks, asterisks, brackets, slashes pass through untouched.
-3. Call `visualize:show_widget` with the substituted block as `widget_code`. (Per the global widget contract above, also pass `title` like `prose_editor`, and `loading_messages` like `["Opening the editor"]`. Make the silent `read_me` call once per conversation if you haven't already.)
-
-If your draft contains a literal `__INITIAL_MARKDOWN__` token (extremely rare), escape one underscore to `_\_INITIAL_MARKDOWN__` before substituting.
-
-In your conversational reply after the widget renders, briefly state in one sentence what the widget contains and that they can edit and click **Open in Prose** when ready.
-
-### WIDGET HTML
-
-```html
-<!-- WIDGET_HTML_BEGIN -->
-<!-- (build:skill inlines resources/prose-artifact/prose-editor.html here) -->
-<!-- WIDGET_HTML_END -->
-```
-
-### Open-in-Prose submission contract
-
-When the user clicks the widget's **Open in Prose** button, the widget calls `sendPrompt(text)` with this exact message shape:
-
-```
-Open this in Prose:
-
-```markdown
-<current widget content verbatim>
-```
-```
-
-The fence is the literal three-backtick `markdown` fence. The body is the editor textarea contents at the moment of click — possibly different from what you originally seeded, since the user may have edited.
-
-**On receipt** (i.e. when you see a user turn that begins with `Open this in Prose:` followed by a fenced markdown block):
-
-1. Extract the body of the fenced block as the draft content.
-2. Infer a filename:
-   - First H1 in the body → slugified to lowercase with hyphens, append `.md` (e.g. `# Why I switched to SQLite` → `why-i-switched-to-sqlite.md`).
-   - No H1 → use `draft.md`.
-3. Call `create_and_open_file({ filename: <inferred>, content: <body> })`.
-4. In your reply, confirm in one sentence: *"Opened `<filename>` in Prose."* Don't echo the markdown content back; the user already has it.
-
-If `create_and_open_file` fails (Prose not running and the stdio bridge can't auto-launch it; or the tool isn't exposed in the current session — MAS build, web mode, MCP not installed): respond conversationally, *"I couldn't reach Prose to open this. Copy the markdown from the editor and paste it into a new Prose document."* — and stop. Don't retry the tool.
-
-### What the widget provides
-
-- **Markdown textarea** — full-height editor seeded with your initial content, monospace font, with live word count.
-- **Copy markdown** — tries `navigator.clipboard` then falls back to a hidden-textarea `execCommand('copy')`.
-- **Open in Prose** — the primary handoff. Calls `sendPrompt` with the structured message above.
-
-The widget is intentionally minimal: vanilla JS, no external scripts, no live preview, no theme toggle. It is a focused drafting surface — the rendered view lives in Prose desktop, where the user lands after Open. Widgets are session-scoped (no `window.storage`), so the workflow is *draft → Open in Prose → keep editing in Prose where it persists.*

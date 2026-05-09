@@ -47,6 +47,23 @@
     background: #ffffff; color: #1a1a1a; min-height: 0;
   }
   .prose-text::placeholder { color: #71717a; }
+
+  @media (prefers-color-scheme: dark) {
+    .prose-app {
+      color: #fafafa; background: #18181b; border-color: #3f3f46;
+    }
+    .prose-bar { background: #27272a; border-bottom-color: #3f3f46; }
+    .prose-words { color: #a1a1aa; }
+    .prose-btn { color: #fafafa; }
+    .prose-btn:hover { background: #3f3f46; }
+    .prose-btn--secondary { background: #18181b; border-color: #3f3f46; }
+    .prose-btn--secondary:hover { background: #27272a; }
+    .prose-btn--primary { background: #fafafa; color: #18181b; border-color: #fafafa; }
+    .prose-btn--primary:hover { background: #e4e4e7; border-color: #e4e4e7; }
+    .prose-btn--ok { background: rgba(34,197,94,0.18); color: #bbf7d0; border-color: transparent; }
+    .prose-text { background: #18181b; color: #fafafa; }
+    .prose-text::placeholder { color: #a1a1aa; }
+  }
 </style>
 
 <div class="prose-app">
