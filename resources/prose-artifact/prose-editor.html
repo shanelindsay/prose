@@ -1,267 +1,126 @@
 <!-- Prose Editor Widget
-     Single-file vanilla widget rendered via visualize:show_widget.
-     No external scripts (claude.ai widget runtime treats those unevenly).
-     No DOCTYPE — the widget runtime injects this into the chat stream.
-
-     Initial content: text contents of <script id="prose-initial-markdown" type="text/plain">.
-     Handoff: "Save to Prose" calls the widget runtime's global sendPrompt(text)
-     to inject a structured turn into the chat. Claude parses it and calls the
-     create_and_open_file MCP tool. See SKILL.md for the message contract.
+     Vanilla widget rendered inline via visualize:show_widget.
+     Initial markdown is the literal __INITIAL_MARKDOWN__ placeholder
+     in the textarea below — Claude substitutes it before passing the
+     widget HTML to show_widget. See SKILL.md for the call contract.
+     "Open in Prose" calls sendPrompt() with a structured message;
+     Claude parses it and calls create_and_open_file MCP.
 -->
-<script id="prose-initial-markdown" type="text/plain"></script>
-
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
   .prose-app {
-    --surface: #ffffff;
-    --surface-alt: #f4f4f5;
-    --border: #e4e4e7;
-    --text: #1a1a1a;
-    --muted: #71717a;
-    --btn-bg: #18181b;
-    --btn-text: #fafafa;
-    --btn-hover: #27272a;
-    --btn-secondary-bg: #f4f4f5;
-    --btn-secondary-text: #18181b;
-    --btn-secondary-hover: #e4e4e7;
-    --copied-bg: #dcfce7;
-    --copied-text: #14532d;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-    font-size: 13px;
-    line-height: 1.55;
-    color: var(--text);
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-    height: 540px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px; line-height: 1.55; color: #1a1a1a;
+    background: #ffffff; border: 1px solid #e4e4e7;
+    border-radius: 8px; overflow: hidden;
+    display: flex; flex-direction: column; height: 540px;
   }
-  .prose-app[data-theme="dark"] {
-    --surface: #18181b;
-    --surface-alt: #27272a;
-    --border: #3f3f46;
-    --text: #fafafa;
-    --muted: #a1a1aa;
-    --btn-bg: #fafafa;
-    --btn-text: #18181b;
-    --btn-hover: #e4e4e7;
-    --btn-secondary-bg: #27272a;
-    --btn-secondary-text: #fafafa;
-    --btn-secondary-hover: #3f3f46;
-    --copied-bg: rgba(34, 197, 94, 0.18);
-    --copied-text: #bbf7d0;
+  .prose-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; border-bottom: 1px solid #e4e4e7;
+    background: #f4f4f5; flex-shrink: 0;
   }
-
-  .prose-toolbar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface-alt);
-    flex-shrink: 0;
-  }
-  .prose-brand { font-weight: 600; font-size: 13px; }
-  .prose-toolbar__spacer { flex: 1; }
-  .prose-words { font-size: 11px; color: var(--muted); }
-
+  .prose-brand { font-weight: 600; }
+  .prose-spacer { flex: 1; }
+  .prose-words { font-size: 11px; color: #71717a; }
   .prose-btn {
-    appearance: none;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    padding: 5px 10px;
-    font: inherit;
-    font-size: 12px;
-    cursor: pointer;
-    background: transparent;
-    color: var(--text);
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
+    appearance: none; border: 1px solid transparent; border-radius: 6px;
+    padding: 5px 10px; font: inherit; font-size: 12px; cursor: pointer;
+    background: transparent; color: #1a1a1a;
   }
-  .prose-btn:hover { background: var(--surface-alt); }
-  .prose-btn--primary { background: var(--btn-bg); color: var(--btn-text); border-color: var(--btn-bg); }
-  .prose-btn--primary:hover { background: var(--btn-hover); border-color: var(--btn-hover); }
-  .prose-btn--secondary { background: var(--btn-secondary-bg); color: var(--btn-secondary-text); border-color: var(--border); }
-  .prose-btn--secondary:hover { background: var(--btn-secondary-hover); }
-  .prose-btn--copied { background: var(--copied-bg); color: var(--copied-text); border-color: var(--copied-bg); }
-
-  .prose-textarea {
-    appearance: none;
-    border: 0;
-    outline: 0;
-    width: 100%;
-    flex: 1;
-    resize: none;
-    padding: 14px 16px;
-    font: inherit;
-    background: var(--surface);
-    color: var(--text);
-    line-height: 1.6;
-    min-height: 0;
+  .prose-btn:hover { background: #e4e4e7; }
+  .prose-btn--secondary {
+    background: #ffffff; border-color: #e4e4e7;
   }
-  .prose-textarea::placeholder { color: var(--muted); }
+  .prose-btn--secondary:hover { background: #f4f4f5; }
+  .prose-btn--primary {
+    background: #18181b; color: #fafafa; border-color: #18181b;
+  }
+  .prose-btn--primary:hover { background: #27272a; border-color: #27272a; }
+  .prose-btn--ok {
+    background: #dcfce7; color: #14532d; border-color: #dcfce7;
+  }
+  .prose-text {
+    appearance: none; border: 0; outline: 0;
+    width: 100%; flex: 1; resize: none;
+    padding: 14px 16px; font: inherit; line-height: 1.6;
+    background: #ffffff; color: #1a1a1a; min-height: 0;
+  }
+  .prose-text::placeholder { color: #71717a; }
 </style>
 
-<div id="prose-root"></div>
+<div class="prose-app">
+  <div class="prose-bar">
+    <span class="prose-brand">Prose</span>
+    <div class="prose-spacer"></div>
+    <span class="prose-words" id="prose-words">0 words</span>
+    <button class="prose-btn prose-btn--secondary" id="prose-copy" title="Copy raw markdown">Copy markdown</button>
+    <button class="prose-btn prose-btn--primary" id="prose-open" title="Open this draft in Prose desktop">Open in Prose</button>
+  </div>
+  <textarea class="prose-text" id="prose-text" placeholder="Start writing in Markdown...">__INITIAL_MARKDOWN__</textarea>
+</div>
 
 <script>
 (function() {
-  var root = document.getElementById('prose-root');
-  var seedEl = document.getElementById('prose-initial-markdown');
-  var initial = seedEl ? seedEl.textContent : '';
+  var ta = document.getElementById('prose-text');
+  var w = document.getElementById('prose-words');
+  var copyBtn = document.getElementById('prose-copy');
+  var openBtn = document.getElementById('prose-open');
 
-  // Theme detection — system preference, with no persistence (widgets are session-scoped).
-  var theme = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
-    ? 'dark' : 'light';
-
-  // Build DOM
-  var app = document.createElement('div');
-  app.className = 'prose-app';
-  app.setAttribute('data-theme', theme);
-
-  var toolbar = document.createElement('div');
-  toolbar.className = 'prose-toolbar';
-
-  var brand = document.createElement('span');
-  brand.className = 'prose-brand';
-  brand.textContent = 'Prose';
-  toolbar.appendChild(brand);
-
-  var spacer = document.createElement('div');
-  spacer.className = 'prose-toolbar__spacer';
-  toolbar.appendChild(spacer);
-
-  var words = document.createElement('span');
-  words.className = 'prose-words';
-  toolbar.appendChild(words);
-
-  var downloadBtn = document.createElement('button');
-  downloadBtn.className = 'prose-btn';
-  downloadBtn.textContent = 'Download';
-  downloadBtn.title = 'Download as .md file';
-  toolbar.appendChild(downloadBtn);
-
-  var copyBtn = document.createElement('button');
-  copyBtn.className = 'prose-btn prose-btn--secondary';
-  copyBtn.textContent = 'Copy markdown';
-  copyBtn.title = 'Copy raw markdown to clipboard';
-  toolbar.appendChild(copyBtn);
-
-  var saveBtn = document.createElement('button');
-  saveBtn.className = 'prose-btn prose-btn--primary';
-  saveBtn.textContent = 'Save to Prose';
-  saveBtn.title = 'Send this draft to Prose desktop';
-  toolbar.appendChild(saveBtn);
-
-  var themeBtn = document.createElement('button');
-  themeBtn.className = 'prose-btn';
-  themeBtn.textContent = theme === 'dark' ? 'Light' : 'Dark';
-  themeBtn.title = 'Toggle theme';
-  toolbar.appendChild(themeBtn);
-
-  var textarea = document.createElement('textarea');
-  textarea.className = 'prose-textarea';
-  textarea.placeholder = 'Start writing in Markdown...';
-  textarea.value = initial;
-  textarea.spellcheck = true;
-
-  app.appendChild(toolbar);
-  app.appendChild(textarea);
-  root.appendChild(app);
-
-  // ── Helpers ──────────────────────────────────────────────
   function updateWords() {
-    var n = textarea.value.trim() ? textarea.value.trim().split(/\s+/).length : 0;
-    words.textContent = n === 1 ? '1 word' : n + ' words';
+    var n = ta.value.trim() ? ta.value.trim().split(/\s+/).length : 0;
+    w.textContent = n === 1 ? '1 word' : n + ' words';
   }
   updateWords();
-  textarea.addEventListener('input', updateWords);
+  ta.addEventListener('input', updateWords);
 
-  function flash(btn, label, cls, ms) {
+  function flash(btn, label, ms) {
     var prevText = btn.textContent;
     var prevCls = btn.className;
     btn.textContent = label;
-    btn.className = prevCls + ' ' + cls;
+    btn.className = prevCls + ' prose-btn--ok';
     setTimeout(function() {
       btn.textContent = prevText;
       btn.className = prevCls;
     }, ms || 2000);
   }
 
-  // ── Theme ────────────────────────────────────────────────
-  themeBtn.addEventListener('click', function() {
-    theme = theme === 'dark' ? 'light' : 'dark';
-    app.setAttribute('data-theme', theme);
-    themeBtn.textContent = theme === 'dark' ? 'Light' : 'Dark';
-  });
-
-  // ── Copy ─────────────────────────────────────────────────
   copyBtn.addEventListener('click', function() {
-    var text = textarea.value;
+    var text = ta.value;
     function fallback() {
       try {
-        var ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.position = 'fixed'; ta.style.opacity = '0';
-        ta.setAttribute('readonly', '');
-        document.body.appendChild(ta);
-        ta.select();
-        ta.setSelectionRange(0, text.length);
+        var t = document.createElement('textarea');
+        t.value = text; t.style.position = 'fixed'; t.style.opacity = '0';
+        t.setAttribute('readonly', '');
+        document.body.appendChild(t);
+        t.select(); t.setSelectionRange(0, text.length);
         var ok = document.execCommand('copy');
-        document.body.removeChild(ta);
+        document.body.removeChild(t);
         return ok;
       } catch (_) { return false; }
     }
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(function() {
-        flash(copyBtn, 'Copied', 'prose-btn--copied');
-      }, function() {
-        if (fallback()) flash(copyBtn, 'Copied', 'prose-btn--copied');
-        else flash(copyBtn, 'Failed', '');
-      });
-    } else if (fallback()) {
-      flash(copyBtn, 'Copied', 'prose-btn--copied');
+      navigator.clipboard.writeText(text).then(
+        function() { flash(copyBtn, 'Copied'); },
+        function() { flash(copyBtn, fallback() ? 'Copied' : 'Failed'); }
+      );
     } else {
-      flash(copyBtn, 'Failed', '');
+      flash(copyBtn, fallback() ? 'Copied' : 'Failed');
     }
   });
 
-  // ── Download ─────────────────────────────────────────────
-  downloadBtn.addEventListener('click', function() {
-    var url;
-    try {
-      var blob = new Blob([textarea.value], { type: 'text/markdown' });
-      url = URL.createObjectURL(blob);
-      var a = document.createElement('a');
-      a.href = url; a.download = 'document.md';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(function() { URL.revokeObjectURL(url); }, 150);
-    } catch (err) {
-      console.warn('[prose-widget] download failed, opening blob in new tab:', err);
-      try { if (url) window.open(url, '_blank'); } catch (_) {}
-    }
-  });
-
-  // ── Save to Prose (the handoff) ──────────────────────────
-  saveBtn.addEventListener('click', function() {
+  openBtn.addEventListener('click', function() {
     if (typeof sendPrompt !== 'function') {
-      console.warn('[prose-widget] sendPrompt not available — widget runtime missing handoff API');
-      flash(saveBtn, 'Failed', '');
+      console.warn('[prose-widget] sendPrompt not available');
+      flash(openBtn, 'Failed');
       return;
     }
     try {
-      var msg = 'Save this draft to Prose:\n\n```markdown\n' + textarea.value + '\n```';
-      sendPrompt(msg);
-      flash(saveBtn, 'Sent', 'prose-btn--copied', 2500);
+      sendPrompt('Open this in Prose:\n\n```markdown\n' + ta.value + '\n```');
+      flash(openBtn, 'Sent', 2500);
     } catch (err) {
       console.warn('[prose-widget] sendPrompt threw:', err);
-      flash(saveBtn, 'Failed', '');
+      flash(openBtn, 'Failed');
     }
   });
 })();
