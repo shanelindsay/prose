@@ -85,14 +85,6 @@ If MCP isn't usable, surface why and offer an alternative.
 
 `get_outline` and `read_document` are read-only. `create_and_open_file` and `open_file` switch the active document and dismiss any pending `suggest_edit` overlay — render diffs LAST in multi-tool flows. The MCP exposes only these 5 tools; there's no "get current file path".
 
-## Editing nodes
-
-`suggest_edit` is node-targeted. Workflow: `read_document` → pick the nodes → call `suggest_edit` for each one (with both `nodeId` and `search`). **Fire all your edits in a single response** — each call adds an independent suggestion mark to the document, and the user reviews the whole batch in Prose's review UI. Don't synchronously wait for the user to accept/reject between calls; just queue them and return.
-
-**After each `suggest_edit` call, render a diff widget** (template in *Diff widget* below). This is a hard rule, not optional — even for a batch, render one diff widget per edit so the user can see what's being proposed in the chat alongside Prose's review overlay. The Prose review UI is the accept/reject surface; the chat-side diff widgets are the *visibility* surface. Both are needed.
-
-Prefer minimal diffs (smallest containing node). For heading edits, verify the heading text verbatim against `get_outline` first. If `suggest_edit` returns "no match", re-read the document and retry with a fresh `nodeId`.
-
 ## Outline + diff widgets (for MCP work)
 
 Both render via `visualize:show_widget` — same `read_me` prerequisite, same `title` / `loading_messages` parameters. The widget IS the response shape; don't fall back to plain Markdown unless `show_widget` is genuinely unavailable.
@@ -193,6 +185,14 @@ Substitute `{{OLD_TEXT}}`, `{{NEW_TEXT}}`, `{{COMMENT_BLOCK}}`:
 with `{{COMMENT}}` HTML-escaped.
 
 After rendering the diff, briefly state what the change does (one sentence). Then wait for the user.
+
+## Editing nodes (suggest_edit workflow)
+
+`suggest_edit` is node-targeted. Workflow: `read_document` → pick the nodes → call `suggest_edit` for each one (with both `nodeId` and `search`). **Fire all your edits in a single response** — each call adds an independent suggestion mark to the document, and the user reviews the whole batch in Prose's review UI. Don't synchronously wait for the user to accept/reject between calls; just queue them and return.
+
+**Render a diff widget after EVERY `suggest_edit` call.** This is a hard rule, not optional — even for batches of 5+ edits. Use the *Diff widget* template above. The Prose review UI is the accept/reject surface; the chat-side diff widgets are the *visibility* surface — without them the user has no chat-context for what was proposed. If you find yourself about to write *"N edits queued — review in Prose"* without diff widgets above it, stop and render the widgets first. If the diff widget template isn't in your context, fetch the rest of this skill before continuing — do not call `suggest_edit` until you can render its diff.
+
+Prefer minimal diffs (smallest containing node). For heading edits, verify the heading text verbatim against `get_outline` first. If `suggest_edit` returns "no match", re-read the document and retry with a fresh `nodeId`.
 
 ## Graceful degradation
 
