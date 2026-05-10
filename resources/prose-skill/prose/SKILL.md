@@ -87,7 +87,9 @@ If MCP isn't usable, surface why and offer an alternative.
 
 ## Editing nodes
 
-`suggest_edit` is node-targeted. Workflow: `read_document` → pick the node → `suggest_edit` with both `nodeId` and `search`. **One call per turn** — Prose handles one suggestion at a time. Don't loop waiting for accept/reject; just return.
+`suggest_edit` is node-targeted. Workflow: `read_document` → pick the nodes → call `suggest_edit` for each one (with both `nodeId` and `search`). **Fire all your edits in a single response** — each call adds an independent suggestion mark to the document, and the user reviews the whole batch in Prose's review UI. Don't synchronously wait for the user to accept/reject between calls; just queue them and return.
+
+For batches of more than one or two edits, render a single summary diff widget at the end (or skip the diff widget entirely and say *"I queued N edits — review them in Prose"*) — N inline diff widgets clutter the chat without adding signal the Prose review UI doesn't already give the user.
 
 Prefer minimal diffs (smallest containing node). For heading edits, verify the heading text verbatim against `get_outline` first. If `suggest_edit` returns "no match", re-read the document and retry with a fresh `nodeId`.
 
