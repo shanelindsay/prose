@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from 'react'
+import { downloadSkillWithAlert } from '../../lib/skillDownload'
 import { useEditor } from '../../hooks/useEditor'
 import { useTabs } from '../../hooks/useTabs'
 import { useEditorStore } from '../../stores/editorStore'
@@ -510,17 +511,7 @@ export function Toolbar() {
                 Settings
               </DropdownMenuItem>
               {!window.api?.isMasBuild && (
-                <DropdownMenuItem onClick={() => {
-                  window.api?.downloadSkill?.()
-                    .then((result) => {
-                      if (!result?.success) {
-                        alert(`Failed to download Claude Skill: ${result?.error ?? 'Unknown error'}`)
-                      }
-                    })
-                    .catch((err) => {
-                      alert(`Failed to download Claude Skill: ${err instanceof Error ? err.message : 'Unknown error'}`)
-                    })
-                }}>
+                <DropdownMenuItem onClick={() => downloadSkillWithAlert()}>
                   <Sparkles className="mr-2 h-4 w-4" />
                   Download Claude Skill
                 </DropdownMenuItem>

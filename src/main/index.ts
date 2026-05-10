@@ -78,8 +78,10 @@ if (is.dev) {
 
 // Track file path to open (from command line or open-file event)
 let fileToOpen: string | null = null
-// Track prose:// URL content to open once renderer is ready
-let pendingUrlContent: string | null = null
+// Queue of prose:// URL contents to open once renderer is ready. A queue
+// (not a single slot) so concurrent open-url events don't overwrite each
+// other before renderer:ready fires. Mirrors pendingFileOpens.
+const pendingUrlContent: string[] = []
 // Track if renderer has signaled ready
 let rendererReady = false
 // Queue of file paths to open once renderer is ready
@@ -104,6 +106,7 @@ if (!gotTheLock) {
 
     // Check for prose:// URL (Windows/Linux pass it as a command-line argument)
     const args = commandLine.slice(is.dev ? 2 : 1)
+    let handledProseUrl = false
     for (const arg of args) {
       if (arg.startsWith('prose://')) {
         const content = parseProseUrl(arg)
@@ -111,12 +114,16 @@ if (!gotTheLock) {
           if (mainWindow && rendererReady) {
             mainWindow.webContents.send('prose:openFromUrl', content)
           } else {
-            pendingUrlContent = content
+            pendingUrlContent.push(content)
           }
+          handledProseUrl = true
         }
-        return
+        // If parseProseUrl returned null (rejected URL), fall through to the
+        // file-path loop below — a malformed prose:// URL shouldn't drop a
+        // valid trailing .md arg.
       }
     }
+    if (handledProseUrl) return
 
     // Check for file path
     for (const arg of args) {
@@ -194,7 +201,7 @@ app.on('open-url', (event, url) => {
     mainWindow.focus()
     mainWindow.webContents.send('prose:openFromUrl', content)
   } else {
-    pendingUrlContent = content
+    pendingUrlContent.push(content)
     // If no window exists (macOS app running with all windows closed), create one.
     // The new window's renderer:ready handshake will drain pendingUrlContent.
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -445,8 +452,9 @@ app.whenReady().then(async () => {
   }
 
   // Check for prose:// URL from command line (Windows/Linux first-launch)
-  if (!pendingUrlContent) {
-    pendingUrlContent = getProseUrlFromArgs()
+  const argUrlContent = getProseUrlFromArgs()
+  if (argUrlContent !== null) {
+    pendingUrlContent.push(argUrlContent)
   }
 
   const mainWindow = createWindow()
@@ -493,10 +501,13 @@ app.whenReady().then(async () => {
     rendererReady = true
     console.log('[Main] Renderer signaled ready')
 
-    // Send any pending prose:// URL content
-    if (pendingUrlContent) {
-      mainWindow.webContents.send('prose:openFromUrl', pendingUrlContent)
-      pendingUrlContent = null
+    // Send any pending prose:// URL contents (queued up if multiple URLs
+    // arrived before the renderer signaled ready)
+    if (pendingUrlContent.length > 0) {
+      for (const content of pendingUrlContent) {
+        mainWindow.webContents.send('prose:openFromUrl', content)
+      }
+      pendingUrlContent.length = 0
     }
 
     // Send any pending file opens

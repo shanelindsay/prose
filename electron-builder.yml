@@ -23,6 +23,7 @@ extraResources:
     filter:
       - "!PrivacyInfo.xcprivacy"
       - "!prose-skill/"
+      - "!prose-artifact/"
   - from: resources/PrivacyInfo.xcprivacy
     to: PrivacyInfo.xcprivacy
 

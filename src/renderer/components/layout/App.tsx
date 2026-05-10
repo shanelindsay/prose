@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useGoogleDocsEnabled, isGoogleDocsEnabled } from '../../lib/featureFlags'
+import { downloadSkillWithAlert } from '../../lib/skillDownload'
 import { Toolbar } from './Toolbar'
 import { UpdateBanner } from './UpdateBanner'
 import { StatusBar } from './StatusBar'
@@ -823,17 +824,7 @@ export function App() {
           }))
           break
         case 'downloadSkill':
-          if (window.api?.downloadSkill) {
-            window.api.downloadSkill()
-              .then((result) => {
-                if (!result?.success) {
-                  alert(`Failed to download Claude Skill: ${result?.error ?? 'Unknown error'}`)
-                }
-              })
-              .catch((err) => {
-                alert(`Failed to download Claude Skill: ${err instanceof Error ? err.message : 'Unknown error'}`)
-              })
-          }
+          downloadSkillWithAlert()
           break
         default:
           // Handle openRecentFile:${path} actions
