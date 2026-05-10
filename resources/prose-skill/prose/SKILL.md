@@ -124,73 +124,53 @@ Per-heading item — `INDENT` = `(level - 1) * 16`, `TEXT` = HTML-escape:
 <div class="prose-outline__item" style="padding-left: {{INDENT}}px;">{{TEXT}}</div>
 ```
 
-### Diff widget
+### Diff widget (batch summary)
 
-After `suggest_edit` returns success. Render every time, not just for "interesting" edits.
+**One widget per `suggest_edit` batch — not one per edit.** Whether you queued 1 edit or 12, render exactly one of these widgets at the end of the batch, with one row per edit. The Prose review overlay is the detailed accept/reject surface; this widget is the chat-side summary so the user can see at a glance what was proposed.
 
-Compute an inline word-level diff between the original node text and your new `content`. Both texts appear in full, side-by-side, with only the differing word runs highlighted in place. Word-level granularity (a contiguous run of word characters or punctuation) — for `integraton` → `integration`, mark the whole word, not just the missing letter. Whole-paragraph rewrites where every word changed can mark the entire text as one span.
-
-Substitute `{{OLD_TEXT}}`, `{{NEW_TEXT}}`, `{{COMMENT_BLOCK}}`:
+Substitute `{{COUNT}}` with the number of edits and `{{ROWS}}` with one row per edit:
 
 ```html
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap');
-  .prose-diff {
-    --bg: #ffffff; --text: #1a1a1a; --border: #e4e4e7; --muted: #71717a; --surface: #f4f4f5;
-    --removed-bg: #fecaca; --removed-fg: #7f1d1d;
-    --added-bg: #bbf7d0; --added-fg: #14532d;
-    font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 13px; line-height: 1.55; color: var(--text); max-width: 820px;
+  .prose-edits {
+    color: var(--color-text-primary, #1a1a1a);
+    background: var(--color-background-primary, #ffffff);
+    border: 1px solid var(--color-border-secondary, #e4e4e7);
+    border-radius: var(--border-radius-md, 8px);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px; line-height: 1.5; padding: 12px 14px; max-width: 820px;
   }
-  @media (prefers-color-scheme: dark) {
-    .prose-diff {
-      --bg: #18181b; --text: #fafafa; --border: #3f3f46; --muted: #a1a1aa;
-      --surface: rgba(255, 255, 255, 0.04);
-      --removed-bg: rgba(239, 68, 68, 0.30); --removed-fg: #fecaca;
-      --added-bg: rgba(34, 197, 94, 0.30); --added-fg: #bbf7d0;
-    }
-  }
-  .prose-diff__columns { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
-  .prose-diff__col { display: flex; flex-direction: column; min-width: 0; }
-  .prose-diff__label { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
-  .prose-diff__block { border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; background: var(--bg); flex: 1; }
-  .prose-diff__text { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 13px; color: var(--text); }
-  .prose-diff__removed { background: var(--removed-bg); color: var(--removed-fg); text-decoration: line-through; text-decoration-thickness: 1px; padding: 0 2px; border-radius: 3px; }
-  .prose-diff__added { background: var(--added-bg); color: var(--added-fg); padding: 0 2px; border-radius: 3px; }
-  .prose-diff__comment { margin-bottom: 16px; padding: 10px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; color: var(--text); }
-  .prose-diff__footer { font-size: 12px; color: var(--muted); }
+  .prose-edits__hd { font-weight: 600; margin-bottom: 6px; font-size: 13px; }
+  .prose-edits__row { padding: 6px 0; border-top: 1px solid var(--color-border-secondary, #e4e4e7); display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+  .prose-edits__row:first-of-type { border-top: 0; }
+  .prose-edits__n { color: var(--color-text-tertiary, #71717a); min-width: 1.5em; }
+  .prose-edits__from { background: rgba(239,68,68,0.16); color: var(--color-text-primary, #7f1d1d); padding: 0 4px; border-radius: 3px; text-decoration: line-through; text-decoration-thickness: 1px; }
+  .prose-edits__arrow { color: var(--color-text-tertiary, #71717a); }
+  .prose-edits__to { background: rgba(34,197,94,0.16); color: var(--color-text-primary, #14532d); padding: 0 4px; border-radius: 3px; }
+  .prose-edits__ft { color: var(--color-text-tertiary, #71717a); margin-top: 8px; font-size: 11px; }
 </style>
-<div class="prose-diff">
-  <div class="prose-diff__columns">
-    <div class="prose-diff__col">
-      <div class="prose-diff__label">Original</div>
-      <div class="prose-diff__block"><pre class="prose-diff__text">{{OLD_TEXT}}</pre></div>
-    </div>
-    <div class="prose-diff__col">
-      <div class="prose-diff__label">Suggested</div>
-      <div class="prose-diff__block"><pre class="prose-diff__text">{{NEW_TEXT}}</pre></div>
-    </div>
-  </div>
-  {{COMMENT_BLOCK}}
-  <div class="prose-diff__footer">Accept or reject in Prose's diff overlay.</div>
+<div class="prose-edits">
+  <div class="prose-edits__hd">{{COUNT}} edits proposed</div>
+  {{ROWS}}
+  <div class="prose-edits__ft">Accept or reject each in Prose's diff overlay.</div>
 </div>
 ```
 
-`{{OLD_TEXT}}` — full original text HTML-escaped, then wrap each removed run in `<span class="prose-diff__removed">…</span>`. Unchanged text stays unmarked. `{{NEW_TEXT}}` — same idea with `prose-diff__added`. Unchanged text in OLD_TEXT and NEW_TEXT must match exactly.
+Per-row template — `{{N}}` is the edit number (1, 2, 3...), `{{FROM}}` and `{{TO}}` are the original and suggested text snippets, both HTML-escaped:
 
-`{{COMMENT_BLOCK}}` — empty when no `comment`. When present:
 ```html
-<div class="prose-diff__comment">{{COMMENT}}</div>
+<div class="prose-edits__row"><span class="prose-edits__n">{{N}}.</span><span class="prose-edits__from">{{FROM}}</span><span class="prose-edits__arrow">→</span><span class="prose-edits__to">{{TO}}</span></div>
 ```
-with `{{COMMENT}}` HTML-escaped.
 
-After rendering the diff, briefly state what the change does (one sentence). Then wait for the user.
+Snippet sizing: short edits (a phrase, a heading, a few words) — show the full original and suggested text. Long edits (a paragraph rewrite) — show a leading excerpt of each side, ~40–60 characters, ending with `…` if truncated. The user gets the full diff in Prose; this widget exists for *recognizability*, not full reading.
+
+After the widget, one short conversational line is enough — *"Review them in Prose's diff overlay."* Don't restate the edits in prose; the widget already lists them.
 
 ## Editing nodes (suggest_edit workflow)
 
 `suggest_edit` is node-targeted. Workflow: `read_document` → pick the nodes → call `suggest_edit` for each one (with both `nodeId` and `search`). **Fire all your edits in a single response** — each call adds an independent suggestion mark to the document, and the user reviews the whole batch in Prose's review UI. Don't synchronously wait for the user to accept/reject between calls; just queue them and return.
 
-**Render a diff widget after EVERY `suggest_edit` call.** This is a hard rule, not optional — even for batches of 5+ edits. Use the *Diff widget* template above. The Prose review UI is the accept/reject surface; the chat-side diff widgets are the *visibility* surface — without them the user has no chat-context for what was proposed. If you find yourself about to write *"N edits queued — review in Prose"* without diff widgets above it, stop and render the widgets first. If the diff widget template isn't in your context, fetch the rest of this skill before continuing — do not call `suggest_edit` until you can render its diff.
+**Render exactly one diff summary widget at the end of the batch.** Use the *Diff widget (batch summary)* template above — one widget regardless of edit count, with one row per `suggest_edit` call. This is a hard rule: never close out a batch without the summary widget; the user has no chat-side visibility into what you proposed otherwise. The Prose review overlay is the detailed accept/reject surface; the widget is the recognizability surface. Both matter.
 
 Prefer minimal diffs (smallest containing node). For heading edits, verify the heading text verbatim against `get_outline` first. If `suggest_edit` returns "no match", re-read the document and retry with a fresh `nodeId`.
 
