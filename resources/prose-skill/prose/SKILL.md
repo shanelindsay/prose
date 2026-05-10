@@ -128,6 +128,8 @@ Per-heading item — `INDENT` = `(level - 1) * 16`, `TEXT` = HTML-escape:
 
 **One widget per `suggest_edit` batch — not one per edit.** Whether you queued 1 edit or 12, render exactly one of these widgets at the end of the batch, with one row per edit. The Prose review overlay is the detailed accept/reject surface; this widget is the chat-side summary so the user can see at a glance what was proposed.
 
+Each row is a 3-column grid: edit number | original text | suggested text. **Show the full text on each side** — no truncation. The user wants to see what was proposed; truncation forces them to context-switch to Prose just to read.
+
 Substitute `{{COUNT}}` with the number of edits and `{{ROWS}}` with one row per edit:
 
 ```html
@@ -138,16 +140,23 @@ Substitute `{{COUNT}}` with the number of edits and `{{ROWS}}` with one row per 
     border: 1px solid var(--color-border-secondary, #e4e4e7);
     border-radius: var(--border-radius-md, 8px);
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 12px; line-height: 1.5; padding: 12px 14px; max-width: 820px;
+    font-size: 12px; line-height: 1.5; padding: 14px; max-width: 900px;
   }
-  .prose-edits__hd { font-weight: 600; margin-bottom: 6px; font-size: 13px; }
-  .prose-edits__row { padding: 6px 0; border-top: 1px solid var(--color-border-secondary, #e4e4e7); display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
-  .prose-edits__row:first-of-type { border-top: 0; }
-  .prose-edits__n { color: var(--color-text-tertiary, #71717a); min-width: 1.5em; }
-  .prose-edits__from { background: rgba(239,68,68,0.16); color: var(--color-text-primary, #7f1d1d); padding: 0 4px; border-radius: 3px; text-decoration: line-through; text-decoration-thickness: 1px; }
-  .prose-edits__arrow { color: var(--color-text-tertiary, #71717a); }
-  .prose-edits__to { background: rgba(34,197,94,0.16); color: var(--color-text-primary, #14532d); padding: 0 4px; border-radius: 3px; }
-  .prose-edits__ft { color: var(--color-text-tertiary, #71717a); margin-top: 8px; font-size: 11px; }
+  .prose-edits__hd { font-weight: 600; margin-bottom: 10px; font-size: 13px; }
+  .prose-edits__row {
+    display: grid; grid-template-columns: 1.5em 1fr 1fr; gap: 8px;
+    padding: 8px 0; border-top: 1px solid var(--color-border-secondary, #e4e4e7);
+    align-items: start;
+  }
+  .prose-edits__row:first-of-type { border-top: 0; padding-top: 0; }
+  .prose-edits__n { color: var(--color-text-tertiary, #71717a); font-size: 11px; padding-top: 4px; }
+  .prose-edits__from, .prose-edits__to {
+    padding: 6px 8px; border-radius: 4px;
+    overflow-wrap: break-word; min-width: 0;
+  }
+  .prose-edits__from { background: rgba(239,68,68,0.12); text-decoration: line-through; text-decoration-thickness: 1px; }
+  .prose-edits__to { background: rgba(34,197,94,0.12); }
+  .prose-edits__ft { color: var(--color-text-tertiary, #71717a); margin-top: 10px; font-size: 11px; }
 </style>
 <div class="prose-edits">
   <div class="prose-edits__hd">{{COUNT}} edits proposed</div>
@@ -156,13 +165,11 @@ Substitute `{{COUNT}}` with the number of edits and `{{ROWS}}` with one row per 
 </div>
 ```
 
-Per-row template — `{{N}}` is the edit number (1, 2, 3...), `{{FROM}}` and `{{TO}}` are the original and suggested text snippets, both HTML-escaped:
+Per-row template — `{{N}}` is the edit number (1, 2, 3...), `{{FROM}}` and `{{TO}}` are the full original and suggested text, both HTML-escaped:
 
 ```html
-<div class="prose-edits__row"><span class="prose-edits__n">{{N}}.</span><span class="prose-edits__from">{{FROM}}</span><span class="prose-edits__arrow">→</span><span class="prose-edits__to">{{TO}}</span></div>
+<div class="prose-edits__row"><span class="prose-edits__n">{{N}}.</span><span class="prose-edits__from">{{FROM}}</span><span class="prose-edits__to">{{TO}}</span></div>
 ```
-
-Snippet sizing: short edits (a phrase, a heading, a few words) — show the full original and suggested text. Long edits (a paragraph rewrite) — show a leading excerpt of each side, ~40–60 characters, ending with `…` if truncated. The user gets the full diff in Prose; this widget exists for *recognizability*, not full reading.
 
 After the widget, one short conversational line is enough — *"Review them in Prose's diff overlay."* Don't restate the edits in prose; the widget already lists them.
 
