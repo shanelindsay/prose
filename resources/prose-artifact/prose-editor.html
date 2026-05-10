@@ -1,0 +1,143 @@
+<!-- Prose Editor Widget
+     Vanilla widget rendered inline via visualize:show_widget.
+     Initial markdown is the literal __INITIAL_MARKDOWN__ placeholder
+     in the textarea below — Claude substitutes it before passing the
+     widget HTML to show_widget. See SKILL.md for the call contract.
+     "Open in Prose" calls sendPrompt() with a structured message;
+     Claude parses it and calls create_and_open_file MCP.
+-->
+<style>
+  /* Theming: use claude.ai widget-iframe CSS vars (same approach as the
+     triage widget pattern) so light/dark adapts to the host automatically.
+     Fallback values keep the widget readable if loaded outside that runtime. */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  .prose-app {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px; line-height: 1.55;
+    color: var(--color-text-primary, #1a1a1a);
+    background: var(--color-background-primary, #ffffff);
+    border: 1px solid var(--color-border-secondary, #e4e4e7);
+    border-radius: var(--border-radius-md, 8px); overflow: hidden;
+    display: flex; flex-direction: column; height: 540px;
+  }
+  .prose-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--color-border-secondary, #e4e4e7);
+    background: var(--color-background-secondary, #f4f4f5);
+    flex-shrink: 0;
+  }
+  .prose-brand { font-weight: 600; }
+  .prose-spacer { flex: 1; }
+  .prose-words { font-size: 11px; color: var(--color-text-tertiary, #71717a); }
+  .prose-btn {
+    appearance: none; border-radius: 6px;
+    padding: 5px 10px; font: inherit; font-size: 12px; cursor: pointer;
+    background: transparent; color: var(--color-text-primary, #1a1a1a);
+    border: 1px solid transparent;
+  }
+  .prose-btn:hover { background: var(--color-background-primary, #f4f4f5); }
+  .prose-btn--secondary {
+    background: var(--color-background-primary, #ffffff);
+    border-color: var(--color-border-secondary, #e4e4e7);
+  }
+  .prose-btn--secondary:hover { background: var(--color-background-secondary, #f4f4f5); }
+  /* Primary button inverts: text color becomes bg, bg becomes text. Auto-themes. */
+  .prose-btn--primary {
+    background: var(--color-text-primary, #18181b);
+    color: var(--color-background-primary, #fafafa);
+    border-color: var(--color-text-primary, #18181b);
+  }
+  .prose-btn--primary:hover { opacity: 0.85; }
+  .prose-btn--ok {
+    background: rgba(34, 197, 94, 0.18);
+    color: var(--color-text-primary, #14532d);
+    border-color: transparent;
+  }
+  .prose-text {
+    appearance: none; border: 0; outline: 0;
+    width: 100%; flex: 1; resize: none;
+    padding: 14px 16px; font: inherit; line-height: 1.6;
+    background: var(--color-background-primary, #ffffff);
+    color: var(--color-text-primary, #1a1a1a);
+    min-height: 0;
+  }
+  .prose-text::placeholder { color: var(--color-text-tertiary, #71717a); }
+</style>
+
+<div class="prose-app">
+  <div class="prose-bar">
+    <span class="prose-brand">Prose</span>
+    <div class="prose-spacer"></div>
+    <span class="prose-words" id="prose-words">0 words</span>
+    <button class="prose-btn prose-btn--secondary" id="prose-copy" title="Copy raw markdown">Copy markdown</button>
+    <button class="prose-btn prose-btn--primary" id="prose-open" title="Open this draft in Prose desktop">Open in Prose</button>
+  </div>
+  <textarea class="prose-text" id="prose-text" placeholder="Start writing in Markdown...">__INITIAL_MARKDOWN__</textarea>
+</div>
+
+<script>
+(function() {
+  var ta = document.getElementById('prose-text');
+  var w = document.getElementById('prose-words');
+  var copyBtn = document.getElementById('prose-copy');
+  var openBtn = document.getElementById('prose-open');
+
+  function updateWords() {
+    var n = ta.value.trim() ? ta.value.trim().split(/\s+/).length : 0;
+    w.textContent = n === 1 ? '1 word' : n + ' words';
+  }
+  updateWords();
+  ta.addEventListener('input', updateWords);
+
+  function flash(btn, label, ms) {
+    var prevText = btn.textContent;
+    var prevCls = btn.className;
+    btn.textContent = label;
+    btn.className = prevCls + ' prose-btn--ok';
+    setTimeout(function() {
+      btn.textContent = prevText;
+      btn.className = prevCls;
+    }, ms || 2000);
+  }
+
+  copyBtn.addEventListener('click', function() {
+    var text = ta.value;
+    function fallback() {
+      try {
+        var t = document.createElement('textarea');
+        t.value = text; t.style.position = 'fixed'; t.style.opacity = '0';
+        t.setAttribute('readonly', '');
+        document.body.appendChild(t);
+        t.select(); t.setSelectionRange(0, text.length);
+        var ok = document.execCommand('copy');
+        document.body.removeChild(t);
+        return ok;
+      } catch (_) { return false; }
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        function() { flash(copyBtn, 'Copied'); },
+        function() { flash(copyBtn, fallback() ? 'Copied' : 'Failed'); }
+      );
+    } else {
+      flash(copyBtn, fallback() ? 'Copied' : 'Failed');
+    }
+  });
+
+  openBtn.addEventListener('click', function() {
+    if (typeof sendPrompt !== 'function') {
+      console.warn('[prose-widget] sendPrompt not available');
+      flash(openBtn, 'Failed');
+      return;
+    }
+    try {
+      sendPrompt('Open this in Prose:\n\n```markdown\n' + ta.value + '\n```');
+      flash(openBtn, 'Sent', 2500);
+    } catch (err) {
+      console.warn('[prose-widget] sendPrompt threw:', err);
+      flash(openBtn, 'Failed');
+    }
+  });
+})();
+</script>

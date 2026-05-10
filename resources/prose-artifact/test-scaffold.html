@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<!--
+  Local development scaffold for prose-editor.html.
+
+  Wraps the artifact with a proper HTML document and provides:
+    - window.storage mock backed by localStorage (simulates artifact runtime)
+    - Viewport sizing to match Claude's artifact pane (~600px wide)
+
+  The component itself (prose-editor.html) never references localStorage directly.
+  All storage access goes through the storage abstraction which checks
+  window.storage first, then falls back to localStorage for local development.
+
+  Usage:
+    open resources/prose-artifact/test-scaffold.html
+    (or: python3 -m http.server 8080 from the prose-artifact/ directory)
+
+  What to verify:
+    1. Textarea seeded with __INITIAL_MARKDOWN__ token (the literal placeholder
+       string is the seed point — substitution happens at show_widget time in
+       claude.ai, not here). Word count updates as you type.
+    2. Theme adapts to system preference via the claude.ai --color-* CSS vars
+       (with light fallbacks declared in the widget). Toggle macOS dark mode
+       and reload to verify both palettes look intentional.
+    3. Copy markdown — paste into a text editor; raw markdown, not HTML.
+    4. Open in Prose — calls window.sendPrompt(...) which doesn't exist outside
+       the claude.ai widget runtime. Expected behavior in this scaffold: button
+       flips to "Failed" with a console.warn line. (In the real widget runtime,
+       sendPrompt injects a chat turn that Claude parses into a
+       create_and_open_file MCP call.)
+    5. No console errors during a 2-minute editing session (the sendPrompt warn
+       on Open-in-Prose click is expected; nothing else should fire).
+    6. Loads under 1 second (no external scripts; pure inline vanilla JS).
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Prose Artifact — Local Test</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; }
+    body {
+      /* Simulate Claude's artifact pane background */
+      background: #f9f9f9;
+      display: flex;
+      justify-content: center;
+      padding: 0;
+    }
+    .frame {
+      width: 100%;
+      max-width: 900px;
+      height: 100vh;
+      background: white;
+      border-left: 1px solid #e4e4e7;
+      border-right: 1px solid #e4e4e7;
+      overflow: hidden;
+    }
+    .frame iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+    }
+    .scaffold-note {
+      position: fixed;
+      bottom: 12px;
+      right: 12px;
+      font-family: monospace;
+      font-size: 11px;
+      color: #71717a;
+      background: white;
+      border: 1px solid #e4e4e7;
+      padding: 4px 8px;
+      border-radius: 4px;
+      z-index: 1000;
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <iframe src="prose-editor.html" id="artifact-frame"></iframe>
+  </div>
+  <div class="scaffold-note">Local test scaffold — not the artifact runtime</div>
+
+  <script>
+    // Inject window.storage mock into the iframe once it loads.
+    // The artifact's storage abstraction checks window.storage first,
+    // so this ensures the test matches the runtime behavior path.
+    const iframe = document.getElementById('artifact-frame');
+    iframe.addEventListener('load', function() {
+      try {
+        const win = iframe.contentWindow;
+        // Provide window.storage backed by localStorage
+        if (!win.storage) {
+          win.storage = {
+            getItem: function(key) {
+              return localStorage.getItem('scaffold:' + key);
+            },
+            setItem: function(key, value) {
+              localStorage.setItem('scaffold:' + key, value);
+            },
+            removeItem: function(key) {
+              localStorage.removeItem('scaffold:' + key);
+            }
+          };
+        }
+      } catch(e) {
+        // Cross-origin restriction in some environments — storage falls
+        // back to the in-frame localStorage naturally.
+        console.warn('[scaffold] Could not inject window.storage mock:', e.message);
+      }
+    });
+  </script>
+</body>
+</html>

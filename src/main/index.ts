@@ -78,6 +78,10 @@ if (is.dev) {
 
 // Track file path to open (from command line or open-file event)
 let fileToOpen: string | null = null
+// Queue of prose:// URL contents to open once renderer is ready. A queue
+// (not a single slot) so concurrent open-url events don't overwrite each
+// other before renderer:ready fires. Mirrors pendingFileOpens.
+const pendingUrlContent: string[] = []
 // Track if renderer has signaled ready
 let rendererReady = false
 // Queue of file paths to open once renderer is ready
@@ -93,21 +97,83 @@ if (!gotTheLock) {
 } else {
   // Handle second instance launch (another instance tried to start)
   app.on('second-instance', (event, commandLine, workingDirectory) => {
-    // Parse command line for file path
+    const mainWindow = BrowserWindow.getAllWindows()[0]
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+    }
+
+    // Check for prose:// URL (Windows/Linux pass it as a command-line argument)
     const args = commandLine.slice(is.dev ? 2 : 1)
+    let handledProseUrl = false
+    for (const arg of args) {
+      if (arg.startsWith('prose://')) {
+        const content = parseProseUrl(arg)
+        if (content !== null) {
+          if (mainWindow && rendererReady) {
+            mainWindow.webContents.send('prose:openFromUrl', content)
+          } else {
+            pendingUrlContent.push(content)
+          }
+          handledProseUrl = true
+        }
+        // If parseProseUrl returned null (rejected URL), fall through to the
+        // file-path loop below — a malformed prose:// URL shouldn't drop a
+        // valid trailing .md arg.
+      }
+    }
+    if (handledProseUrl) return
+
+    // Check for file path
     for (const arg of args) {
       if (arg.endsWith('.md') && !arg.startsWith('-')) {
-        // Focus main window and send file to renderer
-        const mainWindow = BrowserWindow.getAllWindows()[0]
         if (mainWindow) {
-          if (mainWindow.isMinimized()) mainWindow.restore()
-          mainWindow.focus()
           mainWindow.webContents.send('file:openExternal', arg)
         }
         break
       }
     }
   })
+}
+
+// Cap on prose://open?content payload — guards the renderer against an
+// oversized URL hanging or OOMing the editor. 5MB is generous for an
+// artifact-handoff draft.
+const MAX_URL_CONTENT_BYTES = 5 * 1024 * 1024
+
+/**
+ * Parse a prose://open?content=... URL and return the markdown content.
+ * Returns null if the URL is not a valid prose://open URL, content is missing,
+ * or content exceeds MAX_URL_CONTENT_BYTES.
+ *
+ * URLSearchParams.get() already URL-decodes the value; do not decode again.
+ */
+function parseProseUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    // WHATWG URL doesn't lowercase hostnames for non-special schemes — `prose://Open`
+    // parses as `hostname: 'Open'`. Compare case-insensitively so a user-typed CLI
+    // invocation (`open prose://Open?content=...`) isn't silently dropped.
+    if (parsed.protocol !== 'prose:' || parsed.hostname.toLowerCase() !== 'open') {
+      console.warn('[prose://] Rejected URL — protocol/hostname mismatch:',
+        JSON.stringify({ protocol: parsed.protocol, hostname: parsed.hostname }))
+      return null
+    }
+    const content = parsed.searchParams.get('content')
+    if (!content) {
+      console.warn('[prose://] Rejected URL — no content param')
+      return null
+    }
+    if (Buffer.byteLength(content, 'utf8') > MAX_URL_CONTENT_BYTES) {
+      console.warn('[prose://] Rejected oversized payload')
+      return null
+    }
+    return content
+  } catch (err) {
+    console.warn('[prose://] URL parse threw:', err)
+    return null
+  }
 }
 
 // Handle file open from macOS Finder (before app is ready)
@@ -125,6 +191,28 @@ app.on('open-file', (event, path) => {
   }
 })
 
+// Handle prose:// URL scheme on macOS (open-url fires before or after ready)
+app.on('open-url', (event, url) => {
+  event.preventDefault()
+  const content = parseProseUrl(url)
+  if (content === null) return
+
+  const mainWindow = BrowserWindow.getAllWindows()[0]
+  if (mainWindow && rendererReady) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+    mainWindow.webContents.send('prose:openFromUrl', content)
+  } else {
+    pendingUrlContent.push(content)
+    // If no window exists (macOS app running with all windows closed), create one.
+    // The new window's renderer:ready handshake will drain pendingUrlContent.
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow()
+    }
+  }
+})
+
 // Check command line args for file path (Windows/Linux)
 function getFileFromArgs(): string | null {
   // Skip electron executable and script path in dev, or just app path in prod
@@ -132,6 +220,23 @@ function getFileFromArgs(): string | null {
   for (const arg of args) {
     if (arg.endsWith('.md') && !arg.startsWith('-')) {
       return arg
+    }
+  }
+  return null
+}
+
+// Check command line args for a prose:// URL (Windows/Linux first-launch).
+// macOS uses the open-url event instead; the second-instance handler covers
+// the already-running case. Without this, the URL is silently dropped when
+// the OS launches Prose for the first time to handle the link.
+function getProseUrlFromArgs(): string | null {
+  const args = process.argv.slice(is.dev ? 2 : 1)
+  for (const arg of args) {
+    if (arg.startsWith('prose://')) {
+      const content = parseProseUrl(arg)
+      // Only return on a successful parse — a malformed first prose:// arg
+      // shouldn't shadow a valid one later in argv. Mirrors second-instance.
+      if (content !== null) return content
     }
   }
   return null
@@ -242,6 +347,18 @@ app.on('certificate-error', (event, _webContents, _url, _error, _certificate, ca
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('ist.solo.prose')
 
+  // Register as default handler for prose:// URL scheme.
+  // Skip in dev: this would register the dev Electron binary as the system
+  // handler, which clobbers the registration of any built Prose.app the user
+  // has installed. Built apps declare the scheme via electron-builder.yml's
+  // `protocols` block, which writes CFBundleURLTypes into Info.plist and is
+  // picked up by macOS LaunchServices on first launch.
+  if (!is.dev) {
+    app.setAsDefaultProtocolClient('prose')
+  } else {
+    console.log('[main] Skipping prose:// registration in dev mode')
+  }
+
   // Validate that early Sentry init path matches Electron's resolved path
   validatePathConsistency()
 
@@ -340,6 +457,12 @@ app.whenReady().then(async () => {
     fileToOpen = getFileFromArgs()
   }
 
+  // Check for prose:// URL from command line (Windows/Linux first-launch)
+  const argUrlContent = getProseUrlFromArgs()
+  if (argUrlContent !== null) {
+    pendingUrlContent.push(argUrlContent)
+  }
+
   const mainWindow = createWindow()
   setupIpcHandlers()
   createMenu(mainWindow)
@@ -383,6 +506,15 @@ app.whenReady().then(async () => {
   ipcMain.handle('renderer:ready', async () => {
     rendererReady = true
     console.log('[Main] Renderer signaled ready')
+
+    // Send any pending prose:// URL contents (queued up if multiple URLs
+    // arrived before the renderer signaled ready)
+    if (pendingUrlContent.length > 0) {
+      for (const content of pendingUrlContent) {
+        mainWindow.webContents.send('prose:openFromUrl', content)
+      }
+      pendingUrlContent.length = 0
+    }
 
     // Send any pending file opens
     // First, send the initial file (from command line or early open-file event)

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from 'react'
+import { downloadSkillWithAlert } from '../../lib/skillDownload'
 import { useEditor } from '../../hooks/useEditor'
 import { useTabs } from '../../hooks/useTabs'
 import { useEditorStore } from '../../stores/editorStore'
@@ -59,7 +60,8 @@ import {
   Eye,
   EyeOff,
   Code,
-  FileText
+  FileText,
+  Sparkles
 } from 'lucide-react'
 
 export function Toolbar() {
@@ -508,6 +510,12 @@ export function Toolbar() {
                 <Settings className="mr-2 h-4 w-4" />
                 Settings
               </DropdownMenuItem>
+              {!window.api?.isMasBuild && (
+                <DropdownMenuItem onClick={() => downloadSkillWithAlert()}>
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  Download Claude Skill
+                </DropdownMenuItem>
+              )}
               <DropdownMenuSeparator />
               {window.api?.isMasBuild ? (
                 <DropdownMenuItem onClick={() => window.open('https://solo.ist/prose/support', '_blank', 'noopener,noreferrer')}>
