@@ -152,7 +152,10 @@ const MAX_URL_CONTENT_BYTES = 5 * 1024 * 1024
 function parseProseUrl(url: string): string | null {
   try {
     const parsed = new URL(url)
-    if (parsed.protocol !== 'prose:' || parsed.hostname !== 'open') {
+    // WHATWG URL doesn't lowercase hostnames for non-special schemes — `prose://Open`
+    // parses as `hostname: 'Open'`. Compare case-insensitively so a user-typed CLI
+    // invocation (`open prose://Open?content=...`) isn't silently dropped.
+    if (parsed.protocol !== 'prose:' || parsed.hostname.toLowerCase() !== 'open') {
       console.warn('[prose://] Rejected URL — protocol/hostname mismatch:',
         JSON.stringify({ protocol: parsed.protocol, hostname: parsed.hostname }))
       return null
@@ -230,7 +233,10 @@ function getProseUrlFromArgs(): string | null {
   const args = process.argv.slice(is.dev ? 2 : 1)
   for (const arg of args) {
     if (arg.startsWith('prose://')) {
-      return parseProseUrl(arg)
+      const content = parseProseUrl(arg)
+      // Only return on a successful parse — a malformed first prose:// arg
+      // shouldn't shadow a valid one later in argv. Mirrors second-instance.
+      if (content !== null) return content
     }
   }
   return null

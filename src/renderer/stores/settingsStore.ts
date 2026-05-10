@@ -349,6 +349,11 @@ export const useSettingsStore = create<SettingsState>()(subscribeWithSelector((s
     get().saveSettings()
   },
 
+  // Sets the consent value only — does NOT close the AI consent dialog. The
+  // OSS two-step flow needs the dialog to stay open after consent so it can
+  // hand off to the skill-download step; the caller is responsible for
+  // closing via setAIConsentDialogOpen(false) at the appropriate moment.
+  // (The MAS branch closes via AlertDialogAction's built-in onOpenChange.)
   setAIConsent: (consented) => {
     set((state) => ({
       settings: {
