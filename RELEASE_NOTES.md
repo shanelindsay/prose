@@ -1,53 +1,53 @@
-# Prose v0.1.0-alpha.4 — Persistence & Polish
+# Prose v1.1.0
 
-Fixes AI feature persistence and improves editor reliability.
+Prose now goes wherever you write, edit, and take notes, from reMarkable notebook to inside Claude.
 
 ## What's New
 
-### Bug Fixes
-- **Persist AI suggestions across tab switches** — AI-generated suggestions now survive when you switch between tabs
-- **Persist AI annotations across tab switches** — Inline AI annotations remain visible after tab navigation
-- **Fixed chat panel disappearing** — Chat no longer disappears when generating content on blank documents
+### Prose in Claude
 
-### Improvements
-- **Clickable line references** — Line references in chat are now clickable with visual search highlighting
-- **Multi-node selection in comments** — Improved selection capture for the comment system
-- **Updated default model** — Now uses claude-sonnet-4-5 for better performance
-- **Dev server PID protocol** — Added safe process management for development
+- `prose://` **URL scheme** — open files in Prose from anywhere
+- **Prose markdown editor widget** — edit markdown directly in a Claude conversation; round-trip drafts between Claude and Prose without losing your place
+- Support for Outline and Suggested Edit diff review in Claude with widgets
+- **Prose Skill** — bundled Claude skill that turns Claude into a Prose-aware writing collaborator. Download from Help → Download Prose Skill, the toolbar, or Settings → Integrations.
+- **Two-step consent flow** — clear, no-AI-required onboarding for users
 
-## Requirements
+### reMarkable Sync GA
 
-- **macOS** (Apple Silicon) — Intel Mac support coming soon
-- **Anthropic API key** — Required for AI features ([get one here](https://console.anthropic.com/))
+- Sync your reMarkable notebooks from the Cloud via reMarkable Connect
+- Convert handwritten notes to markdown using open-source reMarkable conversion Lambda
+- **Page-level incremental OCR** — re-OCR only what changed
+- **Per-notebook sync indicators** in the file explorer
+- **Parallel page sync** with real-time progress
+- **Failure handling** — surface OCR failure state, auto-retry transient OCR failures on the next sync (30-min staleness window), manual "Retry Sync" + "Report OCR Issue" context menu
+- **Cancel in-progress sync** — bail out cleanly when a sync is taking too long
+- **"Move to…"** for synced notebooks, sharing the same folder picker as Manage Notebooks
+- **Sync folder moves to reMarkable Connect** — folder reorganizations now round-trip
+
+### Security
+
+- **CVE cleanup** — `hono` and `fast-uri` overrides clear 7 transitive CVEs
+- Sanitization, SRI hashes, and race fixes throughout the artifact editor
 
 ## Installation
 
-1. Download `Prose-0.1.0-alpha.4-arm64.dmg`
-2. Open the DMG and drag Prose to Applications
-3. **Important: Unsigned app workaround**
+### Direct Download
 
-   macOS will show a misleading "damaged" error for unsigned apps downloaded from the internet. The app is not actually damaged. To fix this, open Terminal and run:
+Download `Prose-1.1.0-arm64.dmg`, open, and drag to Applications. The app is signed and notarized — no security bypass needed.
 
-   ```bash
-   xattr -cr /Applications/Prose.app
-   ```
+### Auto-Update
 
-   Then open Prose normally. This is only required once after installation.
+Existing users will be prompted to update automatically.
 
-## Known Limitations
+### Mac App Store
 
-This is an early alpha release:
+A matching v1.1.0 build will follow on the Mac App Store.
 
-- macOS only (Windows/Linux builds coming)
-- Apple Silicon only (Intel support coming)
-- App is unsigned — requires manual security bypass
-- No auto-updates yet
+## Requirements
 
-## Feedback
-
-Found a bug or have a suggestion? Please open an issue:
-https://github.com/solo-ist/prose/issues
+- macOS (Apple Silicon)
+- Anthropic API key for AI features ([get one](https://console.anthropic.com/))
 
 ---
 
-Built with Electron, React, and TipTap.
+**Full changelog:** https://github.com/solo-ist/prose/compare/v1.0.1...v1.1.0
