@@ -43,6 +43,7 @@ import { FrontmatterEditor, serializeFrontmatter } from './FrontmatterEditor'
 import { serializeMarkdown, parseMarkdown } from '../../lib/markdown'
 import { TransformAnimation, useTransformAnimation } from './TransformAnimation'
 import { AISuggestionPopover } from '../AISuggestionPopover'
+import { CommentPopover } from '../CommentPopover'
 import { getAISuggestions } from '../../extensions/ai-suggestions/extension'
 import type { AISuggestionData } from '../../extensions/ai-suggestions/types'
 import { LinkPopover } from './LinkPopover'
@@ -96,6 +97,21 @@ export function Editor() {
     frontmatterRef.current = getFrontmatterRaw(document.content)
     return getContentWithoutFrontmatter(document.content)
   }, []) // Only run once on mount
+
+  // Stable frontmatter for the editor UI — only updates when documentId changes,
+  // never on body edits. This prevents FrontmatterEditor from re-initializing its
+  // field state during normal typing (fixes layout shift + data mutation on body click).
+  const [stableFrontmatter, setStableFrontmatter] = useState<Record<string, unknown>>(
+    () => document.frontmatter ?? {}
+  )
+  const stableFrontmatterDocIdRef = useRef<string>(document.documentId)
+
+  useEffect(() => {
+    if (stableFrontmatterDocIdRef.current !== document.documentId) {
+      stableFrontmatterDocIdRef.current = document.documentId
+      setStableFrontmatter(document.frontmatter ?? {})
+    }
+  }, [document.documentId, document.frontmatter])
 
   const editor = useTipTapEditor({
     extensions: [
@@ -214,7 +230,7 @@ export function Editor() {
     }
   })
 
-  // Helper to open comment dialog with current selection
+  // Helper to open comment dialog with current selection (add-new mode)
   const openAddCommentDialog = useCallback(() => {
     if (!editor) return
     const { from, to } = editor.state.selection
@@ -729,16 +745,17 @@ export function Editor() {
     return () => window.removeEventListener('search:show', handleSearchShow)
   }, [])
 
+
   // Show empty state when document is empty, untitled, and user hasn't started editing
   const showEmptyState = !isEditing && !document.path && !document.content && !document.isDirty
 
-  // Check if document has frontmatter to display
+  // Check if document has frontmatter to display — uses stableFrontmatter so the
+  // visibility decision doesn't flip during body edits
   const showFrontmatter = useMemo(() => {
-    // Check the parsed frontmatter object first (works for files loaded via parseMarkdown)
-    if (document.frontmatter && Object.keys(document.frontmatter).length > 0) return true
+    if (stableFrontmatter && Object.keys(stableFrontmatter).length > 0) return true
     // Fall back to checking raw content (for content that still has --- markers)
     return hasFrontmatter(document.content)
-  }, [document.content, document.frontmatter])
+  }, [document.content, stableFrontmatter])
 
   // Focus editor when transitioning from empty state to editing
   // (skip during preview tab navigation — editor is non-editable)
@@ -765,6 +782,7 @@ export function Editor() {
   const handleFrontmatterSave = useCallback((newFrontmatter: Record<string, unknown>) => {
     if (!editor) return
     setFrontmatter(newFrontmatter)
+    setStableFrontmatter(newFrontmatter)
     // Clear frontmatterRef so onUpdate doesn't re-prepend raw frontmatter.
     // The store's document.frontmatter is the source of truth now;
     // buildSaveContent/serializeMarkdown adds the --- block on save.
@@ -928,7 +946,7 @@ export function Editor() {
               {showFrontmatter && (
                 isRemarkableReadOnly || isPreviewTab
                   ? <FrontmatterDisplay content={document.content} frontmatter={document.frontmatter} />
-                  : <FrontmatterEditor key={document.path || 'new'} frontmatter={document.frontmatter ?? {}} onSave={handleFrontmatterSave} />
+                  : <FrontmatterEditor key={document.documentId} frontmatter={stableFrontmatter} onSave={handleFrontmatterSave} />
               )}
               <EditorContent
                 editor={editor}
@@ -955,6 +973,7 @@ export function Editor() {
         }}
       />
       {editor && <AISuggestionPopover editor={editor} />}
+      {editor && <CommentPopover editor={editor} />}
       {editor && (
         <LinkPopover
           editor={editor}

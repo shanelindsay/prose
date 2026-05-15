@@ -21,9 +21,9 @@ export function AddCommentDialog({ editor, isOpen, selection, onClose }: AddComm
   const [comment, setComment] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  // Focus textarea when dialog opens
   useEffect(() => {
     if (isOpen) {
+      setComment('')
       setTimeout(() => {
         textareaRef.current?.focus()
       }, 100)
@@ -32,17 +32,11 @@ export function AddCommentDialog({ editor, isOpen, selection, onClose }: AddComm
 
   const handleSubmit = () => {
     if (!editor || !comment.trim() || !selection) return
-
-    // Generate a unique ID for this comment
     const id = `comment-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-
-    // Set the selection and add the comment mark
     editor.chain()
       .setTextSelection({ from: selection.from, to: selection.to })
       .setComment({ id, comment: comment.trim() })
       .run()
-
-    // Reset and close
     setComment('')
     onClose()
   }
