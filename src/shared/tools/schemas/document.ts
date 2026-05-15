@@ -14,7 +14,7 @@ export const readDocumentSchema = z.object({}).describe('No parameters required'
 export const readDocumentConfig: ToolConfig<typeof readDocumentSchema> = {
   name: 'read_document',
   description:
-    'Get the document as structured nodes, each with a unique ID. Returns { nodes: [{ id, type, content }], markdown }. Node IDs are required for edit and suggest_edit calls.',
+    'Get the document as a structured node tree, each node with a unique ID. Returns { nodes: DocumentNode[], markdown }. DocumentNode shape: { id, type, content, children?: DocumentNode[] }. Container nodes (blockquote, bulletList, orderedList, listItem, taskItem) carry a children array with their nested nodes; their content is the concatenated text of all descendants. Leaf nodes (paragraph, heading, codeBlock) have no children. Node IDs are required for edit and suggest_edit calls — always target the most specific (innermost) node. Do NOT target a container when you mean to edit a specific child.',
   schema: readDocumentSchema,
   category: 'document',
   requiresMode: null, // Available in all modes
@@ -102,6 +102,72 @@ export const getOutlineConfig: ToolConfig<typeof getOutlineSchema> = {
 }
 
 // ============================================================================
+// list_comments
+// ============================================================================
+
+export const listCommentsSchema = z.object({}).describe('No parameters required')
+
+export const listCommentsConfig: ToolConfig<typeof listCommentsSchema> = {
+  name: 'list_comments',
+  description:
+    'List all comments in the active document. Returns { comments: [{ id, markedText, comment, createdAt, from, to }] }.',
+  schema: listCommentsSchema,
+  category: 'document',
+  requiresMode: null,
+  dangerous: false
+}
+
+// ============================================================================
+// add_comment
+// ============================================================================
+
+export const addCommentSchema = z.object({
+  nodeId: z
+    .string()
+    .optional()
+    .describe(
+      'ID of the node to attach the comment to. Get node IDs from read_document. Provide either nodeId or from/to, not both.'
+    ),
+  from: z
+    .number()
+    .optional()
+    .describe('Document position (from) for the comment range. Use when nodeId is unavailable.'),
+  to: z
+    .number()
+    .optional()
+    .describe('Document position (to) for the comment range. Use when nodeId is unavailable.'),
+  comment: z.string().describe('The comment text to attach to the selected content.')
+})
+
+export const addCommentConfig: ToolConfig<typeof addCommentSchema> = {
+  name: 'add_comment',
+  description:
+    'Add a comment to a node or range in the document. Provide nodeId (preferred, from read_document) or from/to positions. Returns { id } of the new comment.',
+  schema: addCommentSchema,
+  category: 'document',
+  requiresMode: null,
+  dangerous: false
+}
+
+// ============================================================================
+// resolve_comment
+// ============================================================================
+
+export const resolveCommentSchema = z.object({
+  id: z.string().describe('ID of the comment to resolve (remove). Get IDs from list_comments.')
+})
+
+export const resolveCommentConfig: ToolConfig<typeof resolveCommentSchema> = {
+  name: 'resolve_comment',
+  description:
+    'Resolve (remove) a comment by its ID. Use list_comments to see all comment IDs.',
+  schema: resolveCommentSchema,
+  category: 'document',
+  requiresMode: null,
+  dangerous: false
+}
+
+// ============================================================================
 // Export all document tools
 // ============================================================================
 
@@ -110,5 +176,8 @@ export const documentTools = [
   readSelectionConfig,
   getMetadataConfig,
   searchDocumentConfig,
-  getOutlineConfig
+  getOutlineConfig,
+  listCommentsConfig,
+  addCommentConfig,
+  resolveCommentConfig
 ] as const

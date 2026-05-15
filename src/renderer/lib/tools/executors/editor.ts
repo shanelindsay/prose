@@ -9,9 +9,10 @@ import { useEditorStore } from '../../../stores/editorStore'
 import { useEditorInstanceStore } from '../../../stores/editorInstanceStore'
 import { useAnnotationStore } from '../../../extensions/ai-annotations'
 import { createWordDiffAnnotations } from '../../diffUtils'
-import { findNodeById, findNodeByContent, getNodesWithIds } from '../../../extensions/node-ids'
+import { findNodeById, findNodeByContent, getNodesWithIds, flattenNodes } from '../../../extensions/node-ids'
 import { generateId } from '../../persistence'
 import { getAISuggestions } from '../../../extensions/ai-suggestions'
+import { parseMarkdown } from '../../markdown'
 
 /**
  * Get the TipTap editor instance.
@@ -31,6 +32,39 @@ function getEditor(): Editor | null {
 function isEditorReadOnly(): boolean {
   const state = useEditorStore.getState()
   return state.isRemarkableReadOnly || state.isPreviewTab
+}
+
+/**
+ * Strip markdown block-level prefix that matches the target node's type, so
+ * the suggestion popover displays the visible text instead of the raw markdown
+ * source the LLM might wrap a replacement in.
+ *
+ *   stripLeadingBlockMarkup('# New Title', 'heading', 1) -> 'New Title'
+ *   stripLeadingBlockMarkup('## Hello',    'heading', 2) -> 'Hello'
+ *   stripLeadingBlockMarkup('Hello',       'paragraph')  -> 'Hello'  (no-op)
+ */
+function stripLeadingBlockMarkup(content: string, nodeType: string, level?: number): string {
+  const trimmed = content.replace(/^[\r\n]+/, '')
+
+  if (nodeType === 'heading') {
+    const lvl = typeof level === 'number' && level >= 1 && level <= 6 ? level : null
+    if (lvl) {
+      const re = new RegExp(`^#{${lvl}}\\s+`)
+      if (re.test(trimmed)) return trimmed.replace(re, '')
+    }
+    // Fallback: strip any leading hash run if level is unknown
+    return trimmed.replace(/^#{1,6}\s+/, '')
+  }
+
+  if (nodeType === 'blockquote') {
+    return trimmed.replace(/^>\s?/gm, '')
+  }
+
+  if (nodeType === 'listItem' || nodeType === 'taskItem') {
+    return trimmed.replace(/^\s*(?:[-*+]|\d+\.)\s+/, '')
+  }
+
+  return trimmed
 }
 
 /**
@@ -104,7 +138,7 @@ export function executeEdit(
   }
 
   if (!found) {
-    const available = getNodesWithIds(editor.state.doc)
+    const available = flattenNodes(getNodesWithIds(editor.state.doc))
     const nodeList = available.map(n => `${n.nodeId} (${n.type}: "${n.textContent.substring(0, 40)}")`).join(', ')
     return toolError(
       `Node with ID "${nodeId}" not found. Available nodes: [${nodeList}]`,
@@ -272,10 +306,23 @@ export function executeSuggestEdit(
     return toolError('Document is read-only in this mode', 'EDITOR_READ_ONLY')
   }
 
-  const { nodeId, content, comment, search } = args
+  const { nodeId, comment, search } = args
+  let { content } = args
 
   if (!nodeId) {
     return toolError('Node ID is required', 'INVALID_INPUT')
+  }
+
+  // Detect and strip frontmatter from the incoming content.
+  // When Claude adds frontmatter via suggest_edit the --- delimiters render
+  // as a thematic break/heading in TipTap. Extract frontmatter and apply it
+  // directly to the store; insert only the body into the editor.
+  if (content.trimStart().startsWith('---')) {
+    const { content: body, frontmatter } = parseMarkdown(content)
+    if (Object.keys(frontmatter).length > 0) {
+      useEditorStore.getState().setFrontmatter(frontmatter)
+    }
+    content = body
   }
 
   // Find the node by ID, fall back to content matching if stale
@@ -286,7 +333,7 @@ export function executeSuggestEdit(
   }
 
   if (!found) {
-    const available = getNodesWithIds(editor.state.doc)
+    const available = flattenNodes(getNodesWithIds(editor.state.doc))
     const nodeList = available.map(n => `${n.nodeId} (${n.type}: "${n.textContent.substring(0, 40)}")`).join(', ')
     return toolError(
       `Node with ID "${nodeId}" not found. Available nodes: [${nodeList}]`,
@@ -300,6 +347,12 @@ export function executeSuggestEdit(
   // Get the original text content
   const originalText = node.textContent
 
+  // Normalize suggested text to match the target node's shape. If the target
+  // is a heading and the LLM wrapped the replacement in markdown syntax (e.g.
+  // "# New Title" for an H1), strip the matching prefix so the diff popover
+  // shows just the visible text instead of the raw markdown source.
+  const suggestedText = stripLeadingBlockMarkup(content, node.type.name, node.attrs?.level)
+
   // Select the text content of the node and apply the AI suggestion mark
   const contentStart = pos + 1
   const contentEnd = pos + node.nodeSize - 1
@@ -312,7 +365,7 @@ export function executeSuggestEdit(
       id: suggestionId,
       type: 'edit',
       originalText,
-      suggestedText: content,
+      suggestedText,
       explanation: comment || '',
       provenanceModel: provenance?.model || '',
       provenanceConversationId: provenance?.conversationId || '',

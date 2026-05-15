@@ -8,10 +8,12 @@ import { toolSuccess, toolError } from '../../../../shared/tools/types'
 import { useEditorStore } from '../../../stores/editorStore'
 import { useEditorInstanceStore } from '../../../stores/editorInstanceStore'
 import { useAnnotationStore } from '../../../extensions/ai-annotations'
-import { getNodesWithIds } from '../../../extensions/node-ids'
+import { getNodesWithIds, findNodeById } from '../../../extensions/node-ids'
+import type { NodeWithId } from '../../../extensions/node-ids'
 import { getComments } from '../../../extensions/comments'
 import { getAISuggestions } from '../../../extensions/ai-suggestions'
 import { getApi } from '../../browserApi'
+import { generateId } from '../../persistence'
 
 /**
  * Get the TipTap editor instance.
@@ -23,17 +25,35 @@ function getEditor(): Editor | null {
 
 /**
  * Node representation with ID for AI targeting.
+ * Container nodes (blockquote, lists, listItems) include a `children` array.
+ * Leaf nodes omit `children`.
  */
 interface DocumentNode {
   id: string
   type: string
   content: string
+  children?: DocumentNode[]
+}
+
+/**
+ * Convert a NodeWithId tree entry to a DocumentNode tree entry.
+ */
+function toDocumentNode(n: NodeWithId): DocumentNode {
+  const node: DocumentNode = {
+    id: n.nodeId,
+    type: n.type,
+    content: n.textContent,
+  }
+  if (n.children && n.children.length > 0) {
+    node.children = n.children.map(toDocumentNode)
+  }
+  return node
 }
 
 /**
  * read_document - Get the document content with node IDs for targeting.
  *
- * Returns a structured list of nodes with their IDs, allowing the AI to
+ * Returns a structured tree of nodes with their IDs, allowing the AI to
  * target specific nodes by ID when making edits.
  */
 export function executeReadDocument(): ToolResult<{
@@ -51,15 +71,11 @@ export function executeReadDocument(): ToolResult<{
     })
   }
 
-  // Get nodes with their IDs
+  // Get nodes with their IDs as a nested tree
   const nodesWithIds = getNodesWithIds(editor.state.doc)
 
-  // Format as structured list
-  const nodes: DocumentNode[] = nodesWithIds.map((n) => ({
-    id: n.nodeId,
-    type: n.type,
-    content: n.textContent
-  }))
+  // Map to DocumentNode tree
+  const nodes: DocumentNode[] = nodesWithIds.map(toDocumentNode)
 
   return toolSuccess({
     nodes,
@@ -308,4 +324,135 @@ export function executeGetOutline(): ToolResult<{ outline: OutlineEntry[]; summa
   }
 
   return toolSuccess({ outline })
+}
+
+// ============================================================================
+// Comment tools
+// ============================================================================
+
+/** Minimal comment shape returned by list_comments */
+interface CommentEntry {
+  id: string
+  markedText: string
+  comment: string
+  createdAt: number
+  from: number
+  to: number
+}
+
+/**
+ * list_comments - Get all comments in the active document.
+ */
+export function executeListComments(): ToolResult<{ comments: CommentEntry[] }> {
+  const editor = getEditor()
+
+  if (!editor) {
+    return toolError('Editor not available', 'EDITOR_NOT_AVAILABLE')
+  }
+
+  const raw = getComments(editor)
+  const comments: CommentEntry[] = raw.map((c) => ({
+    id: c.id,
+    markedText: c.markedText,
+    comment: c.comment,
+    createdAt: c.createdAt,
+    from: c.from,
+    to: c.to,
+  }))
+
+  return toolSuccess({ comments })
+}
+
+/**
+ * add_comment - Add a comment mark to a node or explicit range.
+ * The comment is tagged with author 'claude'.
+ */
+export function executeAddComment(args: {
+  nodeId?: string
+  from?: number
+  to?: number
+  comment: string
+}): ToolResult<{ id: string }> {
+  const editor = getEditor()
+
+  if (!editor) {
+    return toolError('Editor not available', 'EDITOR_NOT_AVAILABLE')
+  }
+
+  const { nodeId, comment } = args
+  let from = args.from
+  let to = args.to
+
+  if (!comment) {
+    return toolError('comment text is required', 'INVALID_INPUT')
+  }
+
+  if (nodeId) {
+    // Resolve range from nodeId
+    const found = findNodeById(editor.state.doc, nodeId)
+    if (!found) {
+      return toolError(`Node with ID "${nodeId}" not found`, 'NODE_NOT_FOUND')
+    }
+    from = found.pos + 1
+    to = found.pos + found.node.nodeSize - 1
+  }
+
+  if (from === undefined || to === undefined) {
+    return toolError('Provide either nodeId or from/to positions', 'INVALID_INPUT')
+  }
+
+  if (from >= to) {
+    return toolError('Cannot add a comment to an empty range — the targeted node has no text content', 'EMPTY_RANGE')
+  }
+
+  // Range may be non-empty in positions but contain no actual text content
+  // (e.g., a paragraph with only a hardBreak, or whitespace-only). In that case
+  // setComment would apply the mark to the boundary, which can bleed into the
+  // preceding node. Require at least one non-whitespace character to attach to.
+  const rangeText = editor.state.doc.textBetween(from, to, ' ')
+  if (!rangeText.trim()) {
+    return toolError('Cannot add a comment to an empty range — the targeted node has no text content', 'EMPTY_RANGE')
+  }
+
+  const id = generateId()
+
+  const success = editor
+    .chain()
+    .focus()
+    .setTextSelection({ from, to })
+    .setComment({ id, comment })
+    .run()
+
+  if (!success) {
+    return toolError('Failed to apply comment mark — the range may not contain markable content', 'COMMENT_FAILED')
+  }
+
+  return toolSuccess({ id })
+}
+
+/**
+ * resolve_comment - Remove a comment by its ID.
+ */
+export function executeResolveComment(args: {
+  id: string
+}): ToolResult<{ resolved: boolean }> {
+  const editor = getEditor()
+
+  if (!editor) {
+    return toolError('Editor not available', 'EDITOR_NOT_AVAILABLE')
+  }
+
+  const { id } = args
+
+  if (!id) {
+    return toolError('Comment ID is required', 'INVALID_INPUT')
+  }
+
+  const success = editor.commands.unsetComment(id)
+
+  if (!success) {
+    return toolError(`Comment with ID "${id}" not found`, 'COMMENT_NOT_FOUND')
+  }
+
+  return toolSuccess({ resolved: true })
 }
