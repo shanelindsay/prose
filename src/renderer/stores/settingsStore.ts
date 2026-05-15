@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import { subscribeWithSelector } from 'zustand/middleware'
 import type { Settings } from '../types'
 import { initRendererSentry, setRendererSentryEnabled } from '../lib/sentry'
+import { getDefaultModel } from '../../shared/llm/models'
+import type { ModelInfo } from '../../shared/llm/models'
 
 const MAX_RECENT_FILES = 15
 
@@ -34,6 +36,10 @@ interface SettingsState {
   isShortcutsDialogOpen: boolean
   isAboutDialogOpen: boolean
   isModelPickerOpen: boolean
+  // Live model list fetched from provider, cached in memory until next launch
+  fetchedModels: ModelInfo[] | null
+  fetchedModelsAt: number | null
+  isFetchingModels: boolean
   dialogTab: SettingsTab
   effectiveTheme: 'dark' | 'light'
   // Runtime state for autosave toggle (not persisted)
@@ -46,6 +52,7 @@ interface SettingsState {
   setShortcutsDialogOpen: (open: boolean) => void
   setAboutDialogOpen: (open: boolean) => void
   setModelPickerOpen: (open: boolean) => void
+  fetchModels: () => Promise<void>
   setTheme: (theme: Settings['theme']) => void
   setLLMConfig: (config: Partial<Settings['llm']>) => void
   setEditorConfig: (config: Partial<Settings['editor']>) => void
@@ -69,7 +76,7 @@ const defaultSettings: Settings = {
   theme: 'dark',
   llm: {
     provider: 'anthropic',
-    model: 'claude-sonnet-4-5-20250929',
+    model: getDefaultModel('anthropic'),
     apiKey: '',
     emojiIcons: false
   },
@@ -138,6 +145,9 @@ export const useSettingsStore = create<SettingsState>()(subscribeWithSelector((s
   isShortcutsDialogOpen: false,
   isAboutDialogOpen: false,
   isModelPickerOpen: false,
+  fetchedModels: null,
+  fetchedModelsAt: null,
+  isFetchingModels: false,
   isAIConsentDialogOpen: false,
   dialogTab: 'general' as SettingsTab,
   effectiveTheme: 'dark',
@@ -181,6 +191,11 @@ export const useSettingsStore = create<SettingsState>()(subscribeWithSelector((s
 
       // Initialize Sentry if user has opted in
       initRendererSentry(settings?.errorTracking?.enabled === true)
+
+      // Refresh the live model list in the background if we have an API key
+      if (settings?.llm?.apiKey) {
+        get().fetchModels().catch(() => { /* surfaced via state, not a crash */ })
+      }
     } catch (error) {
       console.error('Failed to load settings:', error)
       set({ isLoaded: true })
@@ -208,6 +223,28 @@ export const useSettingsStore = create<SettingsState>()(subscribeWithSelector((s
   setAboutDialogOpen: (open) => set({ isAboutDialogOpen: open }),
 
   setModelPickerOpen: (open) => set({ isModelPickerOpen: open }),
+
+  fetchModels: async () => {
+    const { settings, isFetchingModels } = get()
+    if (isFetchingModels) return
+    if (!settings.llm.apiKey) return
+    if (typeof window === 'undefined' || !window.api?.fetchModels) return
+
+    set({ isFetchingModels: true })
+    try {
+      const result = await window.api.fetchModels({
+        provider: settings.llm.provider,
+        apiKey: settings.llm.apiKey
+      })
+      if (result.models && result.models.length > 0) {
+        set({ fetchedModels: result.models, fetchedModelsAt: Date.now() })
+      }
+    } catch (err) {
+      console.warn('[settings] fetchModels failed:', err)
+    } finally {
+      set({ isFetchingModels: false })
+    }
+  },
 
   setTheme: (theme) => {
     const effectiveTheme = getEffectiveTheme(theme)
