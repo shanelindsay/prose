@@ -19,6 +19,11 @@ import {
 import type { ToolMode } from '../../stores/chatStore'
 import { getModelsForProvider, type LLMProvider } from '../../../shared/llm/models'
 
+// Detect Mac for keyboard-hint copy. Works in both Electron and web mode,
+// unlike browserApi's isMacOS() which gates on isElectron().
+const isMacKeyboard =
+  typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform)
+
 export function StatusBar() {
   const { document, cursorPosition } = useEditor()
   const { settings, autosaveActive, setLLMConfig, saveSettings } = useSettings()
@@ -66,9 +71,14 @@ export function StatusBar() {
     <div className="flex h-6 items-center justify-between border-t border-border bg-muted/30 px-4 text-xs text-muted-foreground font-mono">
       <div className="flex items-center gap-4 min-w-0">
         {hoveredUrl ? (
-          <span className="text-muted-foreground truncate max-w-[400px]" title={hoveredUrl}>
-            {hoveredUrl}
-          </span>
+          <>
+            <span className="text-muted-foreground truncate max-w-[400px]" title={hoveredUrl}>
+              {hoveredUrl}
+            </span>
+            <span className="text-muted-foreground/60 shrink-0">
+              {isMacKeyboard ? '[CMD + click to open]' : '[Ctrl + click to open]'}
+            </span>
+          </>
         ) : (
           <>
             <span>
