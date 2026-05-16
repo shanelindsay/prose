@@ -27,9 +27,10 @@ function getEditor(): Editor | null {
 
 /**
  * Check if the editor is in a read-only mode (reMarkable OCR or preview tab).
- * AI tools should not mutate the document in these modes.
+ * AI tools should not mutate the document in these modes. Exported so that
+ * document-tool executors (add_comment, resolve_comment) can apply the same gate.
  */
-function isEditorReadOnly(): boolean {
+export function isEditorReadOnly(): boolean {
   const state = useEditorStore.getState()
   return state.isRemarkableReadOnly || state.isPreviewTab
 }
@@ -320,9 +321,15 @@ export function executeSuggestEdit(
   if (content.trimStart().startsWith('---')) {
     const { content: body, frontmatter } = parseMarkdown(content)
     if (Object.keys(frontmatter).length > 0) {
+      // Real frontmatter — apply it to the store and use the stripped body
+      // as the suggestion content.
       useEditorStore.getState().setFrontmatter(frontmatter)
+      content = body
     }
-    content = body
+    // If parseMarkdown matched the regex but yielded no keys (e.g., bare
+    // string YAML, malformed YAML, or a deliberate thematic break followed
+    // by prose), leave content untouched. Otherwise we'd silently drop the
+    // ---...--- block from the suggestion. See #490.
   }
 
   // Find the node by ID, fall back to content matching if stale
