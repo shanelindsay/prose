@@ -11,7 +11,7 @@ import { getSuggestionsWithFeedback } from '../extensions/ai-suggestions'
 import { executeTool, resolveToolPosition } from '../lib/tools'
 import { getToolsForClaudeAPI } from '../../shared/tools/registry'
 import { resolveModelName } from '../../shared/llm/models'
-import type { LLMMessage, LLMStreamToolCall, LLMContentBlock } from '../types'
+import type { LLMMessage, LLMStreamToolCall, LLMStreamToolCallStart, LLMContentBlock } from '../types'
 
 // Chat Mode gets a read-only tool subset rather than the full read+write
 // surface, so the agent can ground itself in the document without proposing
@@ -55,6 +55,31 @@ function getToolsForToolMode(toolMode: ToolMode): ReturnType<typeof getToolsForC
 
 // Module-level flag to ensure stream listeners are only registered once globally
 let streamListenersInitialized = false
+
+// Build a self-closing marker tag that ChatMessage's parseToolTags recognizes
+// as a "drafting" indicator (LLM is composing the tool's input). The matching
+// tag is stripped before the tool result summary is appended.
+function buildDraftingTag(toolCallId: string, toolName: string): string {
+  return `<tool-drafting id="${toolCallId}" name="${toolName}"></tool-drafting>`
+}
+
+// Strip a specific drafting marker once the tool has finished and its
+// result is about to be appended. Match the exact id; only one such tag
+// can exist per tool call.
+function stripDraftingTag(content: string, toolCallId: string): string {
+  const escapedId = toolCallId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return content.replace(
+    new RegExp(`<tool-drafting id="${escapedId}" name="[^"]+"></tool-drafting>`, 'g'),
+    ''
+  )
+}
+
+// Strip every drafting marker regardless of id. Used on terminal paths
+// (stream error, user abort, outer catch) where the per-id strip in the
+// tool-result loop won't run, otherwise the chip persists forever.
+function stripAllDraftingTags(content: string): string {
+  return content.replace(/<tool-drafting[^>]*><\/tool-drafting>/g, '')
+}
 
 // Maximum tool roundtrips before circuit breaker stops the loop
 const MAX_TOOL_ROUNDTRIPS = 5
@@ -186,6 +211,23 @@ export function useChat() {
       }
     })
 
+    // Drafting indicator: fires when the LLM begins a tool_use content block,
+    // before any input_json_delta. For tools whose body the model has to
+    // compose (e.g., `insert`/`edit` with paragraph-length text), this is the
+    // chunk of latency users currently see as silence. We append a self-
+    // closing <tool-drafting> tag to the streaming assistant message so
+    // ChatMessage's parser renders a "Drafting…" chip. The tag is stripped
+    // once the tool result is appended in onLLMStreamComplete below.
+    const unsubToolCallStart = api.onLLMStreamToolCallStart((start: LLMStreamToolCallStart) => {
+      const state = useChatStore.getState()
+      if (start.streamId !== state.currentStreamId || !state.streamingMessageId) return
+      const currentMsg = state.messages.find((m) => m.id === state.streamingMessageId)
+      const existing = currentMsg?.content ?? ''
+      state.updateMessage(state.streamingMessageId, {
+        content: existing + buildDraftingTag(start.toolCallId, start.toolName)
+      })
+    })
+
     const unsubComplete = api.onLLMStreamComplete(async (complete) => {
       console.log('[useChat:complete] Received:', complete.streamId, 'content:', complete.content?.slice(0, 50), 'toolCalls:', complete.toolCalls?.length || 0)
       const state = useChatStore.getState()
@@ -304,21 +346,24 @@ export function useChat() {
             currentErrorSignature = `${toolCall.name}:${result.error}`
           }
 
-          // Append tool execution info to the message using the same
-          // <tool-result> tag format as user-initiated slash commands.
-          // This unifies both paths so custom renderers in
-          // src/renderer/components/chat/toolResultRenderers/ get the
-          // full structured payload regardless of who triggered the
-          // tool call. Tools without a custom renderer fall back to
-          // the markdown render of the JSON, matching slash-command UX.
+          // Append tool execution info using the same <tool-result> tag
+          // format as user-initiated slash commands so custom renderers in
+          // src/renderer/components/chat/toolResultRenderers/ get the full
+          // structured payload regardless of who triggered the tool call.
+          // Strip the matching drafting marker for this tool call first so
+          // we don't render the "Drafting…" chip alongside the result chip.
+          // Read latest state so prior-tool appends in this same loop
+          // iteration are preserved.
           const resultText = result.success
             ? (typeof result.data === 'string'
                 ? result.data
                 : '```json\n' + JSON.stringify(result.data, null, 2) + '\n```')
             : `Error: ${result.error}`
-          state.updateMessage(assistantMsgId, {
+          const latest = useChatStore.getState()
+          const previous = latest.messages.find((m) => m.id === assistantMsgId)?.content ?? ''
+          latest.updateMessage(assistantMsgId, {
             content:
-              state.messages.find((m) => m.id === assistantMsgId)?.content +
+              stripDraftingTag(previous, toolCall.id) +
               `\n\n<tool-result name="${toolCall.name}" success="${result.success}">${resultText}</tool-result>`
           })
 
@@ -432,8 +477,12 @@ export function useChat() {
           } else if (lowerError.includes('connect') || lowerError.includes('network') || lowerError.includes('timeout')) {
             guidance = ' Check your internet connection.'
           }
+          // Strip any orphan <tool-drafting> tags. They're normally cleared in
+          // onLLMStreamComplete's tool-result loop, but a stream error between
+          // content_block_start and that loop would leave them dangling.
+          const cleaned = stripAllDraftingTags(currentMsg?.content || '')
           state.updateMessage(state.streamingMessageId, {
-            content: (currentMsg?.content || '') + `\n\nError: ${error.error}${guidance}`,
+            content: cleaned + `\n\nError: ${error.error}${guidance}`,
             isError: true
           })
         }
@@ -449,6 +498,7 @@ export function useChat() {
       console.log('[useChat:listeners] CLEANUP - unsubscribing all listeners')
       unsubChunk()
       unsubToolCall()
+      unsubToolCallStart()
       unsubComplete()
       unsubError()
       streamListenersInitialized = false
@@ -669,6 +719,18 @@ export function useChat() {
     if (state.currentStreamId) {
       const api = getApi()
       api.llmAbortStream(state.currentStreamId)
+    }
+    // Strip orphan drafting tags before tearing down the stream — aborting
+    // mid-tool-input composition would otherwise leave a perpetual chip.
+    // Must run before completeStreaming() clears streamingMessageId.
+    if (state.streamingMessageId) {
+      const currentMsg = state.messages.find((m) => m.id === state.streamingMessageId)
+      if (currentMsg?.content) {
+        const cleaned = stripAllDraftingTags(currentMsg.content)
+        if (cleaned !== currentMsg.content) {
+          state.updateMessage(state.streamingMessageId, { content: cleaned })
+        }
+      }
     }
     // Clear stream refs before completing to prevent race conditions
     clearStreamRefs()
