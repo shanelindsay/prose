@@ -7,6 +7,7 @@ import type { ToolResult } from '../../../../shared/tools/types'
 import { toolSuccess, toolError } from '../../../../shared/tools/types'
 import { useEditorStore } from '../../../stores/editorStore'
 import { useEditorInstanceStore } from '../../../stores/editorInstanceStore'
+import { useSettingsStore } from '../../../stores/settingsStore'
 import { useAnnotationStore } from '../../../extensions/ai-annotations'
 import { createWordDiffAnnotations } from '../../diffUtils'
 import { findNodeById, findNodeByContent, getNodesWithIds, flattenNodes } from '../../../extensions/node-ids'
@@ -14,6 +15,113 @@ import { generateId } from '../../persistence'
 import { getAISuggestions } from '../../../extensions/ai-suggestions'
 import { parseMarkdown, FRONTMATTER_REGEX } from '../../markdown'
 import { load as parseYaml } from 'js-yaml'
+
+/**
+ * Target visible duration for a chunked streaming insertion. The number of
+ * chunks is capped so total wall time stays under ~400ms even for long
+ * paragraphs — long enough to perceive motion, short enough that the user
+ * isn't waiting on the agent.
+ */
+const STREAM_TARGET_FRAME_COUNT = 24
+
+/**
+ * Decide whether the next agent insertion should stream chunk-by-chunk.
+ * Falls back to instant apply when the user has disabled the setting or
+ * has `prefers-reduced-motion: reduce` set at the OS level.
+ */
+function shouldStreamInsertion(): boolean {
+  const enabled = useSettingsStore.getState().settings.editor.streamingEdits
+  if (enabled === false) return false
+  if (
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  ) {
+    return false
+  }
+  return true
+}
+
+/**
+ * Split text into word-level chunks (word + trailing whitespace per chunk),
+ * then group into at most STREAM_TARGET_FRAME_COUNT chunks so total wall time
+ * stays bounded for long paragraphs.
+ */
+function buildStreamChunks(text: string): string[] {
+  // Token alternation: [word, space, word, space, ...]; either side may be empty.
+  const tokens = text.split(/(\s+)/)
+  const words: string[] = []
+  for (let i = 0; i < tokens.length; i += 2) {
+    const word = tokens[i] || ''
+    const space = tokens[i + 1] || ''
+    if (word || space) words.push(word + space)
+  }
+  if (words.length <= STREAM_TARGET_FRAME_COUNT) return words
+  const groupSize = Math.ceil(words.length / STREAM_TARGET_FRAME_COUNT)
+  const groups: string[] = []
+  for (let i = 0; i < words.length; i += groupSize) {
+    groups.push(words.slice(i, i + groupSize).join(''))
+  }
+  return groups
+}
+
+/** Yield to the browser so paint can happen between chunks. */
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => resolve())
+    } else {
+      setTimeout(resolve, 16)
+    }
+  })
+}
+
+/**
+ * Insert `text` at `from`, or replace the range `[from, to]` when `to` is
+ * supplied, either instantly or in word-level chunks across animation frames.
+ * Chunked transactions land within ~400ms total — inside the ProseMirror
+ * history plugin's default newGroupDelay (500ms) — so the whole insertion
+ * collapses into a single undo step.
+ *
+ * When `to` is supplied, the range delete and the first chunk insert run in
+ * the same chain (a single transaction), so range replacement is atomic and
+ * shares undo state with the first chunk.
+ *
+ * Subsequent chunks track the running insertion endpoint explicitly via the
+ * doc-size delta, so user clicks or keystrokes mid-stream can't redirect
+ * later chunks into the user's cursor position.
+ */
+async function applyInsertion(
+  editor: Editor,
+  text: string,
+  from: number,
+  to?: number
+): Promise<void> {
+  const hasRange = to !== undefined && to !== from
+  const selection = hasRange ? { from, to: to! } : from
+
+  if (!shouldStreamInsertion()) {
+    editor.chain().focus().setTextSelection(selection).insertContent(text).run()
+    return
+  }
+  const chunks = buildStreamChunks(text)
+  if (chunks.length <= 1) {
+    editor.chain().focus().setTextSelection(selection).insertContent(text).run()
+    return
+  }
+  const rangeSize = hasRange ? to! - from : 0
+  const sizeBefore = editor.state.doc.content.size
+  editor.chain().focus().setTextSelection(selection).insertContent(chunks[0]).run()
+  // End of inserted content = from + (size of inserted chunk in PM coords).
+  // Inserted size = doc delta + chars removed by any range replace.
+  let pos = from + (editor.state.doc.content.size - sizeBefore) + rangeSize
+  for (let i = 1; i < chunks.length; i++) {
+    await nextFrame()
+    const prev = editor.state.doc.content.size
+    editor.chain().setTextSelection(pos).insertContent(chunks[i]).run()
+    pos += editor.state.doc.content.size - prev
+  }
+}
 
 /**
  * Get the TipTap editor instance.
@@ -134,14 +242,14 @@ export function resolveToolPosition(toolName: string, args: Record<string, unkno
  * edit - Replace the content of a node by its ID.
  * Falls back to content matching if the nodeId is stale.
  */
-export function executeEdit(
+export async function executeEdit(
   args: {
     nodeId: string
     content: string
     search?: string
   },
   provenance?: ToolProvenance
-): ToolResult<{ applied: boolean; nodeId: string }> {
+): Promise<ToolResult<{ applied: boolean; nodeId: string }>> {
   const editor = getEditor()
 
   if (!editor) {
@@ -197,12 +305,11 @@ export function executeEdit(
   const contentEnd = pos + node.nodeSize - 1
 
   const sizeBefore = editor.state.doc.content.size
-  editor
-    .chain()
-    .focus()
-    .setTextSelection({ from: contentStart, to: contentEnd })
-    .insertContent(content)
-    .run()
+  // Range-replace via applyInsertion: the selection delete + first chunk
+  // insert run in the same chain (atomic transaction). Subsequent rAF chunks
+  // fall inside the history plugin's newGroupDelay (500ms) and collapse into
+  // a single undo step.
+  await applyInsertion(editor, content, contentStart, contentEnd)
   const sizeAfter = editor.state.doc.content.size
 
   // Create word-level AI annotations for provenance tracking
@@ -268,7 +375,7 @@ function parseFrontmatterPayload(
  *     `nodeId` (preferred for "add to section X" — anchor on the
  *     section's heading nodeId from `read_document`)
  */
-export function executeInsert(
+export async function executeInsert(
   args: {
     text: string
     position?: 'cursor' | 'start' | 'end' | 'after_node' | 'before_node'
@@ -276,7 +383,7 @@ export function executeInsert(
     search?: string
   },
   provenance?: ToolProvenance
-): ToolResult<{ inserted: boolean; position: string }> {
+): Promise<ToolResult<{ inserted: boolean; position: string }>> {
   const editor = getEditor()
 
   if (!editor) {
@@ -348,7 +455,10 @@ export function executeInsert(
 
   try {
     const sizeBefore = editor.state.doc.content.size
-    editor.chain().focus().setTextSelection({ from: insertFrom, to: insertTo }).insertContent(text).run()
+    // Route through applyInsertion so the chunked-streaming path applies
+    // uniformly, and so range replacement (cursor case with non-empty
+    // selection) is atomic with the first chunk's insert.
+    await applyInsertion(editor, text, insertFrom, insertTo)
     const sizeAfter = editor.state.doc.content.size
 
     // Create AI annotation for provenance tracking.
@@ -357,6 +467,10 @@ export function executeInsert(
     // selection that got replaced. For a collapsed selection (the common
     // case) this reduces to `sizeAfter - sizeBefore`.
     if (provenance && provenance.documentId && text.length > 0) {
+      // Use the actual PM size delta (plus any replaced range size) instead of
+      // string length: insertContent() may produce multi-paragraph nodes where
+      // string length != PM position delta, and the doc delta nets out any
+      // selection that was replaced.
       const insertedSize = (sizeAfter - sizeBefore) + (insertTo - insertFrom)
       useAnnotationStore.getState().addAnnotation({
         documentId: provenance.documentId,
