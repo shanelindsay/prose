@@ -33,7 +33,11 @@ const CHAT_MODE_TOOL_NAMES: ReadonlySet<string> = new Set([
   'get_metadata',
   'search_document',
   'get_outline',
-  'list_comments'
+  'list_comments',
+  // UX coordination: lets the agent offer the user a one-click mode
+  // switch when their request is out of scope for the current mode.
+  // It doesn't read or mutate anything — just renders a button.
+  'request_mode_switch'
 ])
 
 function getToolsForToolMode(toolMode: ToolMode): ReturnType<typeof getToolsForClaudeAPI> {
@@ -86,6 +90,15 @@ const toolLoopContextRef = {
     assistantMsgId: string
     roundtripCount: number
     lastErrorSignature: string | null
+    // True if the turn started with a mode switch (Switch & Run or
+    // StatusBar toggle between sends). Propagates through every
+    // tool-loop continuation in the turn so the "you just switched"
+    // notice stays on the system prompt — without it, continuations
+    // after a legitimate read_document call lose the notice and the
+    // LLM pattern-matches against prior-mode assistant messages,
+    // hallucinating "I'm still in <old> Mode" despite the tool list
+    // and per-mode instructions reflecting the new mode.
+    modeJustSwitched: boolean
   } | null,
   streamId: null as string | null
 }
@@ -291,14 +304,22 @@ export function useChat() {
             currentErrorSignature = `${toolCall.name}:${result.error}`
           }
 
-          // Append tool execution info to the message
-          const resultSummary = result.success
-            ? (typeof result.data === 'string' ? result.data.slice(0, 100) : 'Success')
+          // Append tool execution info to the message using the same
+          // <tool-result> tag format as user-initiated slash commands.
+          // This unifies both paths so custom renderers in
+          // src/renderer/components/chat/toolResultRenderers/ get the
+          // full structured payload regardless of who triggered the
+          // tool call. Tools without a custom renderer fall back to
+          // the markdown render of the JSON, matching slash-command UX.
+          const resultText = result.success
+            ? (typeof result.data === 'string'
+                ? result.data
+                : '```json\n' + JSON.stringify(result.data, null, 2) + '\n```')
             : `Error: ${result.error}`
           state.updateMessage(assistantMsgId, {
             content:
               state.messages.find((m) => m.id === assistantMsgId)?.content +
-              `\n\n*[Tool: ${toolCall.name}] ${resultSummary}*`
+              `\n\n<tool-result name="${toolCall.name}" success="${result.success}">${resultText}</tool-result>`
           })
 
           // Add tool result message to API messages (summarized to reduce context)
@@ -326,12 +347,16 @@ export function useChat() {
         const newStreamId = createMessageId()
         state.startStreaming(assistantMsgId, newStreamId)
 
-        // Update context for potential next tool loop with new streamId
+        // Update context for potential next tool loop with new streamId.
+        // Preserve `modeJustSwitched` across the whole turn so subsequent
+        // continuations keep the "you just switched" notice.
+        const priorTurnContext = toolLoopContextRef.current
         toolLoopContextRef.current = {
           apiMessages: updatedMessages,
           assistantMsgId,
           roundtripCount: roundtripCount + 1,
-          lastErrorSignature: currentErrorSignature
+          lastErrorSignature: currentErrorSignature,
+          modeJustSwitched: priorTurnContext?.modeJustSwitched ?? false
         }
         toolLoopContextRef.streamId = newStreamId
         pendingToolCallsRef.streamId = newStreamId
@@ -349,6 +374,11 @@ export function useChat() {
         if (loopModeJustSwitched) {
           state.setLastSentToolMode(state.toolMode)
         }
+        // The notice fires if the turn started with a switch (Switch &
+        // Run or pre-send StatusBar toggle) OR if the user toggled mode
+        // mid-loop. Either way we want the grounding text in the prompt.
+        const continuationModeJustSwitched =
+          toolLoopContextRef.current.modeJustSwitched || loopModeJustSwitched
 
         try {
           await api.llmChatStream({
@@ -362,7 +392,7 @@ export function useChat() {
               state.toolMode,
               editorState.document.path,
               resolveModelName(settingsState.settings.llm.model, settingsState.fetchedModels),
-              loopModeJustSwitched
+              continuationModeJustSwitched
             ),
             streamId: newStreamId,
             tools,
@@ -430,6 +460,13 @@ export function useChat() {
       console.log('[useChat] sendMessage called with:', content?.substring(0, 50), 'isLoading:', isLoading)
       if (!content.trim() || isLoading) return
       console.log('[useChat] sendMessage passed initial check')
+      // Read toolMode fresh from the store rather than relying on the
+      // React-closure-captured value. Necessary because callers (notably
+      // RequestModeSwitchActions' "Switch & Run" path) may setToolMode
+      // and then synchronously dispatch sendMessage in the same tick —
+      // React hasn't re-rendered yet, and the captured `toolMode` would
+      // be stale. Reading from the store always reflects the latest.
+      const toolMode = useChatStore.getState().toolMode
 
       // Auto-create a conversation if there isn't one
       if (!activeConversationId) {
@@ -536,18 +573,6 @@ export function useChat() {
         console.error('[useChat] Error getting tools:', toolErr)
         tools = undefined
       }
-      if (tools && tools.length > 0) {
-        toolLoopContextRef.current = {
-          apiMessages,
-          assistantMsgId,
-          roundtripCount: 0,
-          lastErrorSignature: null
-        }
-        toolLoopContextRef.streamId = streamId
-        pendingToolCallsRef.streamId = streamId
-      }
-
-      console.log('[useChat] About to call llmChatStream')
       // Detect mid-conversation mode switches so we can prepend a one-line
       // note to the system prompt. Idempotent across multiple toggles:
       // only the diff at send time matters, and we update lastSentToolMode
@@ -556,6 +581,20 @@ export function useChat() {
       const lastSent = useChatStore.getState().lastSentToolMode
       const modeJustSwitched = lastSent !== null && lastSent !== toolMode
       useChatStore.getState().setLastSentToolMode(toolMode)
+
+      if (tools && tools.length > 0) {
+        toolLoopContextRef.current = {
+          apiMessages,
+          assistantMsgId,
+          roundtripCount: 0,
+          lastErrorSignature: null,
+          modeJustSwitched
+        }
+        toolLoopContextRef.streamId = streamId
+        pendingToolCallsRef.streamId = streamId
+      }
+
+      console.log('[useChat] About to call llmChatStream')
       try {
         // Call streaming LLM (via Electron IPC or browser fallback)
         const api = getApi()
