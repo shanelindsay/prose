@@ -1,6 +1,6 @@
 # #467 — Manual QA Plan
 
-> **Status:** in flight. After the first implementation sojourn (#529 persistent selection, #530 tool-result renderer registry, #527 autocomplete filter) landed, the pass continued through Stages 1–5 with a second sojourn that produced #534 (request_mode_switch tool + UI), #546 (insert anchor positions), #547 (cursor selection-replace), #543 (delete_node + move_cursor), #545 (drafting indicator), and #544 (chunked streaming). All six merged to `release/v1.2-agent-persona`. Resuming at Stage 6 with the expanded tool surface. Two follow-ups (#548 annotation unification, #549 toolMode persistence) are deferred but targeted at the same release for v1.2. This document is the canonical reference for the QA run; a generalized skill will be extracted from this approach once the pass completes.
+> **Status:** complete — Stage 10 **GO** (2026-05-24). All stages (1–9) passed. A third sojourn merged #548 (annotation unification, including the insertion-style legibility fix) and #549 (global `toolMode` persistence) into `release/v1.2-agent-persona`, with the Stage 4 and Stage 6 re-spot-checks passing. Three pre-existing, non-blocking follow-ups were filed and deferred: #570 (provenance for create-from-scratch / MCP / paste), #571 (`insert after_node` heading absorption), #572 (full-node `edit` drops adjacent annotation). `release/v1.2-agent-persona` → `main` opened on the GO. See the **Run log** appendix at the bottom for the pass/fail table. (Earlier sojourns: #529 persistent selection, #530 tool-result renderer, #527 autocomplete filter; then #534 request_mode_switch, #546 insert anchors, #547 cursor selection-replace, #543 delete_node/move_cursor, #545 drafting indicator, #544 chunked streaming.)
 
 ## Context
 
@@ -153,7 +153,7 @@ Run as one 5–10 minute working session on a real doc, then report.
 
 ### Stage 8 — Regression (legacy paths still work)
 
-- **8.1** In `create`, prompt that gets the agent to emit a legacy `<edit src="..." target="...">` XML block. Auto-applies (`agentMode=true`).
+- **8.1** In `create`, prompt that gets the agent to emit a legacy aider-style SEARCH/REPLACE block (`<<<<<<< SEARCH … ======= … >>>>>>> REPLACE`, parsed by `editBlocks.ts` — *not* an `<edit src target>` XML tag; that earlier wording was inaccurate). Auto-applies via `applyEditsDirect` (`agentMode=true`).
 - **8.2** Switch to `editor`. Same prompt. Renders as reviewable diff with accept/reject buttons.
 - **8.3** `/help` lists slash commands. (Known limitation: list is hardcoded, not mode-aware.)
 - **8.4** `/clear` clears conversation.
@@ -163,7 +163,7 @@ Run as one 5–10 minute working session on a real doc, then report.
 ### Stage 9 — Explicit out-of-scope confirmations
 
 - **9.1** Source mode chat unchanged from pre-#467 (#314 not in scope; not newly broken).
-- **9.2** Per-conversation persistence: messages survive relaunch; `toolMode` does not (each launch starts in `editor`).
+- **9.2** Per-conversation persistence: messages survive relaunch. `toolMode` now **persists globally** across reloads/relaunch (assertion flipped by #549 — was "does not persist"; first-ever launch still defaults to `editor`).
 
 ### Stage 10 — Final go/no-go
 
@@ -216,3 +216,23 @@ The umbrella `#467` is fully verified when Stage 10 says "go" and `release/v1.2-
 ## Skill extraction (after the pass)
 
 Once Stage 10 ships, extract the QA-loop approach as a reusable skill at `.claude/skills/qa-mode-refactor/SKILL.md`. Parameterize: mode names, default mode, tool-gating expectations, persona heuristics. Both implementation sojourns (first: persistent selection / tool-result renderer; second: request_mode_switch + insert anchor + delete_node/move_cursor + drafting indicator + chunked streaming) are UX-surface specific and **not** part of the skill — they're project-specific work caught during the pass. The generalized loop (per-step interactive queueing, surgical-scope bug-fix protocol, pass/fail table maintenance, deferred-follow-up handling) is what transfers.
+
+## Run log — pass/fail (third sojourn, 2026-05-24)
+
+| Stage | Item | Result | Notes |
+|---|---|---|---|
+| 1–6 | — | ✅ | Prior sojourns (see git history) |
+| 7 | Persona heuristics | ✅ | Spot-checked in a live working session |
+| 8.1 | Legacy SEARCH/REPLACE auto-apply (create) | ✅ | Verified `applyEditsDirect`: "Applied 1 edit" + provenance annotation |
+| 8.2 | Legacy block → reviewable diff (editor) | ✅ | `applyEditsAsDiffs` + accept/reject |
+| 8.3 | `/help` lists commands | ✅ | Hardcoded list (known limitation); omits `/new` |
+| 8.4 | `/clear` | ✅ | Conversation emptied |
+| 8.5 | `/new` / `/new_file` un-gated | ✅ | New tab created while in Create mode |
+| 8.6 | MCP path mode-independent | ✅ | Code-verified: `App.tsx` hardcodes `executeTool(…, 'create', …)`, bypasses `checkToolAccess` |
+| 9.1 | Source-mode chat unchanged | ✅ | Out-of-scope confirmation |
+| 9.2 | Messages persist; `toolMode` persists | ✅ | `toolMode` persistence is the new #549 behavior |
+| — | #548 merged (PR #569) | ✅ | + insertion annotation legibility/unification fix |
+| — | #549 merged (PR #568) | ✅ | Global persistence; Stage 4 re-check passed |
+| 10 | Go/no-go | ✅ **GO** | Shipped with #570/#571/#572 deferred |
+
+**Deferred (pre-existing, non-blocking):** #570 (provenance for create / MCP / paste), #571 (`insert after_node` heading absorption), #572 (full-node `edit` drops adjacent annotation).
