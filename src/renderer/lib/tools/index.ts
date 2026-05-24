@@ -28,6 +28,8 @@ import {
   executeAcceptDiff,
   executeRejectDiff,
   executeListDiffs,
+  executeDeleteNode,
+  executeMoveCursor,
   resolveToolPosition
 } from './executors/editor'
 
@@ -47,6 +49,9 @@ import {
   executeSelectTab
 } from './executors/tabs'
 
+// UI-coordination executors
+import { executeRequestModeSwitch } from './executors/ui'
+
 /** Provenance context for AI-generated content tracking */
 export interface ToolProvenance {
   model: string
@@ -62,7 +67,7 @@ export interface ToolProvenance {
 export async function executeTool(
   toolName: string,
   args: unknown,
-  mode: ToolMode = 'full',
+  mode: ToolMode = 'create',
   provenance?: ToolProvenance
 ): Promise<ToolResult> {
   // Check if tool exists
@@ -123,6 +128,10 @@ export async function executeTool(
         return executeRejectDiff(validatedArgs)
       case 'list_diffs':
         return executeListDiffs()
+      case 'delete_node':
+        return executeDeleteNode(validatedArgs, provenance)
+      case 'move_cursor':
+        return executeMoveCursor(validatedArgs)
 
       // File tools (async)
       case 'open_file':
@@ -144,6 +153,10 @@ export async function executeTool(
       case 'select_tab':
         return await executeSelectTab(validatedArgs)
 
+      // UI-coordination tools
+      case 'request_mode_switch':
+        return executeRequestModeSwitch(validatedArgs as Parameters<typeof executeRequestModeSwitch>[0])
+
       default:
         return toolError(`Tool "${toolName}" not implemented`, 'NOT_IMPLEMENTED')
     }
@@ -163,6 +176,7 @@ export function getAvailableTools(): string[] {
  * Re-export types and utilities.
  */
 export { checkToolAccess, getDefaultMode } from './modes'
+export { isToolAvailableInMode } from '../../../shared/tools/registry'
 export { resolveToolPosition }
 export type { ToolResult, ToolMode } from '../../../shared/tools/types'
 export { toolSuccess, toolError } from '../../../shared/tools/types'

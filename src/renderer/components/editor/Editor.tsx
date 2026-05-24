@@ -24,6 +24,7 @@ import { SearchHighlight } from '../../extensions/search-highlight'
 import { LinkHover } from '../../extensions/link-hover'
 import { PlainTextMode } from '../../extensions/plain-text-mode'
 import { ImageWithUpload } from '../../extensions/image'
+import { PersistentSelection } from '../../extensions/persistent-selection'
 import { useEditor } from '../../hooks/useEditor'
 import { useSettings } from '../../hooks/useSettings'
 import { useChat } from '../../hooks/useChat'
@@ -60,7 +61,7 @@ export function Editor() {
   const sourceMode = useEditorStore((state) => state.sourceMode)
   const setSourceMode = useEditorStore((state) => state.setSourceMode)
   const { settings, setDialogOpen, setShortcutsDialogOpen, setModelPickerOpen } = useSettings()
-  const { setContext, agentMode, setAgentMode } = useChat()
+  const { setContext, cycleToolMode } = useChat()
   const { isChatOpen, isFileListOpen, toggleChat, toggleFileList, setChatOpen, setFileListOpen } = usePanelLayoutContext()
   const setEditorInstance = useEditorInstanceStore((state) => state.setEditor)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -194,6 +195,7 @@ export function Editor() {
           class: 'editor-image'
         }
       }),
+      PersistentSelection,
     ],
     content: initialContent,
     editorProps: {
@@ -643,9 +645,11 @@ export function Editor() {
       e.preventDefault()
       setShortcutsDialogOpen(true)
     } else if (e.shiftKey && e.key === 'Tab' && !isMod) {
-      // Shift+Tab: Toggle agent mode
+      // Shift+Tab: Cycle through tool modes (chat → editor → create → chat).
+      // Editor must be reachable via keyboard — it's the new safe-by-default
+      // mode, and the previous binary agentMode toggle skipped it.
       e.preventDefault()
-      setAgentMode(!agentMode)
+      cycleToolMode()
     } else if (isMod && e.key === 'k' && !e.shiftKey) {
       // Cmd+K: Insert/edit link
       e.preventDefault()
@@ -734,7 +738,7 @@ export function Editor() {
         }
       }
     }
-  }, [openFile, saveFile, setDialogOpen, setShortcutsDialogOpen, setModelPickerOpen, editor, setContext, setChatOpen, setFileListOpen, toggleChat, toggleFileList, isChatOpen, isFileListOpen, isFindOpen, openAddCommentDialog, openLinkPopover, agentMode, setAgentMode, toggleAnnotationsVisible])
+  }, [openFile, saveFile, setDialogOpen, setShortcutsDialogOpen, setModelPickerOpen, editor, setContext, setChatOpen, setFileListOpen, toggleChat, toggleFileList, isChatOpen, isFileListOpen, isFindOpen, openAddCommentDialog, openLinkPopover, cycleToolMode, toggleAnnotationsVisible])
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown)
