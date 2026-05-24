@@ -1,4 +1,4 @@
-import { ipcMain, dialog, app, shell, BrowserWindow, clipboard } from 'electron'
+import { ipcMain, dialog, app, shell, BrowserWindow, clipboard, nativeImage } from 'electron'
 import { IS_MAS_BUILD } from './env'
 import { readFile, writeFile, mkdir, access, rename, unlink, readdir, stat, copyFile } from 'fs/promises'
 import { join, dirname, normalize, isAbsolute } from 'path'
@@ -1590,6 +1590,25 @@ export function setupIpcHandlers(): void {
 
   ipcMain.handle('clipboard:writeText', async (_event, text: string) => {
     clipboard.writeText(text)
+  })
+
+  // Appearance: live dock icon swap (macOS only)
+  // VALID_ICON_IDS is an allowlist — iconId arrives from the untrusted renderer
+  // and must not be used in path construction without validation (path traversal).
+  const VALID_ICON_IDS = [
+    'pilcrow', 'refined-p', 'fraunces-p', 'p-ist', 'asterisk',
+    'hash', 'em-dash', 'caret', 'period', 'prompt', 'legacy',
+  ] as const
+  ipcMain.handle('appearance:set-icon', (_event, iconId: string) => {
+    if (process.platform !== 'darwin') return
+    if (!(VALID_ICON_IDS as readonly string[]).includes(iconId)) return
+    const icnsPath = app.isPackaged
+      ? join(process.resourcesPath, 'resources', 'icons', iconId, 'icon.icns')
+      : join(__dirname, '../../resources/icons', iconId, 'icon.icns')
+    const img = nativeImage.createFromPath(icnsPath)
+    if (!img.isEmpty()) {
+      app.dock.setIcon(img)
+    }
   })
 
   ipcMain.handle('skill:download', async (): Promise<{ success: boolean; error?: string }> => {
