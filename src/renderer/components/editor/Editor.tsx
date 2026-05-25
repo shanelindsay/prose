@@ -60,7 +60,7 @@ export function Editor() {
   const toggleAnnotationsVisible = useEditorStore((state) => state.toggleAnnotationsVisible)
   const sourceMode = useEditorStore((state) => state.sourceMode)
   const setSourceMode = useEditorStore((state) => state.setSourceMode)
-  const { settings, setDialogOpen, setShortcutsDialogOpen, setModelPickerOpen } = useSettings()
+  const { settings, effectiveTheme, setDialogOpen, setShortcutsDialogOpen, setModelPickerOpen } = useSettings()
   const { setContext, cycleToolMode } = useChat()
   const { isChatOpen, isFileListOpen, toggleChat, toggleFileList, setChatOpen, setFileListOpen } = usePanelLayoutContext()
   const setEditorInstance = useEditorInstanceStore((state) => state.setEditor)
@@ -820,10 +820,6 @@ export function Editor() {
     const currentBody = editor.storage.markdown?.getMarkdown() ?? ''
     setContent(currentBody)
   }, [setFrontmatter, setContent, editor])
-
-  const effectiveTheme = settings.theme === 'system'
-    ? (typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-    : settings.theme
 
   return (
     <div className="h-full flex flex-col relative">

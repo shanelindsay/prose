@@ -2,6 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+@font-face {
+  font-family: 'Fraunces';
+  src: url('./assets/fonts/Fraunces-Italic-VariableFont.ttf') format('truetype-variations');
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
 @layer base {
   :root {
     --background: 0 0% 100%;
@@ -24,6 +32,85 @@
     --input: 240 5.9% 90%;
     --ring: 240 5.9% 10%;
     --radius: 0.5rem;
+
+    /* Feature-semantic color tokens — Mono light baseline.
+       Every value equals the original hardcoded literal exactly. */
+
+    /* Diff suggestion container (blue-210) */
+    --diff-suggest:            210 100% 50%;  /* border & bg base */
+    --diff-suggest-dark-bg:    210 100% 30%;  /* bg only in .dark (deliberately dimmer) */
+
+    /* Deletion text/bg in diff suggestions (red-0) */
+    --diff-del:                0 70% 50%;     /* text color + bg tint base */
+    --diff-del-bg-dark:        0 70% 40%;     /* bg tint in .dark (lower lightness) */
+
+    /* Insertion text/bg in diff suggestions (green-140) */
+    --diff-ins:                140 60% 35%;   /* text color */
+    --diff-ins-bg:             140 60% 40%;   /* bg tint (different from text lightness) */
+    --diff-ins-bg-dark:        140 60% 30%;   /* bg tint in .dark */
+
+    /* Accept / reject buttons in diff suggestion bar */
+    --diff-accept-btn:         140 60% 45%;
+    --diff-accept-btn-hover:   140 60% 38%;
+    --diff-reject-btn:         0 65% 50%;
+    --diff-reject-btn-hover:   0 65% 42%;
+
+    /* Comment marks (amber-45) */
+    --comment-mark-bg:         45 100% 70%;   /* mark highlight bg */
+    --comment:                 45 100% 50%;   /* mark border & search/grammar anchors */
+    --comment-bg:              45 60% 20%;    /* popover text-box bg (opaque) */
+    --comment-text-fg:         45 70% 80%;    /* popover text-box fg */
+
+    /* Comment popover remove button (distinct dark red, not same as diff-reject) */
+    --comment-remove-btn:      0 60% 40%;
+    --comment-remove-btn-hover:0 60% 35%;
+
+    /* AI suggestion marks (violet-270 70%) */
+    --ai-suggest-mark-bg:      270 70% 70%;   /* mark highlight bg (lightness 70) */
+    --ai-suggest:              270 70% 50%;   /* mark border */
+    --ai-suggest-reply-bg:     270 70% 60%;   /* [data-ai-user-reply] bg */
+    --ai-suggest-reply-border: 270 70% 50%;   /* [data-ai-user-reply] border */
+
+    /* AI suggestion popover — suggested text block (green-145) */
+    --ai-suggest-text-bg:      145 60% 20%;   /* opaque bg */
+    --ai-suggest-text-fg:      145 70% 75%;   /* fg text */
+    --ai-suggest-text-border:  145 70% 45%;   /* left border accent */
+
+    /* AI suggestion popover — accept button (green-145, distinct hue from diff-accept) */
+    --ai-suggest-accept-btn:   145 60% 40%;
+    --ai-suggest-accept-hover: 145 60% 35%;
+
+    /* AI action buttons: feedback / process / submit (violet-270 60%) */
+    --ai-action:               270 60% 50%;
+    --ai-action-hover:         270 60% 45%;
+    --ai-action-muted:         270 60% 30%;   /* feedback-text bg (lower lightness) */
+    --ai-action-link:          270 60% 60%;   /* edit-feedback-btn text */
+    --ai-action-link-hover:    270 60% 70%;
+
+    /* AI annotations — violet-262 gradient */
+    --annotation:              262 83% 58%;   /* primary gradient start + border */
+    --annotation-end:          270 70% 50%;   /* gradient tail endpoint */
+    --annotation-shimmer:      262 90% 70%;   /* hover shimmer highlight */
+
+    /* Pending annotation state (pink-330) */
+    --pending:                 330 81% 60%;   /* dashed border */
+
+    /* Word-diff removed highlight (pink-330 60%) */
+    --pending-word:            330 60% 50%;
+
+    /* Word-diff added highlight (violet-262 70%) */
+    --diff-word-added:         262 70% 55%;
+
+    /* Spell / grammar underlines */
+    --spell-error:             0 75% 55%;
+    --grammar-error:           45 80% 50%;
+
+    /* Frontmatter pending overlay (green-145) */
+    --frontmatter-bg:          145 60% 20%;   /* overlay background */
+    --frontmatter-ins:         145 70% 45%;   /* border, label */
+    --frontmatter-val:         145 60% 55%;   /* value text */
+    --frontmatter-accept-btn:  145 60% 40%;
+    --frontmatter-accept-hover:145 60% 35%;
   }
 
   .dark {
@@ -46,6 +133,52 @@
     --border: 240 3.7% 15.9%;
     --input: 240 3.7% 15.9%;
     --ring: 240 4.9% 83.9%;
+
+    /* Feature-semantic token overrides — Mono dark baseline.
+       Every value equals the original hardcoded dark literal exactly. */
+
+    --diff-suggest:            210 100% 60%;  /* dark: border brighter */
+    /* --diff-suggest-dark-bg not overridden here; it IS the dark-specific value */
+
+    --diff-del:                0 70% 65%;     /* dark: text lighter */
+    --diff-del-bg-dark:        0 70% 40%;     /* (no change — already dark-specific) */
+
+    --diff-ins:                140 60% 60%;   /* dark: text lighter */
+    --diff-ins-bg:             140 60% 40%;   /* (bg tint light stays same hue) */
+    --diff-ins-bg-dark:        140 60% 30%;   /* (no change — already dark-specific) */
+
+    /* buttons unchanged in dark */
+
+    --comment-mark-bg:         45 100% 40%;   /* dark: mark bg dimmer (was 70% light → 40% dark) */
+    --comment:                 45 100% 60%;   /* dark: border brighter */
+    /* comment-bg / comment-text-fg: same in dark — popover is always dark-styled */
+    --comment-text-fg:         45 70% 80%;    /* unchanged */
+
+    /* ai-suggest-mark-bg in dark: original was 270 70% 40% */
+    --ai-suggest-mark-bg:      270 70% 40%;
+    --ai-suggest:              270 70% 60%;   /* dark: border brighter */
+    --ai-suggest-reply-bg:     270 70% 45%;   /* dark: [data-ai-user-reply] bg */
+    --ai-suggest-reply-border: 270 70% 65%;   /* dark: [data-ai-user-reply] border */
+
+    /* ai-suggest-text-bg unchanged (dark popover stays dark) */
+
+    /* annotation */
+    --annotation:              262 70% 60%;   /* dark: lighter */
+    --annotation-end:          270 60% 45%;   /* dark: gradient tail */
+    --annotation-shimmer:      262 80% 65%;   /* dark: shimmer */
+
+    --pending:                 330 70% 55%;   /* dark: slightly muted */
+    --pending-word:            330 55% 45%;   /* dark: word-diff */
+
+    --diff-word-added:         262 65% 50%;   /* dark: word-diff added */
+
+    --spell-error:             0 80% 60%;     /* dark: brighter */
+    --grammar-error:           45 85% 55%;    /* dark: brighter */
+
+    --frontmatter-bg:          145 60% 15%;   /* dark: overlay bg (dimmer) */
+    --frontmatter-ins:         145 70% 55%;   /* dark: label color (was 55%) */
+    --frontmatter-val:         145 60% 65%;   /* dark: value text (was 65%) */
+    /* frontmatter-accept-btn unchanged in dark */
   }
 
   .termy-green-dark {
@@ -90,6 +223,228 @@
     --border: 120 25% 80%;
     --input: 120 25% 80%;
     --ring: 120 60% 25%;
+  }
+
+  /* v1.2 Appearance themes — generated from docs/design/v1.2-appearance/themes.css
+     via docs/design/v1.2-appearance/convert-tokens.mjs. Re-run that script after
+     editing the source --t-* values. Mono is the implicit baseline (:root + .dark
+     above). --destructive, --destructive-foreground, --radius inherit via cascade. */
+
+  .theme-prose {
+    --background: 36 40.5% 92.7%;
+    --foreground: 40 13% 9%;
+    --card: 40 65.2% 95.5%;
+    --card-foreground: 40 13% 9%;
+    --popover: 40 65.2% 95.5%;
+    --popover-foreground: 40 13% 9%;
+    --primary: 39.1 42.6% 42.4%;
+    --primary-foreground: 36 40.5% 92.7%;
+    --secondary: 39.1 36.5% 87.6%;
+    --secondary-foreground: 40 13% 9%;
+    --muted: 39.1 36.5% 87.6%;
+    --muted-foreground: 36.9 7.8% 32.7%;
+    --accent: 36.5 36.5% 87.6%;
+    --accent-foreground: 39.1 42.6% 42.4%;
+    --border: 39.4 29.1% 78.4%;
+    --input: 39.4 29.1% 78.4%;
+    --ring: 39.1 42.6% 42.4%;
+
+    /* Prose feature tokens — warm/gold tints for parchment theme */
+    --diff-suggest:            210 80% 48%;
+    --diff-suggest-dark-bg:    210 80% 25%;
+    --diff-del:                5 65% 48%;
+    --diff-del-bg-dark:        5 65% 35%;
+    --diff-ins:                142 50% 32%;
+    --diff-ins-bg:             142 50% 38%;
+    --diff-ins-bg-dark:        142 50% 25%;
+    --diff-accept-btn:         142 50% 40%;
+    --diff-accept-btn-hover:   142 50% 33%;
+    --diff-reject-btn:         5 60% 47%;
+    --diff-reject-btn-hover:   5 60% 40%;
+    --comment-mark-bg:         40 90% 68%;
+    --comment:                 40 90% 45%;
+    --comment-bg:              40 55% 18%;
+    --comment-text-fg:         40 65% 78%;
+    --comment-remove-btn:      5 58% 38%;
+    --comment-remove-btn-hover:5 58% 32%;
+    --ai-suggest-mark-bg:      280 55% 68%;
+    --ai-suggest:              280 55% 50%;
+    --ai-suggest-reply-bg:     280 55% 58%;
+    --ai-suggest-reply-border: 280 55% 48%;
+    --ai-suggest-text-bg:      148 50% 18%;
+    --ai-suggest-text-fg:      148 60% 73%;
+    --ai-suggest-text-border:  148 60% 42%;
+    --ai-suggest-accept-btn:   148 50% 38%;
+    --ai-suggest-accept-hover: 148 50% 32%;
+    --ai-action:               280 55% 48%;
+    --ai-action-hover:         280 55% 42%;
+    --ai-action-muted:         280 55% 28%;
+    --ai-action-link:          280 55% 58%;
+    --ai-action-link-hover:    280 55% 68%;
+    --annotation:              268 75% 55%;
+    --annotation-end:          280 60% 48%;
+    --annotation-shimmer:      268 85% 68%;
+    --pending:                 340 70% 57%;
+    --pending-word:            340 55% 48%;
+    --diff-word-added:         268 65% 53%;
+    --spell-error:             5 70% 52%;
+    --grammar-error:           40 75% 45%;
+    --frontmatter-bg:          148 50% 18%;
+    --frontmatter-ins:         148 60% 42%;
+    --frontmatter-val:         148 50% 53%;
+    --frontmatter-accept-btn:  148 50% 38%;
+    --frontmatter-accept-hover:148 50% 32%;
+  }
+
+  .theme-prose.dark {
+    --background: 0 0% 3.9%;
+    --foreground: 33.3 24.3% 85.5%;
+    --card: 42.9 18.9% 7.3%;
+    --card-foreground: 33.3 24.3% 85.5%;
+    --popover: 42.9 18.9% 7.3%;
+    --popover-foreground: 33.3 24.3% 85.5%;
+    --primary: 40.4 50% 56.9%;
+    --primary-foreground: 0 0% 3.9%;
+    --secondary: 40 13% 4.5%;
+    --secondary-foreground: 33.3 24.3% 85.5%;
+    --muted: 40 13% 4.5%;
+    --muted-foreground: 32.3 5.5% 46.5%;
+    --accent: 38.2 23.4% 9.2%;
+    --accent-foreground: 40.4 50% 56.9%;
+    --border: 0 0% 11.4%;
+    --input: 0 0% 11.4%;
+    --ring: 40.4 50% 56.9%;
+
+    /* Prose dark feature tokens — warm/gold tints on dark parchment */
+    --diff-suggest:            210 85% 62%;
+    --diff-del:                5 65% 62%;
+    --diff-ins:                142 55% 58%;
+    --comment-mark-bg:         40 90% 40%;
+    --comment:                 40 90% 58%;
+    --ai-suggest-mark-bg:      280 60% 40%;
+    --ai-suggest:              280 60% 62%;
+    --ai-suggest-reply-bg:     280 60% 45%;
+    --ai-suggest-reply-border: 280 60% 65%;
+    --annotation:              268 70% 62%;
+    --annotation-end:          280 60% 47%;
+    --annotation-shimmer:      268 80% 67%;
+    --pending:                 340 70% 57%;
+    --pending-word:            340 55% 47%;
+    --diff-word-added:         268 60% 50%;
+    --spell-error:             5 75% 58%;
+    --grammar-error:           40 80% 55%;
+    --frontmatter-bg:          148 50% 15%;
+    --frontmatter-ins:         148 60% 55%;
+    --frontmatter-val:         148 50% 63%;
+  }
+
+  .theme-termy {
+    --background: 82.1 40.4% 90.8%;
+    --foreground: 123.8 53.3% 11.8%;
+    --card: 80 45.5% 93.5%;
+    --card-foreground: 123.8 53.3% 11.8%;
+    --popover: 80 45.5% 93.5%;
+    --popover-foreground: 123.8 53.3% 11.8%;
+    --primary: 137.7 57.4% 26.7%;
+    --primary-foreground: 82.1 40.4% 90.8%;
+    --secondary: 80.7 36.7% 84.5%;
+    --secondary-foreground: 123.8 53.3% 11.8%;
+    --muted: 80.7 36.7% 84.5%;
+    --muted-foreground: 124.5 30.8% 25.5%;
+    --accent: 96.5 29.9% 84.9%;
+    --accent-foreground: 137.7 57.4% 26.7%;
+    --border: 87.8 28.3% 71.6%;
+    --input: 87.8 28.3% 71.6%;
+    --ring: 137.7 57.4% 26.7%;
+
+    /* Termy feature tokens — phosphor/green tints for terminal theme */
+    --diff-suggest:            160 70% 38%;
+    --diff-suggest-dark-bg:    160 70% 22%;
+    --diff-del:                0 65% 45%;
+    --diff-del-bg-dark:        0 65% 32%;
+    --diff-ins:                130 55% 30%;
+    --diff-ins-bg:             130 55% 36%;
+    --diff-ins-bg-dark:        130 55% 22%;
+    --diff-accept-btn:         130 55% 38%;
+    --diff-accept-btn-hover:   130 55% 32%;
+    --diff-reject-btn:         0 60% 45%;
+    --diff-reject-btn-hover:   0 60% 38%;
+    --comment-mark-bg:         80 70% 68%;
+    --comment:                 80 70% 38%;
+    --comment-bg:              80 45% 18%;
+    --comment-text-fg:         80 60% 78%;
+    --comment-remove-btn:      0 58% 38%;
+    --comment-remove-btn-hover:0 58% 32%;
+    --ai-suggest-mark-bg:      160 55% 68%;
+    --ai-suggest:              160 55% 38%;
+    --ai-suggest-reply-bg:     160 55% 58%;
+    --ai-suggest-reply-border: 160 55% 38%;
+    --ai-suggest-text-bg:      135 50% 18%;
+    --ai-suggest-text-fg:      135 60% 73%;
+    --ai-suggest-text-border:  135 60% 35%;
+    --ai-suggest-accept-btn:   135 50% 35%;
+    --ai-suggest-accept-hover: 135 50% 28%;
+    --ai-action:               155 50% 36%;
+    --ai-action-hover:         155 50% 30%;
+    --ai-action-muted:         155 50% 22%;
+    --ai-action-link:          155 50% 48%;
+    --ai-action-link-hover:    155 50% 58%;
+    --annotation:              155 65% 38%;
+    --annotation-end:          160 55% 35%;
+    --annotation-shimmer:      155 80% 55%;
+    --pending:                 100 55% 42%;
+    --pending-word:            100 45% 38%;
+    --diff-word-added:         155 60% 38%;
+    --spell-error:             0 70% 48%;
+    --grammar-error:           80 65% 40%;
+    --frontmatter-bg:          135 50% 18%;
+    --frontmatter-ins:         135 60% 35%;
+    --frontmatter-val:         135 50% 48%;
+    --frontmatter-accept-btn:  135 50% 35%;
+    --frontmatter-accept-hover:135 50% 28%;
+  }
+
+  .theme-termy.dark {
+    --background: 160 60% 2%;
+    --foreground: 141.9 69.2% 58%;
+    --card: 132 45.5% 4.3%;
+    --card-foreground: 141.9 69.2% 58%;
+    --popover: 132 45.5% 4.3%;
+    --popover-foreground: 141.9 69.2% 58%;
+    --primary: 149.9 100% 50%;
+    --primary-foreground: 160 60% 2%;
+    --secondary: 156 71.4% 1.4%;
+    --secondary-foreground: 141.9 69.2% 58%;
+    --muted: 156 71.4% 1.4%;
+    --muted-foreground: 142.1 70.6% 45.3%;
+    --accent: 151 88.6% 6.9%;
+    --accent-foreground: 149.9 100% 50%;
+    --border: 146.1 53.5% 8.4%;
+    --input: 146.1 53.5% 8.4%;
+    --ring: 149.9 100% 50%;
+
+    /* Termy dark feature tokens — phosphor/green on black terminal */
+    --diff-suggest:            160 80% 55%;
+    --diff-del:                0 70% 55%;
+    --diff-ins:                130 70% 55%;
+    --comment-mark-bg:         80 90% 40%;
+    --comment:                 80 90% 55%;
+    --comment-bg:              80 45% 12%;
+    --ai-suggest-mark-bg:      155 75% 40%;
+    --ai-suggest:              155 75% 52%;
+    --ai-suggest-reply-bg:     155 75% 45%;
+    --ai-suggest-reply-border: 155 75% 65%;
+    --annotation:              150 80% 48%;
+    --annotation-end:          155 65% 42%;
+    --annotation-shimmer:      150 90% 65%;
+    --pending:                 100 65% 52%;
+    --pending-word:            100 55% 45%;
+    --diff-word-added:         150 70% 45%;
+    --spell-error:             0 75% 58%;
+    --grammar-error:           80 80% 55%;
+    --frontmatter-bg:          140 55% 12%;
+    --frontmatter-ins:         140 75% 50%;
+    --frontmatter-val:         140 60% 60%;
   }
 }
 
@@ -152,6 +507,14 @@
 }
 .source-editor .cm-focused {
   outline: none;
+}
+/* Match CodeMirror's selection to the WYSIWYG ::selection token so source mode
+   and WYSIWYG highlight identically. CM's theme sets this with high specificity,
+   hence !important. */
+.source-editor .cm-selectionBackground,
+.source-editor .cm-focused .cm-selectionBackground,
+.source-editor .cm-content ::selection {
+  background: hsl(var(--primary) / 0.2) !important;
 }
 
 /* Fold all/unfold all toggle — flex child of .cm-editor, above .cm-scroller */
@@ -389,6 +752,33 @@
   font-style: italic;
 }
 
+/* Prose theme — editor typography (#499 PR 4).
+   Scoped to `.theme-prose .prose-editor` so it ONLY affects the editor body
+   under the Prose theme — chat, settings, diff views, and other themes are
+   untouched. The editor root class is `.prose-editor` (see Editor.tsx), not
+   `.ProseMirror`.
+
+   No Fraunces in the editor — all text (body + headings) stays IBM Plex Mono.
+   The Prose theme's editor touches are color accents only: gold blockquote
+   border + gold-on-amber inline code. */
+
+/* Blockquote: gold accent border only — body text stays Plex Mono (its base
+   rule already sets font-style: italic + muted color). */
+.theme-prose .prose-editor blockquote {
+  border-left-color: hsl(var(--primary));
+}
+
+/* Inline code: gold on a warm amber wash. pre code (code blocks) is reset below. */
+.theme-prose .prose-editor code {
+  background: hsl(var(--primary) / 0.13);
+  color: hsl(var(--primary));
+}
+
+.theme-prose .prose-editor pre code {
+  background: none;
+  color: inherit;
+}
+
 /* Focus styles */
 .focus-visible:focus {
   outline: 2px solid hsl(var(--ring));
@@ -440,14 +830,14 @@
   flex-wrap: nowrap;
   border-radius: 0.25em;
   padding: 0.125em 0.25em;
-  border: 1px solid hsl(210 100% 50% / 0.3);
-  background: hsl(210 100% 50% / 0.1);
+  border: 1px solid hsl(var(--diff-suggest) / 0.3);
+  background: hsl(var(--diff-suggest) / 0.1);
   margin: 0 0.125em;
 }
 
 .dark .prose-editor .diff-suggestion {
-  border-color: hsl(210 100% 60% / 0.3);
-  background: hsl(210 100% 30% / 0.2);
+  border-color: hsl(var(--diff-suggest) / 0.3);
+  background: hsl(var(--diff-suggest-dark-bg) / 0.2);
 }
 
 /* Visual separator between consecutive diffs */
@@ -457,28 +847,28 @@
 
 .prose-editor .diff-suggestion [data-diff-suggestion-old] {
   text-decoration: line-through;
-  color: hsl(0 70% 50%);
-  background: hsl(0 70% 50% / 0.15);
+  color: hsl(var(--diff-del));
+  background: hsl(var(--diff-del) / 0.15);
   padding: 0 0.1em;
   border-radius: 0.125em;
 }
 
 .dark .prose-editor .diff-suggestion [data-diff-suggestion-old] {
-  color: hsl(0 70% 65%);
-  background: hsl(0 70% 40% / 0.25);
+  color: hsl(var(--diff-del));
+  background: hsl(var(--diff-del-bg-dark) / 0.25);
 }
 
 .prose-editor .diff-suggestion [data-diff-suggestion-new] {
-  color: hsl(140 60% 35%);
-  background: hsl(140 60% 40% / 0.15);
+  color: hsl(var(--diff-ins));
+  background: hsl(var(--diff-ins-bg) / 0.15);
   padding: 0 0.1em;
   border-radius: 0.125em;
   margin-left: 0.25em;
 }
 
 .dark .prose-editor .diff-suggestion [data-diff-suggestion-new] {
-  color: hsl(140 60% 60%);
-  background: hsl(140 60% 30% / 0.25);
+  color: hsl(var(--diff-ins));
+  background: hsl(var(--diff-ins-bg-dark) / 0.25);
 }
 
 .prose-editor .diff-suggestion-content {
@@ -505,27 +895,27 @@
 }
 
 .prose-editor .diff-accept-btn {
-  background: hsl(140 60% 45%);
+  background: hsl(var(--diff-accept-btn));
   color: white;
 }
 
 .prose-editor .diff-accept-btn:hover {
-  background: hsl(140 60% 38%);
+  background: hsl(var(--diff-accept-btn-hover));
 }
 
 .prose-editor .diff-reject-btn {
-  background: hsl(0 65% 50%);
+  background: hsl(var(--diff-reject-btn));
   color: white;
 }
 
 .prose-editor .diff-reject-btn:hover {
-  background: hsl(0 65% 42%);
+  background: hsl(var(--diff-reject-btn-hover));
 }
 
 /* Comment Marks */
 .prose-editor .comment-mark {
-  background: hsl(45 100% 70% / 0.4);
-  border-bottom: 2px solid hsl(45 100% 50%);
+  background: hsl(var(--comment-mark-bg) / 0.4);
+  border-bottom: 2px solid hsl(var(--comment));
   padding: 0 0.1em;
   border-radius: 0.125em;
   cursor: pointer;
@@ -533,16 +923,16 @@
 }
 
 .dark .prose-editor .comment-mark {
-  background: hsl(45 100% 40% / 0.3);
-  border-bottom-color: hsl(45 100% 60%);
+  background: hsl(var(--comment-mark-bg) / 0.3);
+  border-bottom-color: hsl(var(--comment));
 }
 
 .prose-editor .comment-mark:hover {
-  background: hsl(45 100% 70% / 0.6);
+  background: hsl(var(--comment-mark-bg) / 0.6);
 }
 
 .dark .prose-editor .comment-mark:hover {
-  background: hsl(45 100% 40% / 0.5);
+  background: hsl(var(--comment-mark-bg) / 0.5);
 }
 
 /* Comment Popover (click to open) */
@@ -564,15 +954,15 @@
 }
 
 .comment-popover .comment-text {
-  background: hsl(45 60% 20%);
-  color: hsl(45 70% 80%);
+  background: hsl(var(--comment-bg));
+  color: hsl(var(--comment-text-fg));
   padding: 0.75rem 1rem;
   border-radius: 0.375rem;
   font-family: var(--font-mono);
   font-size: 0.875rem;
   line-height: 1.5;
   margin-bottom: 1rem;
-  border-left: 3px solid hsl(45 100% 50%);
+  border-left: 3px solid hsl(var(--comment));
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -599,23 +989,23 @@
 }
 
 .comment-popover .process-btn {
-  background: hsl(270 60% 50%);
+  background: hsl(var(--ai-action));
   color: white;
   border: none;
 }
 
 .comment-popover .process-btn:hover {
-  background: hsl(270 60% 45%);
+  background: hsl(var(--ai-action-hover));
 }
 
 .comment-popover .remove-btn {
-  background: hsl(0 60% 40%);
+  background: hsl(var(--comment-remove-btn));
   color: white;
   border: none;
 }
 
 .comment-popover .remove-btn:hover {
-  background: hsl(0 60% 35%);
+  background: hsl(var(--comment-remove-btn-hover));
 }
 
 .comment-popover .close-btn {
@@ -630,8 +1020,8 @@
 
 /* AI Suggestion Marks - Purple highlighting for AI edit suggestions */
 .prose-editor .ai-suggestion-mark {
-  background: hsl(270 70% 70% / 0.4);
-  border-bottom: 2px solid hsl(270 70% 50%);
+  background: hsl(var(--ai-suggest-mark-bg) / 0.4);
+  border-bottom: 2px solid hsl(var(--ai-suggest));
   padding: 0 0.1em;
   border-radius: 0.125em;
   cursor: pointer;
@@ -639,16 +1029,16 @@
 }
 
 .dark .prose-editor .ai-suggestion-mark {
-  background: hsl(270 70% 40% / 0.3);
-  border-bottom-color: hsl(270 70% 60%);
+  background: hsl(var(--ai-suggest-mark-bg) / 0.3);
+  border-bottom-color: hsl(var(--ai-suggest));
 }
 
 .prose-editor .ai-suggestion-mark:hover {
-  background: hsl(270 70% 70% / 0.6);
+  background: hsl(var(--ai-suggest-mark-bg) / 0.6);
 }
 
 .dark .prose-editor .ai-suggestion-mark:hover {
-  background: hsl(270 70% 40% / 0.5);
+  background: hsl(var(--ai-suggest-mark-bg) / 0.5);
 }
 
 /* Hide AI annotations when toggled off */
@@ -699,15 +1089,15 @@
 }
 
 .ai-suggestion-popover .suggested-text {
-  background: hsl(145 60% 20%);
-  color: hsl(145 70% 75%);
+  background: hsl(var(--ai-suggest-text-bg));
+  color: hsl(var(--ai-suggest-text-fg));
   padding: 0.75rem 1rem;
   border-radius: 0.375rem;
   font-family: var(--font-mono);
   font-size: 0.875rem;
   line-height: 1.5;
   margin-bottom: 1rem;
-  border-left: 3px solid hsl(145 70% 45%);
+  border-left: 3px solid hsl(var(--ai-suggest-text-border));
 }
 
 .ai-suggestion-popover .explanation-label {
@@ -735,7 +1125,7 @@
   justify-content: center;
   gap: 0.5rem;
   padding: 0.5rem 1rem;
-  background: hsl(145 60% 40%);
+  background: hsl(var(--ai-suggest-accept-btn));
   color: white;
   border: none;
   border-radius: 0.375rem;
@@ -746,7 +1136,7 @@
 }
 
 .ai-suggestion-popover .accept-btn:hover {
-  background: hsl(145 60% 35%);
+  background: hsl(var(--ai-suggest-accept-hover));
 }
 
 .ai-suggestion-popover .reject-btn {
@@ -777,7 +1167,7 @@
   justify-content: center;
   gap: 0.5rem;
   padding: 0.5rem 1rem;
-  background: hsl(270 60% 50%);
+  background: hsl(var(--ai-action));
   color: white;
   border: none;
   border-radius: 0.375rem;
@@ -788,7 +1178,7 @@
 }
 
 .ai-suggestion-popover .feedback-btn:hover {
-  background: hsl(270 60% 45%);
+  background: hsl(var(--ai-action-hover));
 }
 
 /* Feedback section styles */
@@ -819,8 +1209,8 @@
 
 .ai-suggestion-popover .feedback-input:focus {
   outline: none;
-  border-color: hsl(270 60% 50%);
-  box-shadow: 0 0 0 2px hsl(270 60% 50% / 0.2);
+  border-color: hsl(var(--ai-action));
+  box-shadow: 0 0 0 2px hsl(var(--ai-action) / 0.2);
 }
 
 .ai-suggestion-popover .feedback-actions {
@@ -831,7 +1221,7 @@
 .ai-suggestion-popover .feedback-submit-btn {
   flex: 1;
   padding: 0.375rem 0.75rem;
-  background: hsl(270 60% 50%);
+  background: hsl(var(--ai-action));
   color: white;
   border: none;
   border-radius: 0.375rem;
@@ -842,7 +1232,7 @@
 }
 
 .ai-suggestion-popover .feedback-submit-btn:hover:not(:disabled) {
-  background: hsl(270 60% 45%);
+  background: hsl(var(--ai-action-hover));
 }
 
 .ai-suggestion-popover .feedback-submit-btn:disabled {
@@ -873,20 +1263,20 @@
 }
 
 .ai-suggestion-popover .feedback-text {
-  background: hsl(270 60% 30% / 0.2);
+  background: hsl(var(--ai-action-muted) / 0.2);
   color: hsl(var(--foreground));
   padding: 0.5rem 0.75rem;
   border-radius: 0.375rem;
   font-size: 0.875rem;
   line-height: 1.5;
   margin-bottom: 0.5rem;
-  border-left: 3px solid hsl(270 60% 50%);
+  border-left: 3px solid hsl(var(--ai-action));
 }
 
 .ai-suggestion-popover .edit-feedback-btn {
   padding: 0.25rem 0.5rem;
   background: transparent;
-  color: hsl(270 60% 60%);
+  color: hsl(var(--ai-action-link));
   border: none;
   font-size: 0.75rem;
   cursor: pointer;
@@ -894,19 +1284,19 @@
 }
 
 .ai-suggestion-popover .edit-feedback-btn:hover {
-  color: hsl(270 60% 70%);
+  color: hsl(var(--ai-action-link-hover));
 }
 
 /* Visual indicator for suggestions with pending feedback */
 .prose-editor .ai-suggestion-mark[data-ai-user-reply] {
-  background: hsl(270 70% 60% / 0.5);
-  border-bottom: 2px dashed hsl(270 70% 50%);
+  background: hsl(var(--ai-suggest-reply-bg) / 0.5);
+  border-bottom: 2px dashed hsl(var(--ai-suggest-reply-border));
   animation: pulse-feedback 2s ease-in-out infinite;
 }
 
 .dark .prose-editor .ai-suggestion-mark[data-ai-user-reply] {
-  background: hsl(270 70% 45% / 0.4);
-  border-bottom-color: hsl(270 70% 65%);
+  background: hsl(var(--ai-suggest-reply-bg) / 0.4);
+  border-bottom-color: hsl(var(--ai-suggest-reply-border));
 }
 
 @keyframes pulse-feedback {
@@ -916,32 +1306,32 @@
 
 /* Frontmatter pending overlay — shown when AI proposes frontmatter changes (#488) */
 .frontmatter-pending-overlay {
-  background: hsl(145 60% 20% / 0.25);
-  border-color: hsl(145 70% 45% / 0.6);
+  background: hsl(var(--frontmatter-bg) / 0.25);
+  border-color: hsl(var(--frontmatter-ins) / 0.6);
 }
 
 .dark .frontmatter-pending-overlay {
-  background: hsl(145 60% 15% / 0.35);
-  border-color: hsl(145 70% 40% / 0.5);
+  background: hsl(var(--frontmatter-bg) / 0.35);
+  border-color: hsl(var(--frontmatter-ins) / 0.5);
 }
 
 .frontmatter-pending-label {
-  color: hsl(145 70% 45%);
+  color: hsl(var(--frontmatter-ins));
   font-size: 0.6875rem;
   font-weight: 500;
   letter-spacing: 0.01em;
 }
 
 .dark .frontmatter-pending-label {
-  color: hsl(145 70% 55%);
+  color: hsl(var(--frontmatter-ins));
 }
 
 .frontmatter-pending-value {
-  color: hsl(145 60% 55%);
+  color: hsl(var(--frontmatter-val));
 }
 
 .dark .frontmatter-pending-value {
-  color: hsl(145 60% 65%);
+  color: hsl(var(--frontmatter-val));
 }
 
 .frontmatter-pending-accept-btn {
@@ -949,7 +1339,7 @@
   align-items: center;
   gap: 0.25rem;
   padding: 0.125rem 0.5rem;
-  background: hsl(145 60% 40%);
+  background: hsl(var(--frontmatter-accept-btn));
   color: white;
   border: none;
   border-radius: 0.25rem;
@@ -961,7 +1351,7 @@
 }
 
 .frontmatter-pending-accept-btn:hover {
-  background: hsl(145 60% 35%);
+  background: hsl(var(--frontmatter-accept-hover));
 }
 
 .frontmatter-pending-reject-btn {
@@ -986,23 +1376,23 @@
 
 /* Spell-check styling - more prominent squiggles */
 .prose-editor ::spelling-error {
-  text-decoration: wavy underline hsl(0 75% 55%);
+  text-decoration: wavy underline hsl(var(--spell-error));
   text-decoration-thickness: 2px;
   text-underline-offset: 3px;
 }
 
 .dark .prose-editor ::spelling-error {
-  text-decoration-color: hsl(0 80% 60%);
+  text-decoration-color: hsl(var(--spell-error));
 }
 
 .prose-editor ::grammar-error {
-  text-decoration: wavy underline hsl(45 80% 50%);
+  text-decoration: wavy underline hsl(var(--grammar-error));
   text-decoration-thickness: 2px;
   text-underline-offset: 3px;
 }
 
 .dark .prose-editor ::grammar-error {
-  text-decoration-color: hsl(45 85% 55%);
+  text-decoration-color: hsl(var(--grammar-error));
 }
 
 /* AI Annotations - Time-fading gradient visuals (Vercel/Linear inspired) */
@@ -1020,38 +1410,38 @@
 .prose-editor .ai-annotation-insertion {
   background: linear-gradient(
     135deg,
-    hsl(262 83% 58% / calc(var(--annotation-opacity) * 0.25)) 0%,
-    hsl(270 70% 50% / calc(var(--annotation-opacity) * 0.15)) 100%
+    hsl(var(--annotation) / calc(var(--annotation-opacity) * 0.25)) 0%,
+    hsl(var(--annotation-end) / calc(var(--annotation-opacity) * 0.15)) 100%
   );
-  border-bottom: 2px solid hsl(262 83% 58% / calc(var(--annotation-opacity) * 0.5));
+  border-bottom: 2px solid hsl(var(--annotation) / calc(var(--annotation-opacity) * 0.5));
 }
 
 .dark .prose-editor .ai-annotation-insertion {
   background: linear-gradient(
     135deg,
-    hsl(262 70% 50% / calc(var(--annotation-opacity) * 0.3)) 0%,
-    hsl(270 60% 45% / calc(var(--annotation-opacity) * 0.18)) 100%
+    hsl(var(--annotation) / calc(var(--annotation-opacity) * 0.3)) 0%,
+    hsl(var(--annotation-end) / calc(var(--annotation-opacity) * 0.18)) 100%
   );
-  border-bottom-color: hsl(262 70% 60% / calc(var(--annotation-opacity) * 0.6));
+  border-bottom-color: hsl(var(--annotation) / calc(var(--annotation-opacity) * 0.6));
 }
 
 /* Replacement type - violet gradient (for AI chat suggestions) */
 .prose-editor .ai-annotation-replacement {
   background: linear-gradient(
     135deg,
-    hsl(262 83% 58% / calc(var(--annotation-opacity) * 0.25)) 0%,
-    hsl(270 70% 50% / calc(var(--annotation-opacity) * 0.15)) 100%
+    hsl(var(--annotation) / calc(var(--annotation-opacity) * 0.25)) 0%,
+    hsl(var(--annotation-end) / calc(var(--annotation-opacity) * 0.15)) 100%
   );
-  border-bottom: 2px solid hsl(262 83% 58% / calc(var(--annotation-opacity) * 0.5));
+  border-bottom: 2px solid hsl(var(--annotation) / calc(var(--annotation-opacity) * 0.5));
 }
 
 .dark .prose-editor .ai-annotation-replacement {
   background: linear-gradient(
     135deg,
-    hsl(262 70% 50% / calc(var(--annotation-opacity) * 0.3)) 0%,
-    hsl(270 60% 45% / calc(var(--annotation-opacity) * 0.18)) 100%
+    hsl(var(--annotation) / calc(var(--annotation-opacity) * 0.3)) 0%,
+    hsl(var(--annotation-end) / calc(var(--annotation-opacity) * 0.18)) 100%
   );
-  border-bottom-color: hsl(262 70% 60% / calc(var(--annotation-opacity) * 0.6));
+  border-bottom-color: hsl(var(--annotation) / calc(var(--annotation-opacity) * 0.6));
 }
 
 /* Hover state - glow effect */
@@ -1070,11 +1460,11 @@
 .prose-editor .ai-annotation-insertion:hover {
   background: linear-gradient(
     90deg,
-    hsl(262 83% 58% / 0.2) 0%,
-    hsl(262 83% 58% / 0.2) 40%,
-    hsl(262 90% 70% / 0.4) 50%,
-    hsl(262 83% 58% / 0.2) 60%,
-    hsl(262 83% 58% / 0.2) 100%
+    hsl(var(--annotation) / 0.2) 0%,
+    hsl(var(--annotation) / 0.2) 40%,
+    hsl(var(--annotation-shimmer) / 0.4) 50%,
+    hsl(var(--annotation) / 0.2) 60%,
+    hsl(var(--annotation) / 0.2) 100%
   );
   background-size: 200% 100%;
   animation: shimmer-bg 2s ease-in-out infinite;
@@ -1083,11 +1473,11 @@
 .dark .prose-editor .ai-annotation-insertion:hover {
   background: linear-gradient(
     90deg,
-    hsl(262 70% 50% / 0.25) 0%,
-    hsl(262 70% 50% / 0.25) 40%,
-    hsl(262 80% 65% / 0.45) 50%,
-    hsl(262 70% 50% / 0.25) 60%,
-    hsl(262 70% 50% / 0.25) 100%
+    hsl(var(--annotation) / 0.25) 0%,
+    hsl(var(--annotation) / 0.25) 40%,
+    hsl(var(--annotation-shimmer) / 0.45) 50%,
+    hsl(var(--annotation) / 0.25) 60%,
+    hsl(var(--annotation) / 0.25) 100%
   );
   background-size: 200% 100%;
   animation: shimmer-bg 2s ease-in-out infinite;
@@ -1097,11 +1487,11 @@
 .prose-editor .ai-annotation-replacement:hover {
   background: linear-gradient(
     90deg,
-    hsl(262 83% 58% / 0.2) 0%,
-    hsl(262 83% 58% / 0.2) 40%,
-    hsl(262 90% 70% / 0.4) 50%,
-    hsl(262 83% 58% / 0.2) 60%,
-    hsl(262 83% 58% / 0.2) 100%
+    hsl(var(--annotation) / 0.2) 0%,
+    hsl(var(--annotation) / 0.2) 40%,
+    hsl(var(--annotation-shimmer) / 0.4) 50%,
+    hsl(var(--annotation) / 0.2) 60%,
+    hsl(var(--annotation) / 0.2) 100%
   );
   background-size: 200% 100%;
   animation: shimmer-bg 2s ease-in-out infinite;
@@ -1110,11 +1500,11 @@
 .dark .prose-editor .ai-annotation-replacement:hover {
   background: linear-gradient(
     90deg,
-    hsl(262 70% 50% / 0.25) 0%,
-    hsl(262 70% 50% / 0.25) 40%,
-    hsl(262 80% 65% / 0.45) 50%,
-    hsl(262 70% 50% / 0.25) 60%,
-    hsl(262 70% 50% / 0.25) 100%
+    hsl(var(--annotation) / 0.25) 0%,
+    hsl(var(--annotation) / 0.25) 40%,
+    hsl(var(--annotation-shimmer) / 0.45) 50%,
+    hsl(var(--annotation) / 0.25) 60%,
+    hsl(var(--annotation) / 0.25) 100%
   );
   background-size: 200% 100%;
   animation: shimmer-bg 2s ease-in-out infinite;
@@ -1178,38 +1568,38 @@
 /* Pending suggestion state - pink dashed underline */
 .prose-editor .ai-annotation-pending {
   background: transparent;
-  border-bottom: 1px dashed hsl(330 81% 60% / 0.6);
+  border-bottom: 1px dashed hsl(var(--pending) / 0.6);
 }
 
 .dark .prose-editor .ai-annotation-pending {
-  border-bottom-color: hsl(330 70% 55% / 0.5);
+  border-bottom-color: hsl(var(--pending) / 0.5);
 }
 
 .prose-editor .ai-annotation-pending:hover {
   box-shadow:
-    0 0 4px hsl(330 81% 60% / calc(var(--annotation-opacity) * 0.3)),
-    0 0 8px hsl(330 81% 60% / calc(var(--annotation-opacity) * 0.15));
+    0 0 4px hsl(var(--pending) / calc(var(--annotation-opacity) * 0.3)),
+    0 0 8px hsl(var(--pending) / calc(var(--annotation-opacity) * 0.15));
 }
 
 /* Word-level diff highlighting within suggestions */
 .prose-editor .diff-word-removed {
-  background: hsl(330 60% 50% / 0.25);
+  background: hsl(var(--pending-word) / 0.25);
   border-radius: 0.125em;
   padding: 0 0.1em;
 }
 
 .dark .prose-editor .diff-word-removed {
-  background: hsl(330 55% 45% / 0.35);
+  background: hsl(var(--pending-word) / 0.35);
 }
 
 .prose-editor .diff-word-added {
-  background: hsl(262 70% 55% / 0.25);
+  background: hsl(var(--diff-word-added) / 0.25);
   border-radius: 0.125em;
   padding: 0 0.1em;
 }
 
 .dark .prose-editor .diff-word-added {
-  background: hsl(262 65% 50% / 0.35);
+  background: hsl(var(--diff-word-added) / 0.35);
 }
 
 /* Images */
@@ -1298,22 +1688,22 @@
 
 /* Search Highlight - FindBar multi-match highlighting */
 .prose-editor .search-match {
-  background-color: hsl(45 100% 50% / 0.3);
+  background-color: hsl(var(--comment) / 0.3);
   border-radius: 2px;
 }
 
 .dark .prose-editor .search-match {
-  background-color: hsl(45 100% 50% / 0.25);
+  background-color: hsl(var(--comment) / 0.25);
 }
 
 .prose-editor .search-match-current {
-  background-color: hsl(45 100% 50% / 0.7);
-  box-shadow: 0 0 0 1px hsl(45 100% 50% / 0.8);
+  background-color: hsl(var(--comment) / 0.7);
+  box-shadow: 0 0 0 1px hsl(var(--comment) / 0.8);
 }
 
 .dark .prose-editor .search-match-current {
-  background-color: hsl(45 100% 50% / 0.55);
-  box-shadow: 0 0 0 1px hsl(45 100% 60% / 0.7);
+  background-color: hsl(var(--comment) / 0.55);
+  box-shadow: 0 0 0 1px hsl(var(--comment) / 0.7);
 }
 
 /* Table styles */

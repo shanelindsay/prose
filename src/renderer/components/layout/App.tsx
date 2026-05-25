@@ -16,6 +16,7 @@ import { AboutDialog } from '../settings/AboutDialog'
 import { ModelPickerDialog } from '../ModelPickerDialog'
 import { AIConsentDialog } from '../AIConsentDialog'
 import { EnableLoggingDialog } from '../EnableLoggingDialog'
+import { MigrationToast } from './MigrationToast'
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -75,7 +76,7 @@ export function App() {
   const googleDocsEnabled = useGoogleDocsEnabled()
   const { openFile, openFileFromPath, saveFile, saveFileAs, newFile } = useEditor()
   const { createNewTab, openFileInTab } = useTabs()
-  const { setDialogOpen, isShortcutsDialogOpen, setShortcutsDialogOpen, isAboutDialogOpen, setAboutDialogOpen, isModelPickerOpen, setModelPickerOpen, settings, autosaveActive, isLoaded: settingsLoaded } = useSettings()
+  const { setDialogOpen, isShortcutsDialogOpen, setShortcutsDialogOpen, isAboutDialogOpen, setAboutDialogOpen, isModelPickerOpen, setModelPickerOpen, settings, effectiveTheme, autosaveActive, isLoaded: settingsLoaded } = useSettings()
   const [recoveryDialogOpen, setRecoveryDialogOpen] = useState(false)
   const [pendingDraft, setPendingDraft] = useState<DraftState | null>(null)
   const [pendingSession, setPendingSession] = useState<SessionState | null>(null)
@@ -920,7 +921,13 @@ export function App() {
   return (
     <PanelLayoutProvider value={panelLayout}>
     <TooltipProvider delayDuration={300}>
-      <div className="flex h-screen flex-col bg-background text-foreground">
+      <div
+        className={[
+          'flex h-screen flex-col bg-background text-foreground',
+          settings.appearance?.color === 'termy' && effectiveTheme === 'dark' ? 'termy-scanline-scope' : '',
+        ].filter(Boolean).join(' ')}
+        data-color={settings.appearance?.color}
+      >
         <Toolbar />
         <UpdateBanner />
 
@@ -982,6 +989,7 @@ export function App() {
         <DefaultHandlerPrompt />
         <AIConsentDialog />
         <EnableLoggingDialog />
+        <MigrationToast />
 
         {/* Google Docs Import Dialog */}
         <AlertDialog open={googleDocsEnabled && importDialogOpen} onOpenChange={(open) => {
