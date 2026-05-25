@@ -681,16 +681,19 @@ export function ChatInput({ onSend, isLoading, isStreaming, onStop }: ChatInputP
     return () => clearTimeout(timer)
   }, [])
 
-  // Auto-resize textarea
+  // Auto-resize textarea. Reset to the intrinsic single-line (rows=1) height,
+  // then grow to fit content. We only read scrollHeight when there IS content:
+  // for the empty state the intrinsic `auto` height is stable, whereas a
+  // scrollHeight read taken on mount races the chat panel's open transition
+  // (ChatPanel's `transition-all`) and can latch onto a stale, oversized value
+  // that never corrects until the first keystroke. Keeping empty on `auto`
+  // makes the resting height equal the single-line height — no layout jump.
   useEffect(() => {
-    if (textareaRef.current) {
-      if (!message) {
-        // When empty, clear inline style and let CSS h-6 control height
-        textareaRef.current.style.height = ''
-      } else {
-        textareaRef.current.style.height = 'auto'
-        textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 96)}px`
-      }
+    const textarea = textareaRef.current
+    if (!textarea) return
+    textarea.style.height = 'auto'
+    if (message) {
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 96)}px`
     }
   }, [message])
 
@@ -825,7 +828,7 @@ export function ChatInput({ onSend, isLoading, isStreaming, onStop }: ChatInputP
             onChange={(e) => setMessage(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={isInitializing ? "Loading..." : "/CMD"}
-            className="flex-1 h-6 max-h-[96px] resize-none bg-transparent font-mono text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none disabled:opacity-50"
+            className="flex-1 max-h-[96px] resize-none bg-transparent font-mono text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none disabled:opacity-50"
             disabled={isDisabled}
             rows={1}
           />
