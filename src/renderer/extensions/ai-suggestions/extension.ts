@@ -6,10 +6,66 @@
  */
 
 import { Mark, mergeAttributes } from '@tiptap/core'
+import type { Editor } from '@tiptap/core'
+import type { Schema, Slice } from '@tiptap/pm/model'
+import { DOMParser as ProseMirrorDOMParser } from '@tiptap/pm/model'
 import type { MarkSerializerSpec } from 'prosemirror-markdown'
 import type { AISuggestionOptions, AISuggestionData, SuggestionType } from './types'
 import { useAnnotationStore } from '../ai-annotations'
 import { createWordDiffAnnotations } from '../../lib/diffUtils'
+
+/**
+ * Returns true when `text` contains block-level structure that would be lost
+ * if inserted as a flat schema.text() node — specifically, when it has at
+ * least one blank-line paragraph separator (the CommonMark block delimiter).
+ *
+ * Single-run content (a sentence, a phrase, inline edits) never contains
+ * `\n\n`, so the fast path is the overwhelmingly common case.
+ */
+function isMultiBlock(text: string): boolean {
+  return text.includes('\n\n')
+}
+
+/**
+ * Parse a markdown string into a ProseMirror Slice using the editor's
+ * configured tiptap-markdown parser, preserving block structure (paragraphs,
+ * headings, lists, etc.). Used only for multi-block acceptance so that
+ * inline accepts keep the existing schema.text() path byte-for-byte.
+ *
+ * Returns null if the editor doesn't have a markdown parser in storage
+ * (e.g., during tests) so callers can fall back to the text path.
+ */
+function parseMarkdownToSlice(editor: Editor, schema: Schema, text: string): Slice | null {
+  const parser = editor.storage?.markdown?.parser
+  if (!parser || typeof parser.parse !== 'function') return null
+
+  // tiptap-markdown's storage.markdown.parser.parse() returns an HTML *string*
+  // (NOT a ProseMirror Node), verified against the bundled tiptap-markdown
+  // version — a 3-paragraph suggestion round-trips to 3 paragraph nodes. Parsed
+  // without inline:true so block structure (paragraph breaks, headings) survives.
+  // The typeof guard is a safety net: if a future library upgrade changes this to
+  // return a Node, we degrade gracefully to the flat schema.text() path (the
+  // multi-block fix stops firing, but nothing breaks). If that ever happens,
+  // handle the Node return here rather than relying on the silent fallback.
+  const html = parser.parse(text) as string
+  if (typeof html !== 'string') return null
+
+  // Parse the markdown-derived HTML into an inert, detached document via
+  // DOMParser instead of assigning innerHTML on a live element. Per the project
+  // security rule we never inject LLM-derived HTML into the live DOM; a document
+  // from DOMParser.parseFromString executes no scripts and fires no event
+  // handlers — we only read its structure to build a ProseMirror slice.
+  const parsedDoc = new DOMParser().parseFromString(html, 'text/html')
+
+  // parseSlice returns a slice with maxOpen ends (openStart/openEnd = 1 for a
+  // fragment of paragraphs). That open slice is exactly what makes tr.replace
+  // close the host node at markFrom, insert the inner blocks as siblings, and
+  // reopen at markTo — so a whole-paragraph replacement yields clean sibling
+  // paragraphs (verified: a 3-paragraph suggestion produces 3 paragraph nodes).
+  // Caveat: replacing a *heading's* content with multi-block text merges the
+  // first block into the heading; that's the related insert-anchor case in #571.
+  return ProseMirrorDOMParser.fromSchema(schema).parseSlice(parsedDoc.body)
+}
 
 /**
  * Markdown serializer for AI suggestion marks - outputs just the text content
@@ -279,7 +335,7 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
 
       acceptAISuggestion:
         (id) =>
-        ({ tr, state, dispatch }) => {
+        ({ tr, state, dispatch, editor }) => {
           if (!dispatch) return false
 
           const { doc } = state
@@ -312,9 +368,28 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
           // Remove the mark first
           tr.removeMark(markFrom, markTo, state.schema.marks.aiSuggestion)
 
-          // Replace the text with suggested text, or delete if empty
+          // Replace the text with suggested text, or delete if empty.
+          //
+          // Multi-block path (#578 structural fix): when suggestedText contains
+          // `\n\n` it has paragraph-level structure that schema.text() would
+          // collapse into a single inline run. Parse it through the
+          // tiptap-markdown parser instead to preserve block nodes.
+          //
+          // Single-block path (the overwhelmingly common case — a sentence or
+          // phrase edit): schema.text() is kept byte-for-byte so annotation
+          // position math and current behaviour are untouched.
           if (suggestedText.length > 0) {
-            tr.replaceWith(markFrom, markTo, state.schema.text(suggestedText))
+            if (isMultiBlock(suggestedText)) {
+              const slice = parseMarkdownToSlice(editor, state.schema, suggestedText)
+              if (slice) {
+                tr.replace(markFrom, markTo, slice)
+              } else {
+                // Parser unavailable — fall back to flat text rather than dropping the edit.
+                tr.replaceWith(markFrom, markTo, state.schema.text(suggestedText))
+              }
+            } else {
+              tr.replaceWith(markFrom, markTo, state.schema.text(suggestedText))
+            }
           } else {
             tr.delete(markFrom, markTo)
           }
@@ -338,7 +413,12 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
 
           dispatch(tr)
 
-          // Create word-level annotations after dispatch so positions reference the updated document.
+          // Create word-level annotations after dispatch so positions reference
+          // the updated document. tr.mapping.map() correctly accounts for the
+          // size of the inserted content regardless of whether it was inserted
+          // as a flat text node or a multi-block slice — the ReplaceStep maps
+          // positions at/after markTo forward by (inserted size − replaced size)
+          // in both cases.
           if (docId && suggestedText.length > 0) {
             const newFrom = tr.mapping.map(markFrom, -1)
             const newTo = tr.mapping.map(markTo, 1)
@@ -406,7 +486,7 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
 
       acceptAllAISuggestions:
         () =>
-        ({ tr, state, dispatch }) => {
+        ({ tr, state, dispatch, editor }) => {
           if (!dispatch) return false
 
           const { doc } = state
@@ -458,11 +538,24 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
           // Sort by position descending so we can apply from end to start
           suggestions.sort((a, b) => b.from - a.from)
 
-          // Apply each suggestion
+          // Apply each suggestion. Processing end-to-start means earlier
+          // suggestions' positions are not shifted by later ones.
+          // Multi-block suggestions are parsed through the markdown parser to
+          // preserve paragraph structure; single-run suggestions use the
+          // existing schema.text() path unchanged.
           for (const suggestion of suggestions) {
             tr.removeMark(suggestion.from, suggestion.to, state.schema.marks.aiSuggestion)
             if (suggestion.suggestedText.length > 0) {
-              tr.replaceWith(suggestion.from, suggestion.to, state.schema.text(suggestion.suggestedText))
+              if (isMultiBlock(suggestion.suggestedText)) {
+                const slice = parseMarkdownToSlice(editor, state.schema, suggestion.suggestedText)
+                if (slice) {
+                  tr.replace(suggestion.from, suggestion.to, slice)
+                } else {
+                  tr.replaceWith(suggestion.from, suggestion.to, state.schema.text(suggestion.suggestedText))
+                }
+              } else {
+                tr.replaceWith(suggestion.from, suggestion.to, state.schema.text(suggestion.suggestedText))
+              }
             } else {
               tr.delete(suggestion.from, suggestion.to)
             }
