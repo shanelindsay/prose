@@ -31,6 +31,7 @@
     --border: 240 5.9% 90%;
     --input: 240 5.9% 90%;
     --ring: 240 5.9% 10%;
+    --selection: 240 5.9% 10% / 0.18;
     --radius: 0.5rem;
 
     /* Feature-semantic color tokens — Mono light baseline.
@@ -133,6 +134,7 @@
     --border: 240 3.7% 15.9%;
     --input: 240 3.7% 15.9%;
     --ring: 240 4.9% 83.9%;
+    --selection: 0 0% 70% / 0.22;
 
     /* Feature-semantic token overrides — Mono dark baseline.
        Every value equals the original hardcoded dark literal exactly. */
@@ -201,6 +203,7 @@
     --border: 120 30% 15%;
     --input: 120 30% 15%;
     --ring: 120 100% 70%;
+    --selection: 120 60% 40% / 0.3;
   }
 
   .termy-green-light {
@@ -223,6 +226,7 @@
     --border: 120 25% 80%;
     --input: 120 25% 80%;
     --ring: 120 60% 25%;
+    --selection: 120 60% 25% / 0.18;
   }
 
   /* v1.2 Appearance themes — generated from docs/design/v1.2-appearance/themes.css
@@ -239,6 +243,7 @@
     --popover-foreground: 40 13% 9%;
     --primary: 39.1 42.6% 42.4%;
     --primary-foreground: 36 40.5% 92.7%;
+    --selection: 39.1 42.6% 42.4% / 0.2;
     --secondary: 39.1 36.5% 87.6%;
     --secondary-foreground: 40 13% 9%;
     --muted: 39.1 36.5% 87.6%;
@@ -305,6 +310,7 @@
     --popover-foreground: 33.3 24.3% 85.5%;
     --primary: 40.4 50% 56.9%;
     --primary-foreground: 0 0% 3.9%;
+    --selection: 40.4 50% 56.9% / 0.22;
     --secondary: 40 13% 4.5%;
     --secondary-foreground: 33.3 24.3% 85.5%;
     --muted: 40 13% 4.5%;
@@ -347,6 +353,7 @@
     --popover-foreground: 123.8 53.3% 11.8%;
     --primary: 137.7 57.4% 26.7%;
     --primary-foreground: 82.1 40.4% 90.8%;
+    --selection: 137.7 57.4% 26.7% / 0.2;
     --secondary: 80.7 36.7% 84.5%;
     --secondary-foreground: 123.8 53.3% 11.8%;
     --muted: 80.7 36.7% 84.5%;
@@ -413,6 +420,7 @@
     --popover-foreground: 141.9 69.2% 58%;
     --primary: 149.9 100% 50%;
     --primary-foreground: 160 60% 2%;
+    --selection: 149.9 100% 50% / 0.22;
     --secondary: 156 71.4% 1.4%;
     --secondary-foreground: 141.9 69.2% 58%;
     --muted: 156 71.4% 1.4%;
@@ -514,7 +522,7 @@
 .source-editor .cm-selectionBackground,
 .source-editor .cm-focused .cm-selectionBackground,
 .source-editor .cm-content ::selection {
-  background: hsl(var(--primary) / 0.2) !important;
+  background: hsl(var(--selection)) !important;
 }
 
 /* Fold all/unfold all toggle — flex child of .cm-editor, above .cm-scroller */
@@ -802,7 +810,7 @@
 
 /* Selection */
 ::selection {
-  background: hsl(var(--primary) / 0.2);
+  background: hsl(var(--selection));
 }
 
 /* Persistent visual selection while the editor is blurred.
