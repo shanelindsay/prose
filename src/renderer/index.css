@@ -31,6 +31,7 @@
     --border: 240 5.9% 90%;
     --input: 240 5.9% 90%;
     --ring: 240 5.9% 10%;
+    --selection: 240 5.9% 10% / 0.18;
     --radius: 0.5rem;
 
     /* Feature-semantic color tokens — Mono light baseline.
@@ -133,6 +134,7 @@
     --border: 240 3.7% 15.9%;
     --input: 240 3.7% 15.9%;
     --ring: 240 4.9% 83.9%;
+    --selection: 0 0% 70% / 0.22;
 
     /* Feature-semantic token overrides — Mono dark baseline.
        Every value equals the original hardcoded dark literal exactly. */
@@ -201,6 +203,7 @@
     --border: 120 30% 15%;
     --input: 120 30% 15%;
     --ring: 120 100% 70%;
+    --selection: 120 60% 40% / 0.3;
   }
 
   .termy-green-light {
@@ -223,6 +226,7 @@
     --border: 120 25% 80%;
     --input: 120 25% 80%;
     --ring: 120 60% 25%;
+    --selection: 120 60% 25% / 0.18;
   }
 
   /* v1.2 Appearance themes — generated from docs/design/v1.2-appearance/themes.css
@@ -239,6 +243,7 @@
     --popover-foreground: 40 13% 9%;
     --primary: 39.1 42.6% 42.4%;
     --primary-foreground: 36 40.5% 92.7%;
+    --selection: 39.1 42.6% 42.4% / 0.2;
     --secondary: 39.1 36.5% 87.6%;
     --secondary-foreground: 40 13% 9%;
     --muted: 39.1 36.5% 87.6%;
@@ -305,6 +310,7 @@
     --popover-foreground: 33.3 24.3% 85.5%;
     --primary: 40.4 50% 56.9%;
     --primary-foreground: 0 0% 3.9%;
+    --selection: 40.4 50% 56.9% / 0.22;
     --secondary: 40 13% 4.5%;
     --secondary-foreground: 33.3 24.3% 85.5%;
     --muted: 40 13% 4.5%;
@@ -347,6 +353,7 @@
     --popover-foreground: 123.8 53.3% 11.8%;
     --primary: 137.7 57.4% 26.7%;
     --primary-foreground: 82.1 40.4% 90.8%;
+    --selection: 137.7 57.4% 26.7% / 0.2;
     --secondary: 80.7 36.7% 84.5%;
     --secondary-foreground: 123.8 53.3% 11.8%;
     --muted: 80.7 36.7% 84.5%;
@@ -413,6 +420,7 @@
     --popover-foreground: 141.9 69.2% 58%;
     --primary: 149.9 100% 50%;
     --primary-foreground: 160 60% 2%;
+    --selection: 149.9 100% 50% / 0.22;
     --secondary: 156 71.4% 1.4%;
     --secondary-foreground: 141.9 69.2% 58%;
     --muted: 156 71.4% 1.4%;
@@ -514,7 +522,7 @@
 .source-editor .cm-selectionBackground,
 .source-editor .cm-focused .cm-selectionBackground,
 .source-editor .cm-content ::selection {
-  background: hsl(var(--primary) / 0.2) !important;
+  background: hsl(var(--selection)) !important;
 }
 
 /* Fold all/unfold all toggle — flex child of .cm-editor, above .cm-scroller */
@@ -802,7 +810,7 @@
 
 /* Selection */
 ::selection {
-  background: hsl(var(--primary) / 0.2);
+  background: hsl(var(--selection));
 }
 
 /* Persistent visual selection while the editor is blurred.
@@ -1634,6 +1642,165 @@
 .dark .prose-editor .search-match-current {
   background-color: hsl(var(--comment) / 0.55);
   box-shadow: 0 0 0 1px hsl(var(--comment) / 0.7);
+}
+
+/* Syntax highlighting — highlight.js token colors for CodeBlockLowlight.
+   Light mode: GitHub-inspired palette. Dark mode: muted-but-readable tokens
+   that contrast against the dark code block background (hsl(var(--muted))). */
+
+/* Base code block reset */
+.prose-editor pre[class*="language-"] code,
+.prose-editor pre code.hljs {
+  background: none;
+  padding: 0;
+}
+
+/* Light mode token colors */
+.prose-editor .hljs-comment,
+.prose-editor .hljs-quote {
+  color: #6a737d;
+  font-style: italic;
+}
+
+.prose-editor .hljs-keyword,
+.prose-editor .hljs-selector-tag,
+.prose-editor .hljs-literal {
+  color: #d73a49;
+}
+
+.prose-editor .hljs-string,
+.prose-editor .hljs-doctag {
+  color: #032f62;
+}
+
+.prose-editor .hljs-number,
+.prose-editor .hljs-regexp,
+.prose-editor .hljs-variable,
+.prose-editor .hljs-template-variable {
+  color: #005cc5;
+}
+
+.prose-editor .hljs-built_in,
+.prose-editor .hljs-builtin-name {
+  color: #e36209;
+}
+
+.prose-editor .hljs-type,
+.prose-editor .hljs-class .hljs-title {
+  color: #6f42c1;
+}
+
+.prose-editor .hljs-attr,
+.prose-editor .hljs-attribute {
+  color: #005cc5;
+}
+
+.prose-editor .hljs-title,
+.prose-editor .hljs-section,
+.prose-editor .hljs-name {
+  color: #6f42c1;
+  font-weight: 600;
+}
+
+.prose-editor .hljs-function,
+.prose-editor .hljs-title.hljs-function {
+  color: #6f42c1;
+}
+
+.prose-editor .hljs-tag {
+  color: #22863a;
+}
+
+.prose-editor .hljs-meta,
+.prose-editor .hljs-meta .hljs-string {
+  color: #6a737d;
+}
+
+.prose-editor .hljs-addition {
+  color: #22863a;
+  background: #f0fff4;
+}
+
+.prose-editor .hljs-deletion {
+  color: #b31d28;
+  background: #ffeef0;
+}
+
+.prose-editor .hljs-emphasis {
+  font-style: italic;
+}
+
+.prose-editor .hljs-strong {
+  font-weight: 600;
+}
+
+/* Dark mode token overrides */
+.dark .prose-editor .hljs-comment,
+.dark .prose-editor .hljs-quote {
+  color: #8b949e;
+}
+
+.dark .prose-editor .hljs-keyword,
+.dark .prose-editor .hljs-selector-tag,
+.dark .prose-editor .hljs-literal {
+  color: #ff7b72;
+}
+
+.dark .prose-editor .hljs-string,
+.dark .prose-editor .hljs-doctag {
+  color: #a5d6ff;
+}
+
+.dark .prose-editor .hljs-number,
+.dark .prose-editor .hljs-regexp,
+.dark .prose-editor .hljs-variable,
+.dark .prose-editor .hljs-template-variable {
+  color: #79c0ff;
+}
+
+.dark .prose-editor .hljs-built_in,
+.dark .prose-editor .hljs-builtin-name {
+  color: #ffa657;
+}
+
+.dark .prose-editor .hljs-type,
+.dark .prose-editor .hljs-class .hljs-title {
+  color: #d2a8ff;
+}
+
+.dark .prose-editor .hljs-attr,
+.dark .prose-editor .hljs-attribute {
+  color: #79c0ff;
+}
+
+.dark .prose-editor .hljs-title,
+.dark .prose-editor .hljs-section,
+.dark .prose-editor .hljs-name {
+  color: #d2a8ff;
+}
+
+.dark .prose-editor .hljs-function,
+.dark .prose-editor .hljs-title.hljs-function {
+  color: #d2a8ff;
+}
+
+.dark .prose-editor .hljs-tag {
+  color: #7ee787;
+}
+
+.dark .prose-editor .hljs-meta,
+.dark .prose-editor .hljs-meta .hljs-string {
+  color: #8b949e;
+}
+
+.dark .prose-editor .hljs-addition {
+  color: #aff5b4;
+  background: rgba(46, 160, 67, 0.15);
+}
+
+.dark .prose-editor .hljs-deletion {
+  color: #ffdcd7;
+  background: rgba(248, 81, 73, 0.15);
 }
 
 /* Table styles */

@@ -2,6 +2,20 @@ import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo } fr
 import { useEditor as useTipTapEditor, EditorContent } from '@tiptap/react'
 import { EditorState } from '@tiptap/pm/state'
 import StarterKit from '@tiptap/starter-kit'
+import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
+import { createLowlight } from 'lowlight'
+import javascript from 'highlight.js/lib/languages/javascript'
+import typescript from 'highlight.js/lib/languages/typescript'
+import json from 'highlight.js/lib/languages/json'
+import bash from 'highlight.js/lib/languages/bash'
+import python from 'highlight.js/lib/languages/python'
+import css from 'highlight.js/lib/languages/css'
+import xml from 'highlight.js/lib/languages/xml'
+import hlMarkdown from 'highlight.js/lib/languages/markdown'
+import rust from 'highlight.js/lib/languages/rust'
+import go from 'highlight.js/lib/languages/go'
+import sql from 'highlight.js/lib/languages/sql'
+import yaml from 'highlight.js/lib/languages/yaml'
 import Placeholder from '@tiptap/extension-placeholder'
 import Link from '@tiptap/extension-link'
 import Underline from '@tiptap/extension-underline'
@@ -46,9 +60,35 @@ import { AISuggestionPopover } from '../AISuggestionPopover'
 import { CommentPopover } from '../CommentPopover'
 import { getAISuggestions } from '../../extensions/ai-suggestions/extension'
 import type { AISuggestionData } from '../../extensions/ai-suggestions/types'
+import { useCommentStore } from '../../extensions/comments/store'
 import { LinkPopover } from './LinkPopover'
 import { SourceEditor, SourceEditorHandle } from './SourceEditor'
 import { getApi } from '../../lib/browserApi'
+
+// Lowlight instance with a curated set of common languages.
+// Using individual imports (not the full `common` preset) keeps the bundle
+// smaller: ~12 grammars vs the 37-language common set.
+const lowlight = createLowlight()
+lowlight.register('javascript', javascript)
+lowlight.register('js', javascript)
+lowlight.register('typescript', typescript)
+lowlight.register('ts', typescript)
+lowlight.register('json', json)
+lowlight.register('bash', bash)
+lowlight.register('sh', bash)
+lowlight.register('shell', bash)
+lowlight.register('python', python)
+lowlight.register('py', python)
+lowlight.register('css', css)
+lowlight.register('html', xml)
+lowlight.register('xml', xml)
+lowlight.register('markdown', hlMarkdown)
+lowlight.register('md', hlMarkdown)
+lowlight.register('rust', rust)
+lowlight.register('go', go)
+lowlight.register('sql', sql)
+lowlight.register('yaml', yaml)
+lowlight.register('yml', yaml)
 
 export function Editor() {
   const { document, setContent, openFile, saveFile } = useEditor()
@@ -135,7 +175,11 @@ export function Editor() {
       StarterKit.configure({
         heading: {
           levels: [1, 2, 3, 4, 5, 6]
-        }
+        },
+        codeBlock: false
+      }),
+      CodeBlockLowlight.configure({
+        lowlight,
       }),
       Placeholder.configure({
         placeholder: 'Start writing...'
@@ -329,14 +373,29 @@ export function Editor() {
     }
   }, [editor, document.content, document.documentId])
 
-  // Register editor instance in store for cross-component access
+  // Register editor instance in store for cross-component access.
+  // On cleanup (HMR remount or unmount), snapshot any live AI suggestions into
+  // the suggestion store so the next mount can replay them via the existing
+  // restoreAISuggestions useEffect — without touching the autosave pipeline.
   useEffect(() => {
     setEditorInstance(editor)
-    return () => setEditorInstance(null)
-  }, [editor, setEditorInstance])
+    return () => {
+      setEditorInstance(null)
+      // Snapshot live suggestions for HMR replay (option 2 from issue #531).
+      // Only runs when there is an editor with an active document — skips
+      // clean unmounts where document.documentId is empty (e.g., empty state).
+      if (editor && document.documentId) {
+        const liveSuggestions = getAISuggestions(editor)
+        if (liveSuggestions.length > 0) {
+          useSuggestionStore.getState().snapshotSuggestions(document.documentId, liveSuggestions)
+        }
+      }
+    }
+  }, [editor, setEditorInstance, document.documentId])
 
   // Cache selection on selectionUpdate for read_selection fallback
-  // This preserves the selection when chat input steals focus
+  // This preserves the selection when chat input steals focus.
+  // Also computes and pushes the live cursor position to editorStore (#564).
   useEffect(() => {
     if (!editor) return
 
@@ -443,6 +502,32 @@ export function Editor() {
       return () => clearTimeout(timer)
     }
   }, [editor, document.documentId, pendingSuggestions, suggestionStoreDocumentId])
+
+  // Subscribe to pending comment marks reactively for restoration
+  const pendingComments = useCommentStore((state) => state.pendingComments)
+  const commentStoreDocumentId = useCommentStore((state) => state.documentId)
+
+  // Restore comment marks when document changes or pending comments are loaded
+  useEffect(() => {
+    if (!editor || !document.documentId) return
+
+    // Only restore if there are pending comments and they match current document
+    if (pendingComments.length > 0 && commentStoreDocumentId === document.documentId) {
+      console.log(`[Editor:${SESSION_ID}] Restoring comments:`, {
+        documentId: document.documentId,
+        count: pendingComments.length
+      })
+
+      // Small delay to ensure editor content is fully loaded (same pattern as suggestions)
+      const timer = setTimeout(() => {
+        editor.commands.restoreComments(pendingComments)
+        // Clear pending comments from memory after restoring
+        useCommentStore.getState().clearComments()
+      }, 100)
+
+      return () => clearTimeout(timer)
+    }
+  }, [editor, document.documentId, pendingComments, commentStoreDocumentId])
 
   // Auto-focus editor once when document loads (not on every content change)
   const hasFocusedRef = useRef(false)
@@ -658,12 +743,6 @@ export function Editor() {
       e.preventDefault()
       if (editor) {
         editor.chain().focus().toggleUnderline().run()
-      }
-    } else if (isMod && e.altKey && e.key.toLowerCase() === 't') {
-      // Cmd+Option+T: Insert 3x3 table
-      e.preventDefault()
-      if (editor) {
-        editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
       }
     } else if (isMod && e.shiftKey && e.key.toLowerCase() === 'x') {
       // Cmd+Shift+X: Strikethrough

@@ -12,7 +12,7 @@ import { useAnnotationStore } from '../../../extensions/ai-annotations'
 import { createWordDiffAnnotations } from '../../diffUtils'
 import { findNodeById, findNodeByContent, getNodesWithIds, flattenNodes } from '../../../extensions/node-ids'
 import { generateId } from '../../persistence'
-import { getAISuggestions } from '../../../extensions/ai-suggestions'
+import { getAISuggestions, parseMarkdownToSlice } from '../../../extensions/ai-suggestions'
 import { parseMarkdown, FRONTMATTER_REGEX } from '../../markdown'
 import { load as parseYaml } from 'js-yaml'
 
@@ -320,6 +320,19 @@ export async function executeEdit(
   const contentStart = pos + 1
   const contentEnd = pos + node.nodeSize - 1
 
+  // Snapshot existing annotations within this node's range BEFORE the edit.
+  // applyInsertion issues a range-replace transaction; ProseMirror's position
+  // mapping collapses all positions inside the deleted range to the insertion
+  // point, which causes updatePositions() to drop every annotation covering the
+  // old node content — including those on unchanged neighbour words.  By
+  // capturing them now we can restore them at their remapped positions after
+  // the edit (see createWordDiffAnnotations for the remap logic).
+  const priorAnnotations = provenance && provenance.documentId && content.length > 0
+    ? useAnnotationStore.getState().annotations.filter(
+        (a) => a.documentId === provenance.documentId && a.to > contentStart && a.from < contentEnd
+      )
+    : []
+
   const sizeBefore = editor.state.doc.content.size
   // Range-replace via applyInsertion: the selection delete + first chunk
   // insert run in the same chain (atomic transaction). Subsequent rAF chunks
@@ -342,6 +355,7 @@ export async function executeEdit(
         messageId: provenance.messageId,
       },
       explanation: comment,
+      priorAnnotations,
     })
   }
 
@@ -458,6 +472,55 @@ export async function executeInsert(
       insertFrom =
         position === 'after_node' ? found.pos + found.node.nodeSize : found.pos
       insertTo = insertFrom
+
+      // Block-anchor insert: `insertFrom` is a between-block-nodes position at
+      // document depth. Routing through setTextSelection + insertContent would
+      // resolve that position to the nearest text cursor — biasing toward the
+      // anchor heading's inline content when the heading is the last block, or
+      // when bias resolution happens to snap backward. The inserted markdown
+      // would then land INSIDE the heading node (inheriting heading styling).
+      //
+      // Fix (#571): bypass the selection-based path entirely for after_node /
+      // before_node. Parse the markdown text into a proper ProseMirror Slice
+      // using the same parseMarkdownToSlice helper used by suggestion acceptance
+      // (#578). Then dispatch a direct tr.insert() at the exact between-block
+      // position, which guarantees the content is placed as a sibling block
+      // rather than merged into the anchor heading's inline content.
+      //
+      // When the parser is unavailable (tests / edge case), fall through to
+      // applyInsertion so there is always a useful result.
+      {
+        const slice = parseMarkdownToSlice(editor, editor.state.schema, text)
+        if (slice) {
+          const sizeBefore = editor.state.doc.content.size
+          try {
+            editor.view.dispatch(editor.state.tr.insert(insertFrom, slice.content))
+          } catch (e) {
+            return toolError(`Failed to insert text: ${e}`, 'INSERT_FAILED')
+          }
+          const sizeAfter = editor.state.doc.content.size
+
+          if (provenance && provenance.documentId && text.length > 0) {
+            const insertedSize = (sizeAfter - sizeBefore) + (insertTo - insertFrom)
+            createWordDiffAnnotations({
+              documentId: provenance.documentId,
+              originalText: '',
+              newText: text,
+              rangeFrom: insertFrom,
+              rangeTo: insertFrom + insertedSize,
+              provenance: {
+                model: provenance.model,
+                conversationId: provenance.conversationId,
+                messageId: provenance.messageId,
+              },
+              explanation: comment,
+            })
+          }
+
+          return toolSuccess({ inserted: true, position })
+        }
+        // Parser unavailable — fall through to the generic applyInsertion path.
+      }
       break
     }
     case 'cursor':
@@ -618,7 +681,25 @@ export function executeSuggestEdit(
   // Inserting an empty suggestion onto the nearest body node (usually H1)
   // was the root cause of the spurious heading highlight. Commit the staged
   // frontmatter here — frontmatter-only path doesn't need node lookup.
+  //
+  // #516 — tighten this fall-through: require nodeId === 'frontmatter' OR
+  // that the nodeId resolves to a real node. A bogus/stale nodeId should not
+  // silently pop the overlay alongside the error toast; it must return
+  // NODE_NOT_FOUND with guidance so the agent can correct its call.
   if (frontmatterToStage && !content.trim()) {
+    if (nodeId !== 'frontmatter') {
+      const resolvedForFm = findNodeById(editor.state.doc, nodeId)
+      if (!resolvedForFm) {
+        const available = flattenNodes(getNodesWithIds(editor.state.doc))
+        const nodeList = available.map(n => `${n.nodeId} (${n.type}: "${n.textContent.substring(0, 40)}")`).join(', ')
+        return toolError(
+          `Node with ID "${nodeId}" not found, and the content is frontmatter-only. ` +
+            `Use nodeId: 'frontmatter' to target the frontmatter block directly. ` +
+            `Available body nodes: [${nodeList}]`,
+          'NODE_NOT_FOUND'
+        )
+      }
+    }
     useEditorStore.getState().setPendingFrontmatter(frontmatterToStage)
     return toolSuccess({ suggested: true, suggestionId: generateId() })
   }
@@ -642,12 +723,6 @@ export function executeSuggestEdit(
   const { node, pos } = found
   const suggestionId = generateId()
 
-  // Node lookup succeeded — safe to commit staged frontmatter now, so a stale
-  // nodeId can't pop an unexpected overlay alongside the error toast.
-  if (frontmatterToStage) {
-    useEditorStore.getState().setPendingFrontmatter(frontmatterToStage)
-  }
-
   // Get the original text content
   const originalText = node.textContent
 
@@ -656,6 +731,51 @@ export function executeSuggestEdit(
   // "# New Title" for an H1), strip the matching prefix so the diff popover
   // shows just the visible text instead of the raw markdown source.
   const suggestedText = stripLeadingBlockMarkup(content, node.type.name, node.attrs?.level)
+
+  // Defensive guard (#578): a localized edit (e.g., fix a typo in the first
+  // sentence) must never silently overwrite the majority of a large node.
+  // When a node is large (≥200 chars) and the suggested replacement is smaller
+  // than 25% of the original, the suggestion is almost certainly a partial
+  // edit that would cause silent data loss if accepted. Surface an error
+  // instead so the agent can re-scope its call.
+  //
+  // This threshold intentionally does NOT fire for:
+  //   • Deletions/truncations where the agent explicitly targets a large node
+  //     and produces a replacement close to or greater than 25% of the original.
+  //   • Normal edits (typo fix on a short node, or a rewrite of comparable length).
+  //   • Empty suggestions (handled upstream — the check below would fire, but
+  //     empty is a separate case worth a distinct message).
+  //
+  // The root cause of #578: the entire body was collapsed into a single large
+  // paragraph node, so a "fix first sentence" call targeted 1800 chars but the
+  // model returned only ~80 chars — a 4% ratio, caught by this guard.
+  const LARGE_NODE_THRESHOLD = 200
+  const DESTRUCTIVE_RATIO_THRESHOLD = 0.25
+  if (
+    originalText.length >= LARGE_NODE_THRESHOLD &&
+    suggestedText.length > 0 &&
+    suggestedText.length < originalText.length * DESTRUCTIVE_RATIO_THRESHOLD
+  ) {
+    return toolError(
+      `Suggestion rejected: the proposed replacement (${suggestedText.length} chars) is less than ` +
+        `${Math.round(DESTRUCTIVE_RATIO_THRESHOLD * 100)}% of the target node's content ` +
+        `(${originalText.length} chars), which usually means a localized edit was about to ` +
+        `overwrite the entire node. To fix a small issue, narrow the scope: target a shorter ` +
+        `nodeId (or use the \`search\` parameter) matching only the sentence or phrase you intend ` +
+        `to change. Deliberately shortening or summarizing a node over ${LARGE_NODE_THRESHOLD} ` +
+        `chars is intentionally blocked here to prevent silent data loss — apply it as smaller ` +
+        `targeted edits instead.`,
+      'SUGGESTION_DESTRUCTIVE'
+    )
+  }
+
+  // Node lookup succeeded AND the suggestion cleared the destructive-edit guard —
+  // only now is it safe to commit staged frontmatter, so neither a stale nodeId
+  // (NODE_NOT_FOUND) nor a rejected destructive edit can pop the frontmatter
+  // overlay alongside an error toast (preserving the invariant from #488).
+  if (frontmatterToStage) {
+    useEditorStore.getState().setPendingFrontmatter(frontmatterToStage)
+  }
 
   // Select the text content of the node and apply the AI suggestion mark
   const contentStart = pos + 1

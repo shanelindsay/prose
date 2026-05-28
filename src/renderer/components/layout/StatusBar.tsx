@@ -81,7 +81,10 @@ export function StatusBar() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, editor?.state.doc])
 
-  // Live word/char count from editor state, not debounced store (#563)
+  // Live word/char count from editor state, not debounced store (#563).
+  // Subscribe to the editor 'update' event so counts refresh on every doc
+  // mutation, and use textBetween with '\n' separators so words spanning block
+  // boundaries are counted correctly (textContent would merge them).
   const [wordCount, setWordCount] = useState(0)
   const [charCount, setCharCount] = useState(0)
 
@@ -191,46 +194,50 @@ export function StatusBar() {
           </>
         )}
 
-        {/* Model selector */}
-        <DropdownMenu>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <DropdownMenuTrigger asChild>
-                <button className="hover:text-foreground focus-visible:text-foreground focus-visible:outline-none transition-colors cursor-pointer max-w-[120px] truncate">
-                  {modelDisplayName}
-                </button>
-              </DropdownMenuTrigger>
-            </TooltipTrigger>
-            <TooltipContent side="top">
-              <p>{settings.llm.provider} / {settings.llm.model}</p>
-            </TooltipContent>
-          </Tooltip>
-          <DropdownMenuContent align="end" className="max-h-[300px] overflow-y-auto">
-            <DropdownMenuLabel className="text-xs text-muted-foreground">
-              {settings.llm.provider}
-            </DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            {availableModels.map((model) => (
-              <DropdownMenuItem
-                key={model.id}
-                onClick={() => handleModelChange(model.id)}
-                className="cursor-pointer font-mono text-xs"
-              >
-                <div className="flex flex-col items-start">
-                  <span>{model.name}</span>
-                  {model.description && (
-                    <span className="text-[10px] text-muted-foreground">{model.description}</span>
-                  )}
-                </div>
-                {model.id === settings.llm.model && (
-                  <span className="ml-auto pl-2 text-primary">✓</span>
-                )}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {/* Model selector — hidden when user chose "Continue without AI" (#561) */}
+        {settings.aiConsent?.consented === true && (
+          <>
+            <DropdownMenu>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <button className="hover:text-foreground focus-visible:text-foreground focus-visible:outline-none transition-colors cursor-pointer max-w-[120px] truncate">
+                      {modelDisplayName}
+                    </button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  <p>{settings.llm.provider} / {settings.llm.model}</p>
+                </TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent align="end" className="max-h-[300px] overflow-y-auto">
+                <DropdownMenuLabel className="text-xs text-muted-foreground">
+                  {settings.llm.provider}
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {availableModels.map((model) => (
+                  <DropdownMenuItem
+                    key={model.id}
+                    onClick={() => handleModelChange(model.id)}
+                    className="cursor-pointer font-mono text-xs"
+                  >
+                    <div className="flex flex-col items-start">
+                      <span>{model.name}</span>
+                      {model.description && (
+                        <span className="text-[10px] text-muted-foreground">{model.description}</span>
+                      )}
+                    </div>
+                    {model.id === settings.llm.model && (
+                      <span className="ml-auto pl-2 text-primary">✓</span>
+                    )}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
 
-        <span className="text-muted-foreground/40 mx-1">|</span>
+            <span className="text-muted-foreground/40 mx-1">|</span>
+          </>
+        )}
 
         {/* Mode selector */}
         <DropdownMenu>

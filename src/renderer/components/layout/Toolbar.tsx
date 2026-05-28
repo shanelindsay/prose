@@ -4,11 +4,14 @@ import { requestBugReport } from '../EnableLoggingDialog'
 import { useEditor } from '../../hooks/useEditor'
 import { useTabs } from '../../hooks/useTabs'
 import { useEditorStore } from '../../stores/editorStore'
+import { useEditorInstanceStore } from '../../stores/editorInstanceStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useFileListStore } from '../../stores/fileListStore'
 import { useSettings } from '../../hooks/useSettings'
 import { usePanelLayoutContext } from '../../hooks/usePanelLayout'
 import { isMacOS, getApi } from '../../lib/browserApi'
+import { buildProseHtml } from '../../lib/htmlExport'
+import { extractFirstH1 } from '../../lib/markdown'
 import { useTabTier } from '../../hooks/useTabTier'
 import { useGoogleDocsEnabled } from '../../lib/featureFlags'
 import { Button } from '../ui/button'
@@ -58,6 +61,7 @@ import {
   FolderOpen,
   Save,
   FileDown,
+  FileCode,
   X,
   Eye,
   EyeOff,
@@ -65,6 +69,16 @@ import {
   FileText,
   Sparkles
 } from 'lucide-react'
+
+function extractTitle(content: string, path?: string | null): string {
+  const h1 = extractFirstH1(content)
+  if (h1) return h1
+  if (path) {
+    const filename = path.split('/').pop() || ''
+    return filename.replace(/\.(md|markdown|txt)$/, '')
+  }
+  return 'Untitled'
+}
 
 export function Toolbar() {
   const { document, openFile, saveFile, saveFileAs, newFile, quickSaveWithTitle } = useEditor()
@@ -237,6 +251,29 @@ export function Toolbar() {
     window.addEventListener('menu:closeTab', onMenuCloseTab)
     return () => window.removeEventListener('menu:closeTab', onMenuCloseTab)
   }, [handleClose])
+
+  const handleExportHtml = useCallback(async () => {
+    const editor = useEditorInstanceStore.getState().editor
+    if (!editor || !document.content) return
+    try {
+      const editorHtml = editor.getHTML()
+      const title = extractTitle(document.content, document.path)
+      const docDir = document.path ? document.path.substring(0, document.path.lastIndexOf('/')) || null : null
+      const html = await buildProseHtml(editorHtml, document.content, document.frontmatter, title, docDir)
+      const defaultName = (title || 'document') + '.html'
+      await getApi().exportHtml(html, defaultName)
+    } catch (err) {
+      console.error('Failed to export HTML:', err)
+    }
+  }, [document.content, document.path, document.frontmatter])
+
+  // Handle menu "Export as HTML..." action (File menu) — delegates to the
+  // existing export handler so there's a single source of truth.
+  useEffect(() => {
+    const onMenuExportHtml = () => handleExportHtml()
+    window.addEventListener('menu:exportHtml', onMenuExportHtml)
+    return () => window.removeEventListener('menu:exportHtml', onMenuExportHtml)
+  }, [handleExportHtml])
 
   const handleNewFile = async () => {
     await createNewTab()
@@ -522,6 +559,10 @@ export function Toolbar() {
               <DropdownMenuItem onClick={saveFileAs}>
                 <FileDown className="mr-2 h-4 w-4" />
                 Save as...
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleExportHtml} disabled={!document.content}>
+                <FileCode className="mr-2 h-4 w-4" />
+                Export HTML...
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => setDialogOpen(true)}>

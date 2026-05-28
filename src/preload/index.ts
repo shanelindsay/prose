@@ -177,7 +177,9 @@ export interface ElectronAPI {
   saveFile: (path: string, content: string) => Promise<void>
   saveFileAs: (content: string, defaultFilename?: string) => Promise<string | null>
   exportTxt: (content: string, defaultFilename?: string) => Promise<string | null>
+  exportHtml: (content: string, defaultFilename?: string) => Promise<string | null>
   readFile: (path: string) => Promise<string>
+  readFileBase64: (path: string) => Promise<string>
   loadSettings: () => Promise<Settings>
   saveSettings: (settings: Settings) => Promise<void>
   testApiKey: (request: TestApiKeyRequest) => Promise<TestApiKeyResult>
@@ -287,7 +289,8 @@ export interface ElectronAPI {
   // File watcher — subscribe to filesystem events for the File Explorer
   startWatchingDirectory: (dirPath: string) => Promise<void>
   stopWatchingDirectory: () => Promise<void>
-  onFileWatchEvent: (callback: (event: { type: 'created' | 'deleted'; path: string }) => void) => () => void
+  setWatchedExpandedFolders: (folderPaths: string[]) => Promise<void>
+  onFileWatchEvent: (callback: (event: { type: 'created' | 'deleted' | 'changed'; path: string }) => void) => () => void
   // Appearance: live dock icon swap (macOS only; no-op on other platforms)
   setAppIcon: (iconId: IconId) => Promise<void>
 }
@@ -346,7 +349,9 @@ const api: ElectronAPI = {
   saveFile: (path: string, content: string) => ipcRenderer.invoke('file:save', path, content),
   saveFileAs: (content: string, defaultFilename?: string) => ipcRenderer.invoke('file:saveAs', content, defaultFilename),
   exportTxt: (content: string, defaultFilename?: string) => ipcRenderer.invoke('file:exportTxt', content, defaultFilename),
+  exportHtml: (content: string, defaultFilename?: string) => ipcRenderer.invoke('file:exportHtml', content, defaultFilename),
   readFile: (path: string) => ipcRenderer.invoke('file:read', path),
+  readFileBase64: (path: string) => ipcRenderer.invoke('file:readBase64', path),
   loadSettings: () => ipcRenderer.invoke('settings:load'),
   saveSettings: (settings: Settings) => ipcRenderer.invoke('settings:save', settings),
   testApiKey: (request: TestApiKeyRequest) => ipcRenderer.invoke('settings:testApiKey', request),
@@ -558,8 +563,9 @@ const api: ElectronAPI = {
   // File watcher — subscribe to filesystem events for the File Explorer
   startWatchingDirectory: (dirPath: string) => ipcRenderer.invoke('file:watch:start', dirPath),
   stopWatchingDirectory: () => ipcRenderer.invoke('file:watch:stop'),
-  onFileWatchEvent: (callback: (event: { type: 'created' | 'deleted'; path: string }) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, fileEvent: { type: 'created' | 'deleted'; path: string }): void => {
+  setWatchedExpandedFolders: (folderPaths: string[]) => ipcRenderer.invoke('file:watch:set-expanded-folders', folderPaths),
+  onFileWatchEvent: (callback: (event: { type: 'created' | 'deleted' | 'changed'; path: string }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, fileEvent: { type: 'created' | 'deleted' | 'changed'; path: string }): void => {
       callback(fileEvent)
     }
     ipcRenderer.on('file:watch:event', handler)

@@ -406,7 +406,9 @@ export interface ElectronAPI {
   saveFile: (path: string, content: string) => Promise<void>
   saveFileAs: (content: string) => Promise<string | null>
   exportTxt: (content: string, defaultFilename?: string) => Promise<string | null>
+  exportHtml: (content: string, defaultFilename?: string) => Promise<string | null>
   readFile: (path: string) => Promise<string>
+  readFileBase64: (path: string) => Promise<string>
   loadSettings: () => Promise<SettingsOnDisk>
   saveSettings: (settings: Settings) => Promise<void>
   testApiKey: (request: TestApiKeyRequest) => Promise<TestApiKeyResult>
@@ -516,6 +518,11 @@ export interface ElectronAPI {
   downloadSkill?: () => Promise<{ success: boolean; error?: string }>
   // Build info
   isMasBuild?: boolean
+  // File watcher — Electron-only live reload support for the File Explorer
+  startWatchingDirectory?: (dirPath: string) => Promise<void>
+  stopWatchingDirectory?: () => Promise<void>
+  setWatchedExpandedFolders?: (folderPaths: string[]) => Promise<void>
+  onFileWatchEvent?: (callback: (event: { type: 'created' | 'deleted' | 'changed'; path: string }) => void) => () => void
   // Auto-updater
   onUpdateAvailable?: (callback: (info: { version: string; releaseNotes?: string }) => void) => () => void
   onDownloadProgress?: (callback: (progress: { percent: number }) => void) => () => void

@@ -11,6 +11,9 @@ import { useChat } from '../hooks/useChat'
 import { useAIConfigured } from '../hooks/useAIConfigured'
 import { aiUnavailableMessage } from '../lib/llm'
 
+const NAV_BAR_HEIGHT = 48
+const VIEWPORT_PADDING = 16
+
 interface CommentPopoverProps {
   editor: Editor
 }
@@ -89,15 +92,20 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
     const rect = popoverRef.current.getBoundingClientRect()
     const viewportWidth = window.innerWidth
     const viewportHeight = window.innerHeight
+    const minY = NAV_BAR_HEIGHT + VIEWPORT_PADDING
     const newPosition = { ...popover.position }
-    if (newPosition.x + rect.width / 2 > viewportWidth - 16) {
-      newPosition.x = viewportWidth - rect.width / 2 - 16
+    if (newPosition.x + rect.width / 2 > viewportWidth - VIEWPORT_PADDING) {
+      newPosition.x = viewportWidth - rect.width / 2 - VIEWPORT_PADDING
     }
-    if (newPosition.x - rect.width / 2 < 16) {
-      newPosition.x = rect.width / 2 + 16
+    if (newPosition.x - rect.width / 2 < VIEWPORT_PADDING) {
+      newPosition.x = rect.width / 2 + VIEWPORT_PADDING
     }
-    if (newPosition.y + rect.height > viewportHeight - 16) {
-      newPosition.y = popover.position.y - rect.height - 40
+    if (newPosition.y + rect.height > viewportHeight - VIEWPORT_PADDING) {
+      const aboveY = popover.position.y - rect.height - 40
+      newPosition.y = aboveY >= minY ? aboveY : popover.position.y
+    }
+    if (newPosition.y < minY) {
+      newPosition.y = minY
     }
     if (newPosition.x !== popover.position.x || newPosition.y !== popover.position.y) {
       setAdjustedPosition(newPosition)
