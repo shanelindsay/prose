@@ -252,7 +252,7 @@ export function Toolbar() {
     return () => window.removeEventListener('menu:closeTab', onMenuCloseTab)
   }, [handleClose])
 
-  const handleExportHtml = async () => {
+  const handleExportHtml = useCallback(async () => {
     const editor = useEditorInstanceStore.getState().editor
     if (!editor || !document.content) return
     try {
@@ -265,7 +265,7 @@ export function Toolbar() {
     } catch (err) {
       console.error('Failed to export HTML:', err)
     }
-  }
+  }, [document.content, document.path, document.frontmatter])
 
   // Handle menu "Export as HTML..." action (File menu) — delegates to the
   // existing export handler so there's a single source of truth.
