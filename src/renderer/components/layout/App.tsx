@@ -705,6 +705,10 @@ export function App() {
         case 'saveAs':
           saveFileAs()
           break
+        case 'exportHtml':
+          // Delegate to Toolbar, which owns the export handler
+          window.dispatchEvent(new CustomEvent('menu:exportHtml'))
+          break
         case 'convertToTxt': {
           if (!window.api) break
           const txtCurrentPath = useEditorStore.getState().document.path

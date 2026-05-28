@@ -157,15 +157,21 @@ export function createMenu(mainWindow: BrowserWindow): void {
           }
         },
         {
+          label: 'Export as HTML...',
+          click: (): void => {
+            sendMenuAction('exportHtml')
+          }
+        },
+        {
           label: 'Convert to Plain Text',
-          accelerator: 'CmdOrCtrl+Shift+T',
+          accelerator: 'CmdOrCtrl+Alt+T',
           click: (): void => {
             sendMenuAction('convertToTxt')
           }
         },
         {
           label: 'Convert to Markdown',
-          accelerator: 'CmdOrCtrl+Shift+M',
+          accelerator: 'CmdOrCtrl+Alt+M',
           click: (): void => {
             sendMenuAction('convertToMarkdown')
           }

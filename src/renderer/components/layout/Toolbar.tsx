@@ -267,6 +267,14 @@ export function Toolbar() {
     }
   }
 
+  // Handle menu "Export as HTML..." action (File menu) — delegates to the
+  // existing export handler so there's a single source of truth.
+  useEffect(() => {
+    const onMenuExportHtml = () => handleExportHtml()
+    window.addEventListener('menu:exportHtml', onMenuExportHtml)
+    return () => window.removeEventListener('menu:exportHtml', onMenuExportHtml)
+  }, [handleExportHtml])
+
   const handleNewFile = async () => {
     await createNewTab()
   }
