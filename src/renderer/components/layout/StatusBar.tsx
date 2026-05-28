@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useRef, useState } from 'react'
+import { useMemo, useEffect, useRef, useState, useCallback } from 'react'
 import { useEditor } from '../../hooks/useEditor'
 import { useSettings } from '../../hooks/useSettings'
 import { useChat } from '../../hooks/useChat'
@@ -81,11 +81,32 @@ export function StatusBar() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, editor?.state.doc])
 
-  // Compute word/char counts from the live TipTap instance so they update on
-  // every keystroke without waiting for the debounced store write (#563).
-  const liveText = editor ? editor.state.doc.textContent : document.content
-  const wordCount = liveText.split(/\s+/).filter((word) => word.length > 0).length
-  const charCount = liveText.length
+  // Live word/char count from editor state, not debounced store (#563).
+  // Subscribe to the editor 'update' event so counts refresh on every doc
+  // mutation, and use textBetween with '\n' separators so words spanning block
+  // boundaries are counted correctly (textContent would merge them).
+  const [wordCount, setWordCount] = useState(0)
+  const [charCount, setCharCount] = useState(0)
+
+  const updateCounts = useCallback(() => {
+    if (editor) {
+      const doc = editor.state.doc
+      const text = doc.textBetween(0, doc.content.size, '\n')
+      setCharCount(text.length)
+      setWordCount(text.split(/\s+/).filter((w) => w.length > 0).length)
+    } else {
+      const text = document.content
+      setCharCount(text.length)
+      setWordCount(text.split(/\s+/).filter((w) => w.length > 0).length)
+    }
+  }, [editor, document.content])
+
+  useEffect(() => {
+    updateCounts()
+    if (!editor) return
+    editor.on('update', updateCounts)
+    return () => { editor.off('update', updateCounts) }
+  }, [editor, updateCounts])
 
   // Mode configuration.
   // ToolMode union renamed to chat / editor / create in #467 Chunk 3.

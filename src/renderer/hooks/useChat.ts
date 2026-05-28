@@ -3,7 +3,8 @@ import { useChatStore, createMessageId, type ToolMode } from '../stores/chatStor
 import { useSettingsStore } from '../stores/settingsStore'
 import { useEditorStore } from '../stores/editorStore'
 import { useEditorInstanceStore } from '../stores/editorInstanceStore'
-import { validateConfig } from '../lib/llm'
+import { aiAvailability, aiUnavailableMessage } from '../lib/llm'
+import { notifyAINotConfigured } from '../lib/notifyAI'
 import { buildSystemPrompt, buildCommentsPrompt, buildSuggestionRepliesPrompt } from '../lib/prompts'
 import { getApi } from '../lib/browserApi'
 import { getComments } from '../extensions/comments'
@@ -505,9 +506,9 @@ export function useChat() {
   }, [])
 
   const sendMessage = useCallback(
-    async (content: string, options?: { hidden?: boolean }) => {
+    async (content: string, options?: { hidden?: boolean }): Promise<boolean> => {
       console.log('[useChat] sendMessage called with:', content?.substring(0, 50), 'isLoading:', isLoading)
-      if (!content.trim() || isLoading) return
+      if (!content.trim() || isLoading) return false
       console.log('[useChat] sendMessage passed initial check')
       // Read toolMode fresh from the store rather than relying on the
       // React-closure-captured value. Necessary because callers (notably
@@ -522,33 +523,24 @@ export function useChat() {
         addConversation(document.documentId)
       }
 
-      // Check AI consent before making any API calls
-      if (!settings.aiConsent?.consented) {
-        const consentMsgId = createMessageId()
+      // Gate every AI request on the single availability check (consent +
+      // valid config). On a blocked path, record the reason in the chat AND
+      // fire a visible toast — the chat panel may be closed when this is
+      // triggered from a comment/suggestion action, which is the #631 gap
+      // where the user saw no feedback at all. Returning false lets callers
+      // (processComment/processComments/processSuggestionReplies) preserve the
+      // user's content instead of deleting it.
+      const availability = aiAvailability(settings)
+      if (!availability.available && availability.reason) {
         addMessage({
-          id: consentMsgId,
+          id: createMessageId(),
           role: 'assistant',
-          content: 'AI features are not enabled. Enable them in Settings → LLM to use the assistant.',
+          content: aiUnavailableMessage(availability.reason),
           timestamp: new Date()
         })
-        return
+        notifyAINotConfigured()
+        return false
       }
-
-      // Validate config first
-      console.log('[useChat] Validating config:', settings.llm?.provider, settings.llm?.model)
-      const configError = validateConfig(settings.llm)
-      if (configError) {
-        console.log('[useChat] Config error:', configError)
-        const errorMsgId = createMessageId()
-        addMessage({
-          id: errorMsgId,
-          role: 'assistant',
-          content: `${configError}. Please configure your API settings (Cmd+,).`,
-          timestamp: new Date()
-        })
-        return
-      }
-      console.log('[useChat] Config validated successfully')
 
       // Get context from store and clear it
       const messageContext = context
@@ -694,6 +686,7 @@ export function useChat() {
         completeStreaming()
         clearStreamRefs()
       }
+      return true
     },
     [
       context,
@@ -746,12 +739,11 @@ export function useChat() {
     // Build the prompt from comments
     const commentsPrompt = buildCommentsPrompt(comments)
 
-    // Send the message (this will trigger agent mode to apply edits)
-    await sendMessage(commentsPrompt)
-
-    // Remove all comments after sending (they'll be processed by AI)
-    // We do this immediately since the user triggered "Process Comments"
-    editor.commands.unsetAllComments()
+    // Only remove comments if the message was actually dispatched to the AI (#631)
+    const dispatched = await sendMessage(commentsPrompt)
+    if (dispatched) {
+      editor.commands.unsetAllComments()
+    }
   }, [sendMessage])
 
   // Process a single comment by id — same prompt shape as processComments,
@@ -764,8 +756,10 @@ export function useChat() {
     if (!target) return
 
     const commentsPrompt = buildCommentsPrompt([target])
-    await sendMessage(commentsPrompt)
-    editor.commands.unsetComment(commentId)
+    const dispatched = await sendMessage(commentsPrompt)
+    if (dispatched) {
+      editor.commands.unsetComment(commentId)
+    }
   }, [sendMessage])
 
   // Helper to get current comment count
@@ -785,14 +779,13 @@ export function useChat() {
     // Build the prompt from suggestions with feedback
     const feedbackPrompt = buildSuggestionRepliesPrompt(suggestionsWithFeedback)
 
-    // Send the message (this will trigger agent mode to create new suggestions)
-    await sendMessage(feedbackPrompt)
-
-    // Remove the old suggestions after sending (they'll be replaced by new suggestions)
-    // We do this immediately since the user triggered "Process Feedback"
-    suggestionsWithFeedback.forEach((suggestion) => {
-      editor.commands.rejectAISuggestion(suggestion.id)
-    })
+    // Only remove suggestions if the message was actually dispatched to the AI (#631)
+    const dispatched = await sendMessage(feedbackPrompt)
+    if (dispatched) {
+      suggestionsWithFeedback.forEach((suggestion) => {
+        editor.commands.rejectAISuggestion(suggestion.id)
+      })
+    }
   }, [sendMessage])
 
   // Helper to get count of suggestions with pending feedback

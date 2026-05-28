@@ -406,14 +406,11 @@ export function Editor() {
         useEditorStore.getState().setLastSelection({ text, from, to })
       }
 
-      // Derive line/column from the resolved head position
-      const $head = editor.state.selection.$head
-      // Count newlines before the cursor to find the 1-based line number
-      const textBeforeCursor = editor.state.doc.textBetween(0, $head.pos, '\n')
-      const lines = textBeforeCursor.split('\n')
-      const line = lines.length
-      const column = lines[lines.length - 1].length + 1
-      useEditorStore.getState().setCursorPosition(line, column)
+      // Update cursor position for status bar (#564)
+      const headPos = editor.state.selection.$head.pos
+      const textBefore = editor.state.doc.textBetween(0, headPos, '\n')
+      const lines = textBefore.split('\n')
+      useEditorStore.getState().setCursorPosition(lines.length, (lines[lines.length - 1]?.length ?? 0) + 1)
     }
 
     editor.on('selectionUpdate', handleSelectionUpdate)
