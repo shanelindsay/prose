@@ -109,6 +109,18 @@ export const browserApi: ElectronAPI = {
     return fallbackName
   },
 
+  exportHtml: async (content: string, defaultFilename?: string): Promise<string | null> => {
+    const fallbackName = defaultFilename ?? 'document.html'
+    const blob = new Blob([content], { type: 'text/html' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = fallbackName
+    a.click()
+    URL.revokeObjectURL(url)
+    return fallbackName
+  },
+
   saveFileAs: async (content: string, defaultFilename?: string): Promise<string | null> => {
     if ('showSaveFilePicker' in window) {
       try {
@@ -139,6 +151,11 @@ export const browserApi: ElectronAPI = {
   },
 
   readFile: async (_path: string): Promise<string> => {
+    // In browser mode, we can't read arbitrary paths
+    throw new Error('Cannot read files by path in browser mode')
+  },
+
+  readFileBase64: async (_path: string): Promise<string> => {
     // In browser mode, we can't read arbitrary paths
     throw new Error('Cannot read files by path in browser mode')
   },
