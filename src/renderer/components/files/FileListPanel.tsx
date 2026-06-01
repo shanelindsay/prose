@@ -25,6 +25,12 @@ import {
   ContextMenuTrigger
 } from '../ui/context-menu'
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../ui/dropdown-menu'
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -34,12 +40,14 @@ import {
 } from '../ui/dialog'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
-import { History, Cloud, Plus, FileText, BookOpen, CloudOff, ChevronUp, ChevronRight, ChevronDown, Folder, FolderOpen, FolderInput, Download, Trash2, FilePlus, ClipboardPaste, ExternalLink, X, Globe, Edit3, RefreshCw, Loader2, AlertTriangle, Bug } from 'lucide-react'
+import { History, Cloud, Plus, FileText, BookOpen, CloudOff, ChevronUp, ChevronLeft, ChevronRight, ChevronDown, Folder, FolderOpen, FolderInput, Download, Trash2, FilePlus, ClipboardPaste, ExternalLink, X, Globe, Edit3, RefreshCw, Loader2, AlertTriangle, Bug, Boxes, Star, MoreHorizontal } from 'lucide-react'
 import { useSettings } from '../../hooks/useSettings'
 import { cn } from '../../lib/utils'
 import { getApi } from '../../lib/browserApi'
 import { requestBugReport } from '../EnableLoggingDialog'
 import type { RemarkableNotebookMetadata, RemarkableCloudNotebook, GoogleDocEntry } from '../../types'
+import { ProjectsPanel } from './ProjectsPanel'
+import { useProjects, useFavorites, useProjectsStore } from '../../stores/projectsStore'
 
 export function FileListPanel() {
   const {
@@ -81,6 +89,81 @@ export function FileListPanel() {
   const remarkableEnabled = useSettingsStore((state) => remarkableFlag && state.settings.remarkable?.enabled && !!state.settings.remarkable?.deviceToken)
   const googleConnected = useSettingsStore((state) => googleDocsFlag && !!state.settings.google)
   const googleSyncDirectory = useSettingsStore((state) => state.settings.google?.syncDirectory)
+  const projects = useProjects()
+  const favorites = useFavorites()
+  // Subscribe to favorites once here and pass a path Set down the tree, so each
+  // FileTreeItem doesn't hold its own settingsStore subscription (O(1), not O(nodes)).
+  const favoritePaths = useMemo(() => new Set(favorites.map((f) => f.path)), [favorites])
+  const { exitToRoot } = useProjectsStore()
+  const defaultSaveDirectory = useSettingsStore((s) => s.settings.defaultSaveDirectory)
+  // The project whose folder contains the current view root (handles drill-down
+  // into project subfolders). Base root and projects are separate, peer locations.
+  // Match the longest path prefix so nested projects (e.g. /docs and /docs/work)
+  // resolve to the most specific one, not whichever appears first in the array.
+  const currentProject = projects
+    .filter((p) => !!rootPath && (rootPath === p.path || rootPath.startsWith(p.path + '/')))
+    .sort((a, b) => b.path.length - a.path.length)[0] ?? null
+
+  // Return from an open project to the Projects list — deliberately stays in the
+  // 'projects' panel (unlike projectsStore.exitToRoot, which clears the active
+  // project AND drops to the 'folder' base-root navigator). Both clear the active
+  // project; the difference is which panel you land in.
+  const backToProjectsList = () => {
+    useSettingsStore.getState().setActiveProject(null)
+    setRootPath(defaultSaveDirectory ?? null)
+    setViewMode('projects')
+  }
+
+  // Responsive header: measure the (stable) header width and spill overflowing
+  // view-toggles into a ··· menu when there isn't room for all of them inline.
+  const headerRef = useRef<HTMLDivElement>(null)
+  const [headerWidth, setHeaderWidth] = useState(0)
+  useEffect(() => {
+    const el = headerRef.current
+    if (!el) return
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) setHeaderWidth(e.contentRect.width)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  // View toggles in priority order (earliest stay inline longest).
+  const viewToggles = [
+    {
+      key: 'folder', Icon: Folder, label: 'Files', active: viewMode === 'folder',
+      onClick: () => {
+        if (currentProject) exitToRoot()
+        else if (viewMode === 'folder') loadFiles()
+        else setViewMode('folder')
+      },
+    },
+    { key: 'projects', Icon: Boxes, label: 'Projects', active: viewMode === 'projects', onClick: () => setViewMode('projects') },
+    { key: 'favorites', Icon: Star, label: 'Favorites', active: viewMode === 'favorites', onClick: () => setViewMode('favorites') },
+    { key: 'recent', Icon: History, label: 'Recent files', active: viewMode === 'recent', onClick: () => setViewMode('recent') },
+    ...(googleConnected ? [{
+      key: 'googledocs', Icon: Globe, label: 'Google Docs', active: viewMode === 'googledocs',
+      // Clicking while already in this view triggers a manual sync (parity with the folder/notebook toggles).
+      onClick: () => viewMode === 'googledocs'
+        ? googleSync().catch((err) => console.error('[FileListPanel] Manual Google sync failed:', err))
+        : setViewMode('googledocs'),
+    }] : []),
+    ...(remarkableEnabled ? [{
+      key: 'notebooks', Icon: BookOpen, label: 'reMarkable notebooks', active: viewMode === 'notebooks',
+      onClick: () => viewMode === 'notebooks'
+        ? sync().catch((err) => console.error('[FileListPanel] Manual sync failed:', err))
+        : setViewMode('notebooks'),
+    }] : []),
+  ]
+  const TOGGLE_PX = 36 // 32px button + 4px gap
+  // Title gets a real min-width: shown at >=120px, otherwise hidden entirely
+  // (rather than shrinking to a sliver) so the toggles collapse into ··· sooner.
+  const showHeaderTitle = headerWidth === 0 || headerWidth >= 192
+  const toggleBudget = headerWidth > 0 ? headerWidth - (showHeaderTitle ? 120 : 0) : Infinity
+  const maxInlineToggles = Math.max(1, Math.floor(toggleBudget / TOGGLE_PX))
+  const togglesOverflow = viewToggles.length > maxInlineToggles
+  const inlineToggles = togglesOverflow ? viewToggles.slice(0, maxInlineToggles - 1) : viewToggles
+  const overflowToggles = togglesOverflow ? viewToggles.slice(maxInlineToggles - 1) : []
 
   // Switch away from notebooks view if reMarkable becomes disconnected
   useEffect(() => {
@@ -245,6 +328,33 @@ export function FileListPanel() {
     setOperationError(null)
     setNewFileDialogOpen(true)
   }
+
+  // Add a path to the persisted pointer list (folders → projects/favorites,
+  // files → favorites). Idempotent: dedup by path so re-adding is a no-op.
+  const addPathAsProject = useCallback((path: string) => {
+    const existing = useSettingsStore.getState().settings.projects ?? []
+    if (existing.some((p) => p.path === path)) return
+    const name = path.split('/').pop() || path
+    useSettingsStore.getState().addProject({
+      id: self.crypto.randomUUID(),
+      name,
+      path,
+      createdAt: new Date().toISOString(),
+    })
+  }, [])
+
+  const addPathAsFavorite = useCallback((path: string, isDirectory: boolean) => {
+    const existing = useSettingsStore.getState().settings.favorites ?? []
+    if (existing.some((f) => f.path === path)) return
+    const name = path.split('/').pop() || path
+    useSettingsStore.getState().addFavorite({
+      id: self.crypto.randomUUID(),
+      name,
+      path,
+      isDirectory,
+      addedAt: new Date().toISOString(),
+    })
+  }, [])
 
   const handleCreateNewFile = async () => {
     const targetDir = newFileTargetDir || rootPath
@@ -901,11 +1011,36 @@ export function FileListPanel() {
   return (
     <div ref={containerRef} className="flex h-full flex-col bg-muted/20" data-testid="file-list-panel" tabIndex={-1}>
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <div className="flex items-center gap-2">
-          <h2 className="text-sm font-medium truncate" title={viewMode === 'folder' ? rootPath || undefined : undefined}>
-            {viewMode === 'recent' ? 'Recent' : viewMode === 'notebooks' ? 'Notebooks' : viewMode === 'googledocs' ? 'Google Docs' : folderName}
-          </h2>
+      <div ref={headerRef} className="flex items-center gap-2 border-b border-border px-4 py-3">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          {showHeaderTitle && (viewMode === 'projects' && currentProject ? (
+            <div className="flex min-w-0 items-center gap-1">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0"
+                    onClick={backToProjectsList}
+                    aria-label="Back to projects"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Back to projects</TooltipContent>
+              </Tooltip>
+              <span className="truncate text-sm font-medium" title={currentProject.path}>{currentProject.name}</span>
+            </div>
+          ) : (
+            <h2 className="text-sm font-medium truncate" title={viewMode === 'folder' ? rootPath || undefined : undefined}>
+              {viewMode === 'recent' ? 'Recent'
+                : viewMode === 'notebooks' ? 'Notebooks'
+                : viewMode === 'googledocs' ? 'Google Docs'
+                : viewMode === 'projects' ? 'Projects'
+                : viewMode === 'favorites' ? 'Favorites'
+                : folderName}
+            </h2>
+          ))}
           {viewMode === 'notebooks' && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -956,90 +1091,49 @@ export function FileListPanel() {
             </Tooltip>
           )}
         </div>
-        <div className="flex items-center gap-1">
-          {/* View toggle buttons */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className={cn("h-8 w-8", viewMode === 'recent' && "bg-accent text-accent-foreground")}
-                onClick={() => setViewMode('recent')}
-                aria-label="Recent files"
-              >
-                <History className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Recent files</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className={cn("h-8 w-8", viewMode === 'folder' && "bg-accent text-accent-foreground")}
-                onClick={() => {
-                  if (viewMode === 'folder') {
-                    loadFiles()
-                  } else {
-                    setViewMode('folder')
-                  }
-                }}
-                aria-label="Files"
-              >
-                <Folder className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Files</TooltipContent>
-          </Tooltip>
-          {googleConnected && (
-            <Tooltip>
+        <div className="flex shrink-0 items-center gap-1">
+          {/* View toggles — responsive: overflow into a ··· menu when narrow */}
+          {inlineToggles.map((t) => (
+            <Tooltip key={t.key}>
               <TooltipTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className={cn("h-8 w-8", viewMode === 'googledocs' && "bg-accent text-accent-foreground")}
-                  onClick={() => {
-                    if (viewMode === 'googledocs') {
-                      googleSync().catch((err) => {
-                        console.error('[FileListPanel] Manual Google sync failed:', err)
-                      })
-                    } else {
-                      setViewMode('googledocs')
-                    }
-                  }}
-                  aria-label="Google Docs"
+                  className={cn("h-8 w-8", t.active && "bg-accent text-accent-foreground")}
+                  onClick={t.onClick}
+                  aria-label={t.label}
                 >
-                  <Globe className="h-4 w-4" />
+                  <t.Icon className="h-4 w-4" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Google Docs</TooltipContent>
+              <TooltipContent>{t.label}</TooltipContent>
             </Tooltip>
-          )}
-          {remarkableEnabled && (
-            <Tooltip>
-              <TooltipTrigger asChild>
+          ))}
+          {overflowToggles.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className={cn("h-8 w-8", viewMode === 'notebooks' && "bg-accent text-accent-foreground")}
-                  onClick={() => {
-                    console.log('[FileListPanel] notebooks button clicked, current viewMode:', viewMode)
-                    if (viewMode === 'notebooks') {
-                      sync().catch((err) => {
-                        console.error('[FileListPanel] Manual sync failed:', err)
-                      })
-                    } else {
-                      setViewMode('notebooks')
-                    }
-                  }}
-                  aria-label="reMarkable notebooks"
+                  className={cn("h-8 w-8", overflowToggles.some((t) => t.active) && "bg-accent text-accent-foreground")}
+                  aria-label="More views"
                 >
-                  <BookOpen className="h-4 w-4" />
+                  <MoreHorizontal className="h-4 w-4" />
                 </Button>
-              </TooltipTrigger>
-              <TooltipContent>reMarkable notebooks</TooltipContent>
-            </Tooltip>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {overflowToggles.map((t) => (
+                  <DropdownMenuItem
+                    key={t.key}
+                    className={cn(t.active && "bg-muted")}
+                    onClick={t.onClick}
+                  >
+                    <t.Icon className="h-4 w-4 mr-2" />
+                    {t.label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
         </div>
       </div>
@@ -1076,7 +1170,11 @@ export function FileListPanel() {
 
       {/* Content */}
       <ScrollArea className="flex-1">
-        {viewMode === 'recent' ? (
+        {viewMode === 'projects' && !currentProject ? (
+          <ProjectsPanel mode="projects" />
+        ) : viewMode === 'favorites' ? (
+          <ProjectsPanel mode="favorites" />
+        ) : viewMode === 'recent' ? (
           // Recent files view
           recentFiles.length === 0 ? (
             <div className="p-4 text-sm text-muted-foreground">
@@ -1309,15 +1407,18 @@ export function FileListPanel() {
                     if (sourcePath && rootPath) handleFileDrop(sourcePath, rootPath)
                   }}
                 >
-                  {/* Parent directory navigation */}
-                  <button
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/50 text-muted-foreground mb-1"
-                    onClick={navigateToParent}
-                    title="Go to parent folder"
-                  >
-                    <ChevronUp className="h-4 w-4 shrink-0" />
-                    <span className="truncate">..</span>
-                  </button>
+                  {/* Parent directory navigation — hidden at a project's root,
+                      which is the upward-traversal ceiling while in a project. */}
+                  {!(currentProject && rootPath === currentProject.path) && (
+                    <button
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/50 text-muted-foreground mb-1"
+                      onClick={navigateToParent}
+                      title="Go to parent folder"
+                    >
+                      <ChevronUp className="h-4 w-4 shrink-0" />
+                      <span className="truncate">..</span>
+                    </button>
+                  )}
                   {/* New untitled document */}
                   <button
                     className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/50 text-muted-foreground mb-1"
@@ -1334,6 +1435,7 @@ export function FileListPanel() {
                   ) : (
                     <FileTree
                       items={files}
+                      favoritePaths={favoritePaths}
                       expandedFolders={expandedFolders}
                       selectedPath={selectedPath}
                       loadingFolders={loadingFolders}
@@ -1355,6 +1457,8 @@ export function FileListPanel() {
                       onRenameComplete={handleRenameComplete}
                       onRenameCancel={handleRenameCancel}
                       onNewFile={handleNewFileInDir}
+                      onAddProject={addPathAsProject}
+                      onAddFavorite={addPathAsFavorite}
                       onFileDrop={handleFileDrop}
                     />
                   )}
@@ -1370,6 +1474,21 @@ export function FileListPanel() {
                   <ClipboardPaste className="h-4 w-4 mr-2" />
                   Paste
                   <ContextMenuShortcut>⌘V</ContextMenuShortcut>
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem
+                  onClick={() => rootPath && addPathAsProject(rootPath)}
+                  disabled={!rootPath}
+                >
+                  <Boxes className="h-4 w-4 mr-2" />
+                  Add as Project
+                </ContextMenuItem>
+                <ContextMenuItem
+                  onClick={() => rootPath && addPathAsFavorite(rootPath, true)}
+                  disabled={!rootPath}
+                >
+                  <Star className="h-4 w-4 mr-2" />
+                  Add to Favorites
                 </ContextMenuItem>
               </ContextMenuContent>
             </ContextMenu>

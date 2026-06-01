@@ -66,8 +66,43 @@ interface LLMStreamRequest extends LLMRequest {
 // Track active streams for abort support
 const activeStreams = new Map<string, AbortController>()
 
-// Security-scoped bookmark stop function (MAS sandbox)
+// Security-scoped bookmark stop function (MAS sandbox) — single bookmark for
+// the legacy `masDirectoryBookmark` / `defaultSaveDirectory` path.
 let stopAccessingBookmark: (() => void) | null = null
+
+// Stop-functions for project and favorite bookmarks, keyed by their UUID.
+// Populated in settings:load and reconciled in settings:save — when a project or
+// favorite is removed, its stop fn is released promptly (not left until next load).
+const projectBookmarkStopFns = new Map<string, () => void>()
+const favoriteBookmarkStopFns = new Map<string, () => void>()
+
+/**
+ * Activate a security-scoped bookmark (MAS only) and return the stop function.
+ * Returns null if not a MAS build or bookmark is missing.
+ */
+function activateBookmark(bookmark: string | undefined, label: string): (() => void) | null {
+  if (!IS_MAS_BUILD || !bookmark) return null
+  try {
+    return app.startAccessingSecurityScopedResource(bookmark) as () => void
+  } catch (err) {
+    console.warn(`[settings:load] Security-scoped bookmark invalid (${label}):`, err)
+    return null
+  }
+}
+
+/**
+ * Return a copy of settings with secrets (LLM API key, reMarkable device token)
+ * blanked, for safe persistence to plaintext settings.json. Secrets live in
+ * credentialStore; any write-back from settings:load (stale-bookmark cleanup,
+ * migrations) must strip them so they never land on disk. Mirrors settings:save.
+ */
+function stripSecretsForDisk(settings: Settings): Settings {
+  return {
+    ...settings,
+    llm: { ...settings.llm, apiKey: '' },
+    ...(settings.remarkable ? { remarkable: { ...settings.remarkable, deviceToken: '' } } : {}),
+  }
+}
 
 function getSettingsPath(): string { return join(getSettingsDir(), 'settings.json') }
 const ANTHROPIC_KEY_PATH = join(LEGACY_SETTINGS_DIR, '.remarkable-anthropic-key') // Legacy path for migration
@@ -513,7 +548,7 @@ export function setupIpcHandlers(): void {
         try {
           await credentialStore.set(LLM_API_KEY, rawSettings.llm.apiKey)
           rawSettings.llm = { ...rawSettings.llm, apiKey: '' }
-          await writeFile(getSettingsPath(), JSON.stringify(rawSettings, null, 2), 'utf-8')
+          await writeFile(getSettingsPath(), JSON.stringify(stripSecretsForDisk(rawSettings), null, 2), 'utf-8')
           console.log('[settings:load] Migrated plaintext API key to secure storage')
         } catch (err) {
           console.error('[settings:load] Migration failed:', err)
@@ -525,7 +560,7 @@ export function setupIpcHandlers(): void {
         try {
           await credentialStore.set(REMARKABLE_DEVICE_TOKEN, rawSettings.remarkable.deviceToken)
           rawSettings.remarkable = { ...rawSettings.remarkable, deviceToken: '' }
-          await writeFile(getSettingsPath(), JSON.stringify(rawSettings, null, 2), 'utf-8')
+          await writeFile(getSettingsPath(), JSON.stringify(stripSecretsForDisk(rawSettings), null, 2), 'utf-8')
           console.log('[settings:load] Migrated plaintext reMarkable device token to secure storage')
         } catch (err) {
           console.error('[settings:load] reMarkable token migration failed:', err)
@@ -559,9 +594,70 @@ export function setupIpcHandlers(): void {
           rawSettings.masDirectoryBookmark = undefined
           rawSettings.defaultSaveDirectory = undefined
           try {
-            await writeFile(getSettingsPath(), JSON.stringify(rawSettings, null, 2), 'utf-8')
+            await writeFile(getSettingsPath(), JSON.stringify(stripSecretsForDisk(rawSettings), null, 2), 'utf-8')
           } catch { /* best effort */ }
         }
+      }
+
+      // Restore security-scoped bookmarks for all projects (MAS only)
+      let staleBookmarksCleared = false
+      if (IS_MAS_BUILD && Array.isArray(rawSettings.projects)) {
+        // Stop any previously-activated project bookmark stop fns
+        for (const [, stop] of projectBookmarkStopFns) {
+          try { stop() } catch { /* best effort */ }
+        }
+        projectBookmarkStopFns.clear()
+
+        const validProjects = []
+        for (const project of rawSettings.projects) {
+          if (project.bookmark) {
+            const stop = activateBookmark(project.bookmark, `project:${project.id}`)
+            if (stop) {
+              projectBookmarkStopFns.set(project.id, stop)
+              validProjects.push(project)
+            } else {
+              // Bookmark invalid — keep the project but clear the stale bookmark
+              validProjects.push({ ...project, bookmark: undefined })
+              staleBookmarksCleared = true
+            }
+          } else {
+            validProjects.push(project)
+          }
+        }
+        rawSettings.projects = validProjects
+      }
+
+      // Restore security-scoped bookmarks for all favorites (MAS only)
+      if (IS_MAS_BUILD && Array.isArray(rawSettings.favorites)) {
+        for (const [, stop] of favoriteBookmarkStopFns) {
+          try { stop() } catch { /* best effort */ }
+        }
+        favoriteBookmarkStopFns.clear()
+
+        const validFavorites = []
+        for (const fav of rawSettings.favorites) {
+          if (fav.bookmark) {
+            const stop = activateBookmark(fav.bookmark, `favorite:${fav.id}`)
+            if (stop) {
+              favoriteBookmarkStopFns.set(fav.id, stop)
+              validFavorites.push(fav)
+            } else {
+              // Bookmark invalid — keep the favorite but clear the stale bookmark
+              validFavorites.push({ ...fav, bookmark: undefined })
+              staleBookmarksCleared = true
+            }
+          } else {
+            validFavorites.push(fav)
+          }
+        }
+        rawSettings.favorites = validFavorites
+      }
+
+      // Persist cleared stale bookmarks so the warning doesn't repeat on every launch
+      if (staleBookmarksCleared) {
+        try {
+          await writeFile(getSettingsPath(), JSON.stringify(stripSecretsForDisk(rawSettings), null, 2), 'utf-8')
+        } catch { /* best effort */ }
       }
 
       return rawSettings
@@ -574,6 +670,25 @@ export function setupIpcHandlers(): void {
   ipcMain.handle('settings:save', async (_event, settings: Settings) => {
     try {
       await mkdir(getSettingsDir(), { recursive: true })
+
+      // MAS: promptly release security-scoped bookmarks for any project/favorite
+      // removed since the last load, instead of leaking the stop fn until next load.
+      if (IS_MAS_BUILD) {
+        const projectIds = new Set((settings.projects ?? []).map((p) => p.id))
+        for (const [id, stop] of projectBookmarkStopFns) {
+          if (!projectIds.has(id)) {
+            try { stop() } catch { /* best effort */ }
+            projectBookmarkStopFns.delete(id)
+          }
+        }
+        const favoriteIds = new Set((settings.favorites ?? []).map((f) => f.id))
+        for (const [id, stop] of favoriteBookmarkStopFns) {
+          if (!favoriteIds.has(id)) {
+            try { stop() } catch { /* best effort */ }
+            favoriteBookmarkStopFns.delete(id)
+          }
+        }
+      }
 
       if (credentialStore.isAvailable()) {
         // Store API key securely; save settings without it
