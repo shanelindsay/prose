@@ -138,14 +138,14 @@ dist/mac-arm64/prose.app
 
 ### Automated Review Analysis
 
-When a PR is opened, Claude auto-reviews it (via `claude.yml`). A second workflow (`review-feedback.yml`) auto-analyzes that review:
+When a PR is opened — and again every time E2E passes (`ci-gate.yml`'s `trigger-review` job auto-posts a `/review` on green CI, self-debounced ~10 min) — Claude auto-reviews it (via `claude.yml`). A second workflow (`review-feedback.yml`) auto-analyzes that review:
 
 1. **Detection**: Triggers on `issue_comment` from `claude[bot]` containing `## Code Review`
 2. **Analysis**: Calls Claude Sonnet API to categorize feedback (Blocking / Functional / Quality / Nitpicks / Questions)
 3. **Output**: Posts structured triage comment with severity, effort, and MERGE / FIX REQUIRED / NEEDS DISCUSSION recommendation
 4. **Loop prevention**: Analysis comments include a `<!-- review-feedback-analysis -->` sentinel excluded from detection
 
-**On-demand review**: Comment `/review` on a PR to trigger a fresh code review. Use this after pushing meaningful changes to an existing PR. The auto-review only fires on PR open — subsequent pushes require an explicit `/review` comment.
+**On-demand review**: Comment `/review` on a PR to trigger a fresh code review. **You rarely need to** — `ci-gate.yml` auto-posts `/review` whenever E2E passes (on PR open *and* after each push), so a green CI already triggers the review. Only post `/review` manually when CI is green but no auto-review appeared (e.g. E2E was skipped, or a fork PR). A redundant manual `/review` double-runs the cloud reviewer *and* the `review-feedback` analysis — wasted cloud-agent runs.
 
 **Manual trigger**: Run `workflow_dispatch` on `review-feedback.yml` with a PR number to re-analyze any PR.
 
@@ -158,6 +158,7 @@ All workflows in `.github/workflows/`:
 - `review-feedback.yml` - Analyzes claude[bot] review comments, posts structured triage
 - `e2e.yml` - Electron Playwright tests on every PR (or `/test` comment)
 - `web-e2e.yml` - Browser Playwright tests for `accelerated`-labeled or bot PRs
+- `ci-gate.yml` - On E2E `workflow_run` success, auto-posts `/review` (the green-CI review trigger); on failure, routes to auto-fix
 - `pipeline-triage.yml` - Scores review findings, routes to auto-fix or human review
 - `pipeline-fix.yml` - Claude agent auto-fixes simple review findings
 - `dispatch.yml` - Routes `/triage`, `/fix`, `/pipeline` slash commands to downstream workflows
