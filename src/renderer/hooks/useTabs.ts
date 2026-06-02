@@ -1,5 +1,5 @@
 import { useCallback, useEffect } from 'react'
-import { useTabStore, createTab, generateUntitledTitle, type Tab } from '../stores/tabStore'
+import { useTabStore, createTab, generateUntitledTitle, type Tab, type ClosedTabSnapshot } from '../stores/tabStore'
 import { useEditorStore } from '../stores/editorStore'
 import { useEditorInstanceStore } from '../stores/editorInstanceStore'
 import { useChatStore, setCurrentDocumentId } from '../stores/chatStore'
@@ -58,6 +58,9 @@ export function useTabs() {
   const getActiveTab = useTabStore((state) => state.getActiveTab)
   const getTabByPath = useTabStore((state) => state.getTabByPath)
   const getTabById = useTabStore((state) => state.getTabById)
+  const pushClosedTab = useTabStore((state) => state.pushClosedTab)
+  const popClosedTab = useTabStore((state) => state.popClosedTab)
+  const reopenLastClosedTabStore = useTabStore((state) => state.reopenLastClosedTab)
 
   const document = useEditorStore((state) => state.document)
   const setDocument = useEditorStore((state) => state.setDocument)
@@ -596,6 +599,20 @@ export function useTabs() {
       return false // Signal that tab needs save confirmation
     }
 
+    // Snapshot non-preview tabs onto the closed-tab stack before removing
+    if (!tab.isPreview) {
+      const snapshot: ClosedTabSnapshot = {
+        path: tab.path,
+        title: tab.title,
+        baseTitle: tab.baseTitle,
+        isDirty: tab.isDirty,
+        content: tab.content,
+        frontmatter: tab.frontmatter,
+        cursorPosition: tab.cursorPosition
+      }
+      pushClosedTab(snapshot)
+    }
+
     // If closing the active tab, we need special handling
     const wasActive = tabId === activeTabId
 
@@ -623,7 +640,7 @@ export function useTabs() {
     }
 
     return true
-  }, [getTabById, activeTabId, removeTab, createNewTab, switchToTab])
+  }, [getTabById, activeTabId, removeTab, createNewTab, switchToTab, pushClosedTab])
 
   /**
    * Force close a tab (after save or discard confirmation)
@@ -633,6 +650,20 @@ export function useTabs() {
     if (!tab) return
 
     const wasActive = tabId === activeTabId
+
+    // Snapshot non-preview tabs onto the closed-tab stack before removing
+    if (!tab.isPreview) {
+      const snapshot: ClosedTabSnapshot = {
+        path: tab.path,
+        title: tab.title,
+        baseTitle: tab.baseTitle,
+        isDirty: tab.isDirty,
+        content: tab.content,
+        frontmatter: tab.frontmatter,
+        cursorPosition: tab.cursorPosition
+      }
+      pushClosedTab(snapshot)
+    }
 
     // Remove the tab
     removeTab(tabId)
@@ -656,16 +687,35 @@ export function useTabs() {
         await switchToTab(newActiveTabId)
       }
     }
-  }, [getTabById, activeTabId, removeTab, createNewTab, switchToTab])
+  }, [getTabById, activeTabId, removeTab, createNewTab, switchToTab, pushClosedTab])
 
   /**
    * Close all tabs except one
    */
   const closeOtherTabs = useCallback(async (keepTabId: string) => {
-    const tabsToClose = tabs.filter(t => t.id !== keepTabId && !t.isDirty)
+    // All tabs being removed by the store action (dirty included — store removes ALL others)
+    const allTabsToRemove = tabs.filter(t => t.id !== keepTabId)
+    // Subset used only for IndexedDB cleanup of untitled docs
+    const tabsToCleanUp = allTabsToRemove.filter(t => !t.isDirty)
 
-    // Close all non-dirty tabs
-    for (const tab of tabsToClose) {
+    // Snapshot every non-preview tab that will be removed (oldest→newest so
+    // the last push — newest tab — lands on top of the stack after prepending)
+    for (const tab of allTabsToRemove) {
+      if (!tab.isPreview) {
+        pushClosedTab({
+          path: tab.path,
+          title: tab.title,
+          baseTitle: tab.baseTitle,
+          isDirty: tab.isDirty,
+          content: tab.content,
+          frontmatter: tab.frontmatter,
+          cursorPosition: tab.cursorPosition
+        })
+      }
+    }
+
+    // Clean up IndexedDB data only for non-dirty untitled tabs
+    for (const tab of tabsToCleanUp) {
       if (!tab.path) {
         await deleteConversations(tab.documentId)
         await deleteAnnotations(tab.documentId)
@@ -680,13 +730,31 @@ export function useTabs() {
     if (activeTabId !== keepTabId) {
       await switchToTab(keepTabId)
     }
-  }, [tabs, activeTabId, switchToTab])
+  }, [tabs, activeTabId, switchToTab, pushClosedTab])
 
   /**
    * Close all tabs
    */
   const closeAllTabs = useCallback(async () => {
-    // Close all non-dirty tabs
+    // Snapshot every non-preview tab (dirty included — store removes ALL tabs).
+    // Push oldest→newest: pushClosedTab prepends, so the last push (newest tab)
+    // lands on top of the stack. When >10 tabs are closed, slice(0, CLOSED_TABS_MAX)
+    // drops the tail (oldest), keeping the most-recently-open 10 reopenable.
+    for (const tab of tabs) {
+      if (!tab.isPreview) {
+        pushClosedTab({
+          path: tab.path,
+          title: tab.title,
+          baseTitle: tab.baseTitle,
+          isDirty: tab.isDirty,
+          content: tab.content,
+          frontmatter: tab.frontmatter,
+          cursorPosition: tab.cursorPosition
+        })
+      }
+    }
+
+    // Clean up IndexedDB data only for non-dirty untitled tabs
     for (const tab of tabs) {
       if (!tab.isDirty && !tab.path) {
         await deleteConversations(tab.documentId)
@@ -700,7 +768,7 @@ export function useTabs() {
 
     // Create a new blank tab
     await createNewTab()
-  }, [tabs, createNewTab])
+  }, [tabs, createNewTab, pushClosedTab])
 
   /**
    * Update the active tab when editor content changes
@@ -807,6 +875,84 @@ export function useTabs() {
     }
   }, [getTabById, updateTab, document])
 
+  /**
+   * Reopen the most recently closed tab, restoring its content (including unsaved edits).
+   * No-op if the closed-tab stack is empty.
+   *
+   * Race safety: the snapshot is popped atomically first; the async documentId
+   * derivation happens after the pop, so rapid double-presses each consume a
+   * distinct snapshot rather than both racing on the same top entry.
+   *
+   * Duplicate guard: if the snapshot's path is already open in a live tab, we
+   * pop the snapshot, switch to the existing tab, and do not create a duplicate.
+   */
+  const reopenLastClosedTab = useCallback(async () => {
+    // Atomically pop the top snapshot — no await before this point.
+    const snapshot = popClosedTab()
+    if (!snapshot) return
+
+    // If a tab for this path is already open, just switch to it.
+    if (snapshot.path) {
+      const existing = getTabByPath(snapshot.path)
+      if (existing) {
+        await switchToTab(existing.id)
+        return
+      }
+    }
+
+    // Derive documentId after the pop (no TOCTOU risk — snapshot already claimed).
+    let documentId: string
+    if (snapshot.path) {
+      documentId = await generateIdFromPath(snapshot.path)
+    } else {
+      documentId = generateId()
+    }
+
+    // Save current tab state before switching
+    await saveCurrentTabState()
+
+    // Pause annotation position updates during document loading
+    useAnnotationStore.getState().setLoadingDocument(true)
+
+    // Create the new tab in the store (store sets activeTabId internally)
+    reopenLastClosedTabStore(snapshot, documentId)
+
+    // Load the restored content into editorStore
+    setDocument({
+      documentId,
+      path: snapshot.path,
+      content: snapshot.content ?? '',
+      frontmatter: snapshot.frontmatter ?? {},
+      isDirty: snapshot.isDirty
+    })
+
+    if (snapshot.cursorPosition) {
+      setCursorPosition(snapshot.cursorPosition.line, snapshot.cursorPosition.column)
+    }
+
+    setCurrentDocumentId(documentId)
+
+    // Load persisted chat/annotations/suggestions for this document
+    await loadChatForDocument(documentId)
+    await useAnnotationStore.getState().loadAnnotations(documentId)
+    await useSuggestionStore.getState().loadSuggestions(documentId)
+    await useCommentStore.getState().loadComments(documentId)
+
+    useEditorStore.getState().setRemarkableReadOnly(false, null)
+    setEditing(true)
+
+    if (snapshot.path) {
+      useFileListStore.getState().revealAndSelectPath(snapshot.path)
+    }
+
+    // Mirrors the same delay used in switchToTab/openFileInTab: gives the editor
+    // time to fully mount the restored content before re-enabling annotation
+    // position mapping (prevents the plugin from dropping marks on the new doc).
+    setTimeout(() => {
+      useAnnotationStore.getState().setLoadingDocument(false)
+    }, 100)
+  }, [popClosedTab, getTabByPath, switchToTab, saveCurrentTabState, reopenLastClosedTabStore, setDocument, setCursorPosition, loadChatForDocument, setEditing])
+
   return {
     tabs,
     activeTabId,
@@ -820,6 +966,7 @@ export function useTabs() {
     closeAllTabs,
     saveCurrentTabState,
     renameTab,
+    reopenLastClosedTab,
     getActiveTab: useTabStore.getState().getActiveTab
   }
 }

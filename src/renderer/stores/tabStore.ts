@@ -18,9 +18,23 @@ export interface Tab {
   cursorPosition?: { line: number; column: number }
 }
 
+/** Snapshot of a closed tab for session-only reopen history (max 10) */
+export interface ClosedTabSnapshot {
+  path: string | null
+  title: string
+  baseTitle?: string
+  isDirty: boolean
+  content?: string
+  frontmatter?: Record<string, unknown>
+  cursorPosition?: { line: number; column: number }
+}
+
+const CLOSED_TABS_MAX = 10
+
 interface TabState {
   tabs: Tab[]
   activeTabId: string | null
+  closedTabs: ClosedTabSnapshot[]
 
   // Tab actions
   addTab: (tab: Omit<Tab, 'id'> & { id?: string }) => string
@@ -32,6 +46,11 @@ interface TabState {
   getTabById: (tabId: string) => Tab | null
   getPreviewTab: () => Tab | null
   promotePreviewTab: (tabId: string) => void
+
+  // Closed-tab history
+  pushClosedTab: (snapshot: ClosedTabSnapshot) => void
+  popClosedTab: () => ClosedTabSnapshot | null
+  reopenLastClosedTab: (snapshot: ClosedTabSnapshot, documentId: string) => string
 
   // Utility
   getNextUntitledNumber: () => number
@@ -48,6 +67,43 @@ export const useTabStore = create<TabState>()(
   subscribeWithSelector((set, get) => ({
     tabs: [],
     activeTabId: null,
+    closedTabs: [],
+
+    pushClosedTab: (snapshot) => {
+      set((state) => {
+        const next = [snapshot, ...state.closedTabs]
+        return { closedTabs: next.length > CLOSED_TABS_MAX ? next.slice(0, CLOSED_TABS_MAX) : next }
+      })
+    },
+
+    popClosedTab: () => {
+      const state = get()
+      if (state.closedTabs.length === 0) return null
+      const [snapshot, ...rest] = state.closedTabs
+      set({ closedTabs: rest })
+      return snapshot
+    },
+
+    reopenLastClosedTab: (snapshot, documentId) => {
+      const tab: Tab = {
+        id: generateId(),
+        documentId,
+        path: snapshot.path,
+        title: snapshot.title,
+        baseTitle: snapshot.baseTitle,
+        isDirty: snapshot.isDirty,
+        content: snapshot.content,
+        frontmatter: snapshot.frontmatter,
+        cursorPosition: snapshot.cursorPosition
+      }
+
+      set((state) => ({
+        tabs: [...state.tabs, tab],
+        activeTabId: tab.id
+      }))
+
+      return tab.id
+    },
 
     addTab: (tabData) => {
       const id = tabData.id ?? generateId()
