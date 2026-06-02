@@ -90,6 +90,16 @@ export const Comment = Mark.create<CommentOptions>({
           return { 'data-comment-created': String(attributes.createdAt) }
         },
       },
+      occurrenceIndex: {
+        default: 0,
+        parseHTML: (element) => {
+          const val = element.getAttribute('data-comment-occurrence')
+          return val !== null ? parseInt(val, 10) : 0
+        },
+        renderHTML: (attributes) => {
+          return { 'data-comment-occurrence': String(attributes.occurrenceIndex ?? 0) }
+        },
+      },
     }
   },
 
@@ -121,11 +131,33 @@ export const Comment = Mark.create<CommentOptions>({
           // Get the selected text
           const markedText = state.doc.textBetween(from, to, ' ')
 
+          // Compute how many non-overlapping occurrences of markedText appear
+          // in the document strictly before the selection start (from).
+          // This is the 0-based occurrence index for this comment.
+          //
+          // IMPORTANT: `from` is a ProseMirror position (counts node-boundary
+          // tokens), while `matchIdx` is a char offset into doc.textContent.
+          // Convert `from` to char-space first via textBetween so the comparison
+          // is in the same coordinate system.
+          const docText = state.doc.textContent
+          const charsBefore = state.doc.textBetween(0, from, '').length
+          let occurrenceIndex = 0
+          if (markedText) {
+            let searchOffset = 0
+            while (true) {
+              const matchIdx = docText.indexOf(markedText, searchOffset)
+              if (matchIdx === -1 || matchIdx >= charsBefore) break
+              occurrenceIndex++
+              searchOffset = matchIdx + markedText.length
+            }
+          }
+
           const commentData: CommentData = {
             id: attrs.id,
             markedText,
             comment: attrs.comment,
             createdAt: Date.now(),
+            occurrenceIndex,
             from,
             to,
           }
@@ -134,6 +166,7 @@ export const Comment = Mark.create<CommentOptions>({
             id: attrs.id,
             comment: attrs.comment,
             createdAt: Date.now(),
+            occurrenceIndex,
           })
 
           if (result && this.options.onCommentAdded) {
@@ -199,13 +232,38 @@ export const Comment = Mark.create<CommentOptions>({
             }
 
             const docText = doc.textContent
-            const textIndex = docText.indexOf(searchText)
+            // Walk occurrences of searchText and stop at the Nth one, where N is
+            // comment.occurrenceIndex (default 0 for backward-compat with older data).
+            const targetOccurrence = comment.occurrenceIndex ?? 0
+            let currentOccurrence = 0
+            let searchOffset = 0
+            let textIndex = -1
+            let foundTarget = false
+            while (true) {
+              const matchIdx = docText.indexOf(searchText, searchOffset)
+              if (matchIdx === -1) break
+              textIndex = matchIdx // track last found as fallback
+              if (currentOccurrence === targetOccurrence) {
+                foundTarget = true
+                break
+              }
+              currentOccurrence++
+              searchOffset = matchIdx + searchText.length
+            }
             if (textIndex === -1) {
               console.warn('[Comment] Cannot find markedText in document:', {
                 id: comment.id,
                 markedText: searchText.substring(0, 50)
               })
               continue
+            }
+            if (!foundTarget) {
+              // Fewer occurrences than expected (text changed); fell back to last found
+              console.warn('[Comment] occurrenceIndex out of range, using last occurrence:', {
+                id: comment.id,
+                targetOccurrence,
+                usedOccurrence: currentOccurrence
+              })
             }
 
             // Walk the document to map char index → ProseMirror positions
@@ -244,6 +302,7 @@ export const Comment = Mark.create<CommentOptions>({
               id: comment.id,
               comment: comment.comment,
               createdAt: comment.createdAt,
+              occurrenceIndex: comment.occurrenceIndex ?? 0,
             })
 
             tr.addMark(foundStart, foundEnd, mark)
@@ -271,7 +330,7 @@ export const Comment = Mark.create<CommentOptions>({
 /**
  * Extract all comments from the editor
  */
-export function getComments(editor: { state: { doc: { descendants: (fn: (node: { marks: Array<{ type: { name: string }; attrs: { id: string; comment: string; createdAt: number } }>; nodeSize: number; textContent: string }, pos: number) => void) => void; textBetween: (from: number, to: number, blockSeparator?: string) => string } } }): CommentData[] {
+export function getComments(editor: { state: { doc: { descendants: (fn: (node: { marks: Array<{ type: { name: string }; attrs: { id: string; comment: string; createdAt: number } }>; nodeSize: number; textContent: string }, pos: number) => void) => void; textBetween: (from: number, to: number, blockSeparator?: string) => string; textContent: string } } }): CommentData[] {
   // Map to collect all text nodes for each comment ID
   const commentMap = new Map<string, {
     texts: string[]
@@ -306,13 +365,34 @@ export function getComments(editor: { state: { doc: { descendants: (fn: (node: {
   })
 
   // Convert map to array, joining all text nodes with paragraph separator
+  const docText = editor.state.doc.textContent
   const comments: CommentData[] = []
   commentMap.forEach((data, id) => {
+    const markedText = editor.state.doc.textBetween(data.from, data.to, ' ')
+
+    // Compute occurrenceIndex: how many non-overlapping prior occurrences of
+    // markedText exist in the full document text before data.from.
+    //
+    // IMPORTANT: `data.from` is a ProseMirror position, not a char offset.
+    // Convert to char-space via textBetween before comparing against matchIdx.
+    const charsBefore = editor.state.doc.textBetween(0, data.from, '').length
+    let occurrenceIndex = 0
+    if (markedText) {
+      let searchOffset = 0
+      while (true) {
+        const matchIdx = docText.indexOf(markedText, searchOffset)
+        if (matchIdx === -1 || matchIdx >= charsBefore) break
+        occurrenceIndex++
+        searchOffset = matchIdx + markedText.length
+      }
+    }
+
     comments.push({
       id,
-      markedText: editor.state.doc.textBetween(data.from, data.to, ' '),
+      markedText,
       comment: data.comment,
       createdAt: data.createdAt,
+      occurrenceIndex,
       from: data.from,
       to: data.to,
     })
