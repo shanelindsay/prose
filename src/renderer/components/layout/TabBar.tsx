@@ -21,9 +21,10 @@ import {
 import type { TabTier } from '../../hooks/useTabTier'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useTabEmoji } from '../../hooks/useTabEmoji'
-import { regenerateEmoji } from '../../lib/emojiService'
 import { useSettings } from '../../hooks/useSettings'
 import { isMacOS } from '../../lib/browserApi'
+import { isAIConfigured } from '../../lib/llm'
+import { useNotificationStore } from '../../stores/notificationStore'
 
 interface TabBarProps {
   onTabClick: (tabId: string) => void
@@ -260,7 +261,7 @@ function TabItem({
 
   // Emoji: always generate eagerly, display based on tab width or setting
   const { settings } = useSettings()
-  const emoji = useTabEmoji(tab)
+  const { emoji, regenerate } = useTabEmoji(tab)
   const showEmoji = settings.llm.emojiIcons || (tabWidth !== undefined && tabWidth <= 140)
 
   // Focus input when editing starts
@@ -275,19 +276,45 @@ function TabItem({
   const lastDot = tab.path ? tab.path.lastIndexOf('.') : -1
   const extension = lastDot > 0 ? tab.path!.substring(lastDot) : ''
 
+  // Emoji generation is LLM-powered (main-process emoji:generate → Anthropic).
+  // Without a configured key it silently no-ops, so give explicit feedback
+  // rather than appearing dead.
   const handleRegenEmoji = useCallback(() => {
-    regenerateEmoji(tab)
-  }, [tab])
+    if (!isAIConfigured(settings)) {
+      useNotificationStore.getState().notify({
+        id: 'emoji-needs-ai',
+        message: 'Emoji generation needs an Anthropic API key — add one in Settings → Integrations.',
+      })
+      return
+    }
+    // For the active tab the freshest content lives in the editor, not
+    // tab.content (which can lag) — pass it so regeneration reflects what the
+    // user actually wrote (mirrors the H1-suggestion logic in handleDoubleClick).
+    const liveContent = isActive
+      ? useEditorStore.getState().document.content
+      : tab.content
+    regenerate(liveContent)
+  }, [tab, isActive, settings, regenerate])
 
-  // Add the tab's file to global Favorites. Untitled (unsaved) tabs have no
-  // path to point at, so the menu item is disabled for them. Dedup by path
-  // like the file-tree version (FileListPanel.addPathAsFavorite).
-  const handleAddFavorite = useCallback(() => {
+  // Whether this tab's file is currently a favorite. Subscribed (not a
+  // getState snapshot) so the menu item's label/icon stay in sync after a
+  // toggle. Untitled (unsaved) tabs have no path and can't be favorited.
+  const isFavorited = useSettingsStore(
+    (state) => !!tab.path && (state.settings.favorites ?? []).some((f) => f.path === tab.path)
+  )
+
+  // Toggle the tab's file in global Favorites. Dedup by path like the
+  // file-tree version (FileListPanel.addPathAsFavorite).
+  const handleToggleFavorite = useCallback(() => {
     if (!tab.path) return
-    const existing = useSettingsStore.getState().settings.favorites ?? []
-    if (existing.some((f) => f.path === tab.path)) return
+    const store = useSettingsStore.getState()
+    const existing = (store.settings.favorites ?? []).find((f) => f.path === tab.path)
+    if (existing) {
+      store.removeFavorite(existing.id)
+      return
+    }
     const name = tab.path.split('/').pop() || tab.path
-    useSettingsStore.getState().addFavorite({
+    store.addFavorite({
       id: self.crypto.randomUUID(),
       name,
       path: tab.path,
@@ -454,9 +481,9 @@ function TabItem({
             </>
           )}
           <ContextMenuSeparator />
-          <ContextMenuItem onClick={handleAddFavorite} disabled={!tab.path}>
-            <Star className="h-4 w-4 mr-2" />
-            Add to Favorites
+          <ContextMenuItem onClick={handleToggleFavorite} disabled={!tab.path}>
+            <Star className={cn('h-4 w-4 mr-2', isFavorited && 'fill-current')} />
+            {isFavorited ? 'Remove from Favorites' : 'Add to Favorites'}
           </ContextMenuItem>
           <ContextMenuItem onClick={onShowInFolder} disabled={!tab.path}>
             <ExternalLink className="h-4 w-4 mr-2" />

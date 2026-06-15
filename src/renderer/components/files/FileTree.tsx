@@ -11,12 +11,14 @@ import {
   ContextMenuTrigger
 } from '../ui/context-menu'
 
-const EMPTY_FAVORITE_PATHS: ReadonlySet<string> = new Set()
+const EMPTY_PATH_SET: ReadonlySet<string> = new Set()
 
 interface FileTreeProps {
   items: FileItem[]
   /** Set of favorited file paths, subscribed once at the root and threaded down. */
   favoritePaths?: ReadonlySet<string>
+  /** Set of project folder paths, subscribed once at the root and threaded down. */
+  projectPaths?: ReadonlySet<string>
   expandedFolders: Set<string>
   selectedPath: string | null
   loadingFolders?: Set<string>
@@ -41,13 +43,16 @@ interface FileTreeProps {
   onNewFile?: (dirPath: string) => void
   onAddProject?: (path: string) => void
   onAddFavorite?: (path: string, isDirectory: boolean) => void
+  onRemoveProject?: (path: string) => void
+  onRemoveFavorite?: (path: string) => void
   onFileDrop?: (sourcePath: string, targetDirPath: string) => void
   depth?: number
 }
 
 export function FileTree({
   items,
-  favoritePaths = EMPTY_FAVORITE_PATHS,
+  favoritePaths = EMPTY_PATH_SET,
+  projectPaths = EMPTY_PATH_SET,
   expandedFolders,
   selectedPath,
   loadingFolders,
@@ -72,6 +77,8 @@ export function FileTree({
   onNewFile,
   onAddProject,
   onAddFavorite,
+  onRemoveProject,
+  onRemoveFavorite,
   onFileDrop,
   depth = 0
 }: FileTreeProps) {
@@ -82,6 +89,7 @@ export function FileTree({
           key={item.path}
           item={item}
           favoritePaths={favoritePaths}
+          projectPaths={projectPaths}
           expandedFolders={expandedFolders}
           selectedPath={selectedPath}
           loadingFolders={loadingFolders}
@@ -106,6 +114,8 @@ export function FileTree({
           onNewFile={onNewFile}
           onAddProject={onAddProject}
           onAddFavorite={onAddFavorite}
+          onRemoveProject={onRemoveProject}
+          onRemoveFavorite={onRemoveFavorite}
           onFileDrop={onFileDrop}
           depth={depth}
         />
@@ -117,6 +127,7 @@ export function FileTree({
 interface FileTreeItemProps {
   item: FileItem
   favoritePaths: ReadonlySet<string>
+  projectPaths: ReadonlySet<string>
   expandedFolders: Set<string>
   selectedPath: string | null
   loadingFolders?: Set<string>
@@ -141,6 +152,8 @@ interface FileTreeItemProps {
   onNewFile?: (dirPath: string) => void
   onAddProject?: (path: string) => void
   onAddFavorite?: (path: string, isDirectory: boolean) => void
+  onRemoveProject?: (path: string) => void
+  onRemoveFavorite?: (path: string) => void
   onFileDrop?: (sourcePath: string, targetDirPath: string) => void
   depth: number
 }
@@ -148,6 +161,7 @@ interface FileTreeItemProps {
 function FileTreeItem({
   item,
   favoritePaths,
+  projectPaths,
   expandedFolders,
   selectedPath,
   loadingFolders,
@@ -172,6 +186,8 @@ function FileTreeItem({
   onNewFile,
   onAddProject,
   onAddFavorite,
+  onRemoveProject,
+  onRemoveFavorite,
   onFileDrop,
   depth
 }: FileTreeItemProps) {
@@ -183,9 +199,11 @@ function FileTreeItem({
   // Denote favorite files in the tree (folders keep their folder icon).
   // favoritePaths is subscribed once at the root and threaded down (no per-item subscription).
   const isFavorite = !item.isDirectory && favoritePaths.has(item.path)
-  // Whether this item (file or folder) is in the favorites list — used for
-  // the trailing star button affordance that applies to both types.
-  const isItemFavorited = favoritePaths.has(item.path)
+  // For the right-click menu, favorite/project membership applies to folders too
+  // (a folder can be a favorite or a project), unlike the file-only icon above.
+  // These drive the "Add … / Remove …" toggle so the menu reflects current state.
+  const isFavoritePath = favoritePaths.has(item.path)
+  const isProjectPath = projectPaths.has(item.path)
 
   // Inline rename state
   const [renameValue, setRenameValue] = useState('')
@@ -331,7 +349,7 @@ function FileTreeItem({
 
   const buttonElement = (
     <div
-      className={cn("group flex items-center", ((!item.isDirectory && onFileLinkClick) || onAddFavorite) && "relative")}
+      className={cn("group flex items-center", !item.isDirectory && onFileLinkClick && "relative")}
     >
       <button
         ref={buttonRef}
@@ -365,6 +383,10 @@ function FileTreeItem({
             )}
             {isDragOver ? (
               <FolderOpen className="h-4 w-4 shrink-0 text-muted-foreground" />
+            ) : isProjectPath ? (
+              // Project folders get the established project icon (Boxes), mirroring
+              // how favorited files swap their file icon for a star.
+              <Boxes className="h-4 w-4 shrink-0 text-muted-foreground" />
             ) : (
               <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
             )}
@@ -373,7 +395,7 @@ function FileTreeItem({
           <>
             <span className="w-3.5" />
             {isFavorite ? (
-              <Star className="h-4 w-4 shrink-0 fill-amber-400 text-amber-400" />
+              <Star className="h-4 w-4 shrink-0 fill-current text-muted-foreground" />
             ) : item.name.endsWith('.txt') ? (
               <FileType className="h-4 w-4 shrink-0 text-muted-foreground" />
             ) : (
@@ -405,26 +427,6 @@ function FileTreeItem({
           title="Open in Google Docs"
         >
           <ExternalLink className="h-3 w-3 text-muted-foreground" />
-        </button>
-      )}
-      {onAddFavorite && !isRenaming && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onAddFavorite(item.path, item.isDirectory)
-          }}
-          className={cn(
-            'absolute right-1 p-1 rounded hover:bg-accent transition-opacity',
-            isItemFavorited ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-          )}
-          title={isItemFavorited ? 'Favorited' : 'Add to Favorites'}
-        >
-          <Star
-            className={cn(
-              'h-3 w-3',
-              isItemFavorited ? 'fill-amber-400 text-amber-400' : 'text-muted-foreground'
-            )}
-          />
         </button>
       )}
     </div>
@@ -478,10 +480,17 @@ function FileTreeItem({
       {onAddFavorite && (
         <>
           <ContextMenuSeparator />
-          <ContextMenuItem onClick={() => onAddFavorite(item.path, false)}>
-            <Star className="h-4 w-4 mr-2" />
-            Add to Favorites
-          </ContextMenuItem>
+          {isFavoritePath && onRemoveFavorite ? (
+            <ContextMenuItem onClick={() => onRemoveFavorite(item.path)}>
+              <Star className="h-4 w-4 mr-2 fill-current" />
+              Remove from Favorites
+            </ContextMenuItem>
+          ) : (
+            <ContextMenuItem onClick={() => onAddFavorite(item.path, false)}>
+              <Star className="h-4 w-4 mr-2" />
+              Add to Favorites
+            </ContextMenuItem>
+          )}
         </>
       )}
       {(onFileTrash || onFileDelete) && (
@@ -527,16 +536,30 @@ function FileTreeItem({
       )}
       {(onAddProject || onAddFavorite) && <ContextMenuSeparator />}
       {onAddProject && (
-        <ContextMenuItem onClick={() => onAddProject(item.path)}>
-          <Boxes className="h-4 w-4 mr-2" />
-          Add as Project
-        </ContextMenuItem>
+        isProjectPath && onRemoveProject ? (
+          <ContextMenuItem onClick={() => onRemoveProject(item.path)}>
+            <Boxes className="h-4 w-4 mr-2" />
+            Remove from Projects
+          </ContextMenuItem>
+        ) : (
+          <ContextMenuItem onClick={() => onAddProject(item.path)}>
+            <Boxes className="h-4 w-4 mr-2" />
+            Add as Project
+          </ContextMenuItem>
+        )
       )}
       {onAddFavorite && (
-        <ContextMenuItem onClick={() => onAddFavorite(item.path, true)}>
-          <Star className="h-4 w-4 mr-2" />
-          Add to Favorites
-        </ContextMenuItem>
+        isFavoritePath && onRemoveFavorite ? (
+          <ContextMenuItem onClick={() => onRemoveFavorite(item.path)}>
+            <Star className="h-4 w-4 mr-2 fill-amber-400 text-amber-400" />
+            Remove from Favorites
+          </ContextMenuItem>
+        ) : (
+          <ContextMenuItem onClick={() => onAddFavorite(item.path, true)}>
+            <Star className="h-4 w-4 mr-2" />
+            Add to Favorites
+          </ContextMenuItem>
+        )
       )}
     </ContextMenuContent>
   )
@@ -559,6 +582,7 @@ function FileTreeItem({
         <FileTree
           items={item.children}
           favoritePaths={favoritePaths}
+          projectPaths={projectPaths}
           expandedFolders={expandedFolders}
           selectedPath={selectedPath}
           loadingFolders={loadingFolders}
@@ -583,6 +607,8 @@ function FileTreeItem({
           onNewFile={onNewFile}
           onAddProject={onAddProject}
           onAddFavorite={onAddFavorite}
+          onRemoveProject={onRemoveProject}
+          onRemoveFavorite={onRemoveFavorite}
           onFileDrop={onFileDrop}
           depth={depth + 1}
         />
