@@ -6,7 +6,7 @@ import { randomUUID } from 'crypto'
 import { homedir } from 'os'
 import type { Settings } from '../renderer/types'
 import { withRetry, getNetworkErrorMessage } from '../shared/utils/retry'
-import { getDefaultModel, getDefaultHaikuModel } from '../shared/llm/models'
+import { getDefaultModel, getDefaultHaikuModel, supportsAdaptiveThinking } from '../shared/llm/models'
 import { getSettingsDir, LEGACY_SETTINGS_DIR } from './paths'
 import { clearRecentFiles } from './recentFiles'
 import { refreshMenu, setReopenClosedTabEnabled } from './menu'
@@ -967,19 +967,17 @@ export function setupIpcHandlers(): void {
 
         console.log('[LLM:stream] Creating Anthropic stream with tools:', anthropicTools.map(t => t.name))
 
-        // Extended thinking — enabled when the caller requests it (default: true
-        // for Anthropic requests with tools). budget_tokens sets the ceiling for
-        // thinking tokens; max_tokens must be larger than budget_tokens. We raise
-        // the overall ceiling so there is room for both thinking and output text.
-        const THINKING_BUDGET = 8000
-        const thinkingParam = request.thinking !== false
-          ? { type: 'enabled' as const, budget_tokens: THINKING_BUDGET }
+        // Extended thinking — adaptive mode, capability-gated per model.
+        // Only Opus 4.7+, Opus 4.8, and Fable 5 support it; Sonnet/Haiku return
+        // HTTP 400 if the param is sent. `display: "summarized"` is mandatory —
+        // the default "omitted" yields an empty thinking string. Depth is
+        // controlled by output_config.effort, not a token budget.
+        const thinkingEnabled = request.thinking !== false && supportsAdaptiveThinking(request.model)
+        const thinkingParam = thinkingEnabled
+          ? { type: 'adaptive' as const, display: 'summarized' as const }
           : undefined
 
-        // Ensure max_tokens > budget_tokens when thinking is on.
-        const maxTokens = thinkingParam
-          ? Math.max(request.maxTokens || 16000, THINKING_BUDGET + 4096)
-          : (request.maxTokens || 4096)
+        const maxTokens = request.maxTokens || 16000
 
         const streamParams: Parameters<typeof client.messages.stream>[0] = {
           model: request.model,
@@ -987,7 +985,8 @@ export function setupIpcHandlers(): void {
           system: request.system,
           messages: anthropicMessages,
           tools: anthropicTools,
-          ...(thinkingParam ? { thinking: thinkingParam } : {})
+          ...(thinkingParam ? { thinking: thinkingParam } : {}),
+          ...(thinkingEnabled ? { output_config: { effort: 'high' as const } } : {})
         }
 
         const stream = client.messages.stream(streamParams)

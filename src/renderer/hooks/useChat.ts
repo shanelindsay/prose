@@ -153,6 +153,7 @@ export function useChat() {
     isPanelOpen,
     context,
     toolMode,
+    thinkingEnabled,
     activeConversationId,
     isStreaming,
     isInitializing,
@@ -470,7 +471,7 @@ export function useChat() {
             tools,
             maxToolRoundtrips: 5,
             maxTokens: state.toolMode === 'chat' ? 16000 : 16000,
-            thinking: true
+            thinking: state.thinkingEnabled
           })
         } catch (error) {
           console.error('[Chat] Tool loop error:', error)
@@ -687,7 +688,7 @@ export function useChat() {
           tools,
           maxToolRoundtrips: 5,
           maxTokens: 16000,
-          thinking: true
+          thinking: thinkingEnabled
         })
       } catch (error) {
         console.error('[Chat] Error:', error)
