@@ -230,8 +230,10 @@ test.describe('Electron — file explorer QA (#723)', () => {
 
     // The file list sorts by localeCompare, so the visible order is:
     // alpha(0), beta(1), delta(2), epsilon(3), eta(4), gamma(5), iota(6), kappa(7), theta(8), zeta(9)
-    // Shift+click eta — should select the contiguous run alpha..eta (5 files)
-    await panel.getByText('eta').click({ modifiers: ['Shift'] })
+    // Shift+click eta — should select the contiguous run alpha..eta (5 files).
+    // Use an exact-name locator: 'eta' is a substring of beta/theta/zeta so
+    // getByText without anchoring would match 4 elements and throw in strict mode.
+    await panel.locator('button[title]', { hasText: /^eta$/ }).click({ modifiers: ['Shift'] })
     await page.waitForTimeout(100)
 
     const selected = await getSelectedPaths(page)
