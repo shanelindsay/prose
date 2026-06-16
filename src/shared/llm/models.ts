@@ -46,10 +46,13 @@ export function getDefaultHaikuModel(): string {
 /**
  * Model IDs that support the adaptive thinking API
  * (`thinking: {type: "adaptive", display: "summarized"}`).
- * Claude Opus 4.7+, Opus 4.8, and Fable 5 support it.
- * Sonnet 4.6 and Haiku 4.5 do NOT — sending the param returns HTTP 400.
+ * Sonnet 4.6, Opus 4.6+, and Fable 5 support it.
+ * Haiku 4.5 and older Sonnets (4.5/4.0) do NOT — sending the param
+ * returns HTTP 400 on those models.
  */
 const THINKING_CAPABLE_PREFIXES = [
+  'claude-sonnet-4-6',
+  'claude-opus-4-6',
   'claude-opus-4-7',
   'claude-opus-4-8',
   'claude-fable-5',
