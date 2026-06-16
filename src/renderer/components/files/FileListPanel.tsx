@@ -40,7 +40,7 @@ import {
 } from '../ui/dialog'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
-import { History, Cloud, Plus, FileText, BookOpen, CloudOff, ChevronUp, ChevronLeft, ChevronRight, ChevronDown, Folder, FolderOpen, FolderInput, Download, Trash2, FilePlus, ClipboardPaste, ExternalLink, X, Globe, Edit3, RefreshCw, Loader2, AlertTriangle, Bug, Boxes, Star, MoreHorizontal } from 'lucide-react'
+import { History, Cloud, Plus, FileText, BookOpen, CloudOff, ChevronUp, ChevronLeft, ChevronRight, ChevronDown, Folder, FolderOpen, FolderInput, FolderPlus, Download, Trash2, FilePlus, ClipboardPaste, ExternalLink, X, Globe, Edit3, RefreshCw, Loader2, AlertTriangle, Bug, Boxes, Star, MoreHorizontal } from 'lucide-react'
 import { useSettings } from '../../hooks/useSettings'
 import { cn } from '../../lib/utils'
 import { getApi } from '../../lib/browserApi'
@@ -339,6 +339,47 @@ export function FileListPanel() {
     setNewFileDialogOpen(true)
   }
 
+  // New Folder dialog state
+  const [newFolderDialogOpen, setNewFolderDialogOpen] = useState(false)
+  const [newFolderTargetDir, setNewFolderTargetDir] = useState<string | null>(null)
+  const [newFolderName, setNewFolderName] = useState('')
+
+  const handleNewFolderInDir = useCallback((parentDir: string) => {
+    setNewFolderTargetDir(parentDir)
+    setNewFolderName('')
+    setOperationError(null)
+    setNewFolderDialogOpen(true)
+  }, [])
+
+  const handleNewFolder = () => {
+    setNewFolderTargetDir(rootPath)
+    setNewFolderName('')
+    setOperationError(null)
+    setNewFolderDialogOpen(true)
+  }
+
+  const handleCreateNewFolder = async () => {
+    const targetDir = newFolderTargetDir || rootPath
+    if (!targetDir || !newFolderName.trim() || !window.api?.createDirectory) return
+
+    try {
+      const folderPath = `${targetDir}/${newFolderName.trim()}`
+      await window.api.createDirectory(folderPath)
+      await loadFiles()
+      // Expand parent so the new folder is visible
+      useFileListStore.getState().setExpanded(targetDir, true)
+      setNewFolderDialogOpen(false)
+    } catch (error) {
+      console.error('Error creating folder:', error)
+      setOperationError('Failed to create folder. Please try again.')
+    }
+  }
+
+  // Open a non-markdown file externally (Show in Finder / Open with default app)
+  const handleOpenExternally = useCallback((path: string) => {
+    window.api?.showInFolder(path)
+  }, [])
+
   // Add a path to the persisted pointer list (folders → projects/favorites,
   // files → favorites). Idempotent: dedup by path so re-adding is a no-op.
   const addPathAsProject = useCallback((path: string) => {
@@ -417,15 +458,25 @@ export function FileListPanel() {
     setRenamingPath(path)
   }, [selectFile, setRenamingPath])
 
-  // Inline rename complete handler
+  // Inline rename complete handler — works for both files and directories
   const handleRenameComplete = useCallback(async (oldPath: string, newName: string) => {
     setRenamingPath(null)
     if (!newName.trim()) return
 
     try {
       const dir = oldPath.substring(0, oldPath.lastIndexOf('/'))
-      const oldExt = oldPath.match(/\.(md|markdown|txt)$/)?.[0] || '.md'
-      const finalName = newName.endsWith(oldExt) ? newName : `${newName}${oldExt}`
+      const isMarkdownFile = /\.(md|markdown|txt)$/.test(oldPath)
+
+      let finalName: string
+      if (isMarkdownFile) {
+        // File: preserve/append the extension
+        const oldExt = oldPath.match(/\.(md|markdown|txt)$/)?.[0] || '.md'
+        finalName = newName.endsWith(oldExt) ? newName : `${newName}${oldExt}`
+      } else {
+        // Directory (or non-markdown file): use the name as typed
+        finalName = newName.trim()
+      }
+
       const newPath = `${dir}/${finalName}`
 
       // Same name? No-op
@@ -434,40 +485,42 @@ export function FileListPanel() {
       // Check conflict
       const exists = await api.fileExists(newPath)
       if (exists) {
-        console.error(`File "${finalName}" already exists`)
+        console.error(`"${finalName}" already exists`)
         return
       }
 
       await api.renameFile(oldPath, newPath)
 
-      // Tab sync: update tab if file was open
-      const tab = useTabStore.getState().getTabByPath(oldPath)
-      if (tab) {
-        const newTitle = finalName.replace(/\.(md|markdown|txt)$/, '')
-        useTabStore.getState().updateTab(tab.id, { path: newPath, title: newTitle })
-      }
-
-      // If this file is tracked in Google Docs metadata, update its localPath
-      if (googleDocsMetadata && window.api?.googleUpdateSyncMetadataEntry) {
-        const trackedEntry = Object.values(googleDocsMetadata.documents).find(
-          (e) => e.localPath === oldPath
-        )
-        if (trackedEntry) {
+      if (isMarkdownFile) {
+        // Tab sync: update tab if the file was open
+        const tab = useTabStore.getState().getTabByPath(oldPath)
+        if (tab) {
           const newTitle = finalName.replace(/\.(md|markdown|txt)$/, '')
-          await window.api.googleUpdateSyncMetadataEntry({
-            ...trackedEntry,
-            localPath: newPath,
-            title: newTitle
-          })
-          await loadGoogleDocsMetadata()
+          useTabStore.getState().updateTab(tab.id, { path: newPath, title: newTitle })
+        }
+
+        // If tracked in Google Docs metadata, update its localPath
+        if (googleDocsMetadata && window.api?.googleUpdateSyncMetadataEntry) {
+          const trackedEntry = Object.values(googleDocsMetadata.documents).find(
+            (e) => e.localPath === oldPath
+          )
+          if (trackedEntry) {
+            const newTitle = finalName.replace(/\.(md|markdown|txt)$/, '')
+            await window.api.googleUpdateSyncMetadataEntry({
+              ...trackedEntry,
+              localPath: newPath,
+              title: newTitle
+            })
+            await loadGoogleDocsMetadata()
+          }
         }
       }
 
-      // Refresh file list and select the renamed file
+      // Refresh file list and select the renamed entry
       await loadFiles()
       selectFile(newPath)
     } catch (error) {
-      console.error('Error renaming file:', error)
+      console.error('Error renaming:', error)
     }
   }, [api, googleDocsMetadata, loadGoogleDocsMetadata, loadFiles, selectFile, setRenamingPath])
 
@@ -1502,6 +1555,8 @@ export function FileListPanel() {
                       onRenameComplete={handleRenameComplete}
                       onRenameCancel={handleRenameCancel}
                       onNewFile={handleNewFileInDir}
+                      onNewFolder={handleNewFolderInDir}
+                      onFileOpen={handleOpenExternally}
                       onAddProject={addPathAsProject}
                       onAddFavorite={addPathAsFavorite}
                       onRemoveProject={removePathAsProject}
@@ -1516,6 +1571,10 @@ export function FileListPanel() {
                   <FilePlus className="h-4 w-4 mr-2" />
                   New File
                   <ContextMenuShortcut>⌘N</ContextMenuShortcut>
+                </ContextMenuItem>
+                <ContextMenuItem onClick={handleNewFolder}>
+                  <FolderPlus className="h-4 w-4 mr-2" />
+                  New Folder
                 </ContextMenuItem>
                 <ContextMenuItem onClick={() => pasteFile()} disabled={!clipboardPath}>
                   <ClipboardPaste className="h-4 w-4 mr-2" />
@@ -1716,6 +1775,53 @@ export function FileListPanel() {
               Cancel
             </Button>
             <Button onClick={handleCreateNewFile} disabled={!newFileName.trim()}>
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* New Folder Dialog */}
+      <Dialog open={newFolderDialogOpen} onOpenChange={(open) => {
+        if (!open) {
+          setNewFolderDialogOpen(false)
+          setOperationError(null)
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>New Folder</DialogTitle>
+            <DialogDescription>
+              Enter a name for the new folder.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="new-folder-name">Folder name</Label>
+              <Input
+                id="new-folder-name"
+                value={newFolderName}
+                onChange={(e) => {
+                  setNewFolderName(e.target.value)
+                  setOperationError(null)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleCreateNewFolder()
+                  }
+                }}
+                autoFocus
+              />
+              {operationError && (
+                <p className="text-sm text-destructive">{operationError}</p>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setNewFolderDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreateNewFolder} disabled={!newFolderName.trim()}>
               Create
             </Button>
           </DialogFooter>

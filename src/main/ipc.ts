@@ -490,7 +490,7 @@ export function setupIpcHandlers(): void {
   })
 
   // File: List directory contents (with lazy loading support)
-  ipcMain.handle('file:listDirectory', async (_event, dirPath: string, maxDepth: number = 1) => {
+  ipcMain.handle('file:listDirectory', async (_event, dirPath: string, maxDepth: number = 1, showDotfiles: boolean = false) => {
     interface FileItem {
       name: string
       path: string
@@ -498,7 +498,11 @@ export function setupIpcHandlers(): void {
       modifiedAt: string
       children?: FileItem[]
       hasChildren?: boolean // For lazy loading - indicates folder has content without loading it
+      isNonMarkdown?: boolean // Non-editable file, shown greyed in the explorer
+      isDotfile?: boolean    // Dot-prefixed entry (shown when showDotfiles is true)
     }
+
+    const MARKDOWN_EXTS = new Set(['.md', '.markdown', '.txt'])
 
     async function listDir(dir: string, depth: number = 0): Promise<FileItem[]> {
       try {
@@ -506,8 +510,10 @@ export function setupIpcHandlers(): void {
         const items: FileItem[] = []
 
         for (const entry of entries) {
-          // Skip hidden files
-          if (entry.name.startsWith('.')) continue
+          const isDotfile = entry.name.startsWith('.')
+
+          // Skip dotfiles unless the toggle is on
+          if (isDotfile && !showDotfiles) continue
 
           const fullPath = join(dir, entry.name)
           let stats
@@ -528,17 +534,18 @@ export function setupIpcHandlers(): void {
                 isDirectory: true,
                 modifiedAt: stats.mtime.toISOString(),
                 children,
-                hasChildren: children.length > 0
+                hasChildren: children.length > 0,
+                ...(isDotfile ? { isDotfile: true } : {})
               })
             } else {
               // Beyond depth limit - just check if folder has any relevant content
               let hasChildren = false
               try {
                 const subEntries = await readdir(fullPath, { withFileTypes: true })
-                hasChildren = subEntries.some(e =>
-                  !e.name.startsWith('.') &&
-                  (e.isDirectory() || e.name.endsWith('.md') || e.name.endsWith('.markdown') || e.name.endsWith('.txt'))
-                )
+                hasChildren = subEntries.some(e => {
+                  if (e.name.startsWith('.') && !showDotfiles) return false
+                  return e.isDirectory() || e.name.endsWith('.md') || e.name.endsWith('.markdown') || e.name.endsWith('.txt')
+                })
               } catch {
                 // Can't read folder, assume no children
               }
@@ -547,15 +554,21 @@ export function setupIpcHandlers(): void {
                 path: fullPath,
                 isDirectory: true,
                 modifiedAt: stats.mtime.toISOString(),
-                hasChildren
+                hasChildren,
+                ...(isDotfile ? { isDotfile: true } : {})
               })
             }
-          } else if (entry.name.endsWith('.md') || entry.name.endsWith('.markdown') || entry.name.endsWith('.txt')) {
+          } else {
+            const dotIdx = entry.name.lastIndexOf('.')
+            const ext = dotIdx > 0 ? entry.name.slice(dotIdx) : ''
+            const isMarkdown = MARKDOWN_EXTS.has(ext)
             items.push({
               name: entry.name,
               path: fullPath,
               isDirectory: false,
-              modifiedAt: stats.mtime.toISOString()
+              modifiedAt: stats.mtime.toISOString(),
+              ...(!isMarkdown ? { isNonMarkdown: true } : {}),
+              ...(isDotfile ? { isDotfile: true } : {})
             })
           }
         }
@@ -573,6 +586,13 @@ export function setupIpcHandlers(): void {
     // Validate and expand path
     const safePath = validatePath(dirPath)
     return listDir(safePath, 0)
+  })
+
+  // File: Create a new directory (MAS-sandbox-safe via the user-granted parent)
+  ipcMain.handle('file:createDirectory', async (_event, dirPath: string) => {
+    const safePath = validatePath(dirPath)
+    await mkdir(safePath, { recursive: true })
+    return safePath
   })
 
   // Settings: Load from userData/settings.json
