@@ -21,11 +21,17 @@ interface FileTreeProps {
   projectPaths?: ReadonlySet<string>
   expandedFolders: Set<string>
   selectedPath: string | null
+  /** All currently selected paths for multi-select. */
+  selectedPaths?: ReadonlySet<string>
   loadingFolders?: Set<string>
   renamingPath?: string | null
   clipboardPath?: string | null
   clipboardOperation?: 'copy' | 'cut' | null
   onFileClick: (path: string) => void
+  /** Cmd/Ctrl+click: toggle this path in the selection set. */
+  onFileToggleSelect?: (path: string) => void
+  /** Shift+click: range-select from anchor to this path. */
+  onFileRangeSelect?: (path: string) => void
   onFolderToggle: (path: string) => void
   onFolderDoubleClick?: (path: string) => void
   onFileDoubleClick?: (path: string) => void
@@ -55,11 +61,14 @@ export function FileTree({
   projectPaths = EMPTY_PATH_SET,
   expandedFolders,
   selectedPath,
+  selectedPaths = EMPTY_PATH_SET,
   loadingFolders,
   renamingPath,
   clipboardPath,
   clipboardOperation,
   onFileClick,
+  onFileToggleSelect,
+  onFileRangeSelect,
   onFolderToggle,
   onFolderDoubleClick,
   onFileDoubleClick,
@@ -92,11 +101,14 @@ export function FileTree({
           projectPaths={projectPaths}
           expandedFolders={expandedFolders}
           selectedPath={selectedPath}
+          selectedPaths={selectedPaths}
           loadingFolders={loadingFolders}
           renamingPath={renamingPath}
           clipboardPath={clipboardPath}
           clipboardOperation={clipboardOperation}
           onFileClick={onFileClick}
+          onFileToggleSelect={onFileToggleSelect}
+          onFileRangeSelect={onFileRangeSelect}
           onFolderToggle={onFolderToggle}
           onFolderDoubleClick={onFolderDoubleClick}
           onFileDoubleClick={onFileDoubleClick}
@@ -130,11 +142,14 @@ interface FileTreeItemProps {
   projectPaths: ReadonlySet<string>
   expandedFolders: Set<string>
   selectedPath: string | null
+  selectedPaths: ReadonlySet<string>
   loadingFolders?: Set<string>
   renamingPath?: string | null
   clipboardPath?: string | null
   clipboardOperation?: 'copy' | 'cut' | null
   onFileClick: (path: string) => void
+  onFileToggleSelect?: (path: string) => void
+  onFileRangeSelect?: (path: string) => void
   onFolderToggle: (path: string) => void
   onFolderDoubleClick?: (path: string) => void
   onFileDoubleClick?: (path: string) => void
@@ -164,11 +179,14 @@ function FileTreeItem({
   projectPaths,
   expandedFolders,
   selectedPath,
+  selectedPaths,
   loadingFolders,
   renamingPath,
   clipboardPath,
   clipboardOperation,
   onFileClick,
+  onFileToggleSelect,
+  onFileRangeSelect,
   onFolderToggle,
   onFolderDoubleClick,
   onFileDoubleClick,
@@ -192,7 +210,8 @@ function FileTreeItem({
   depth
 }: FileTreeItemProps) {
   const isExpanded = expandedFolders.has(item.path)
-  const isSelected = selectedPath === item.path
+  // Primary selection (for single-file operations) OR part of multi-select set
+  const isSelected = selectedPath === item.path || selectedPaths.has(item.path)
   const isLoading = loadingFolders?.has(item.path) ?? false
   const isRenaming = renamingPath === item.path
   const isCut = clipboardOperation === 'cut' && clipboardPath === item.path
@@ -294,12 +313,15 @@ function FileTreeItem({
         setTimeout(() => {
           const input = inputRef.current
           if (!input) return
+          // Save the parent scroll position before select() can move it
+          const viewport = input.closest('[data-radix-scroll-area-viewport]') as HTMLElement | null
+          const savedScrollTop = viewport?.scrollTop ?? 0
           input.focus({ preventScroll: true })
           input.select()
-          // Reset scroll caused by select() showing cursor at end
+          // select() moves the cursor to end — reset just the input's own scroll,
+          // then restore the panel's scroll so the view stays where the user was.
           input.scrollLeft = 0
-          // Also reset parent scroll container if it shifted
-          input.closest('[data-radix-scroll-area-viewport]')?.scrollTo(0, 0)
+          if (viewport) viewport.scrollTop = savedScrollTop
         }, 50)
       })
     }
@@ -322,13 +344,24 @@ function FileTreeItem({
     e.stopPropagation()
   }
 
-  const handleClick = () => {
+  const handleClick = (e: React.MouseEvent) => {
     if (isRenaming) return
     if (item.isDirectory) {
       onFolderToggle(item.path)
-    } else {
-      onFileClick(item.path)
+      return
     }
+    // Multi-select modifiers (files only — folders always just toggle expand)
+    if ((e.metaKey || e.ctrlKey) && onFileToggleSelect) {
+      e.preventDefault()
+      onFileToggleSelect(item.path)
+      return
+    }
+    if (e.shiftKey && onFileRangeSelect) {
+      e.preventDefault()
+      onFileRangeSelect(item.path)
+      return
+    }
+    onFileClick(item.path)
   }
 
   const handleDoubleClick = () => {
@@ -585,11 +618,14 @@ function FileTreeItem({
           projectPaths={projectPaths}
           expandedFolders={expandedFolders}
           selectedPath={selectedPath}
+          selectedPaths={selectedPaths}
           loadingFolders={loadingFolders}
           renamingPath={renamingPath}
           clipboardPath={clipboardPath}
           clipboardOperation={clipboardOperation}
           onFileClick={onFileClick}
+          onFileToggleSelect={onFileToggleSelect}
+          onFileRangeSelect={onFileRangeSelect}
           onFolderToggle={onFolderToggle}
           onFolderDoubleClick={onFolderDoubleClick}
           onFileDoubleClick={onFileDoubleClick}
