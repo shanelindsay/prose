@@ -10,7 +10,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from '../ui/dropdown-menu'
-import { MessageSquare, History, Plus, Trash2, Sparkles, Info, Loader2, Filter } from 'lucide-react'
+import { MessageSquare, History, Plus, Trash2, Sparkles, Info, Loader2, Filter, SlidersHorizontal, Eye, EyeOff, Check, ChevronUp, ChevronDown } from 'lucide-react'
+import { useMenuCustomization } from '../../hooks/useMenuCustomization'
+import type { MenuItemDescriptor } from '../../hooks/useMenuCustomization'
 import { useChatStore } from '../../stores/chatStore'
 import { useEditorStore } from '../../stores/editorStore'
 import { useEditorInstanceStore } from '../../stores/editorInstanceStore'
@@ -204,6 +206,22 @@ export function ChatPanel() {
     deleteConversation(conversationId)
   }
 
+  // Customizable footer items in the chat history dropdown.
+  // Only static items are customizable — the conversation list is not.
+  const chatHistoryFooterDescriptors: MenuItemDescriptor[] = [
+    { id: 'new-chat', label: 'New Chat' },
+  ]
+  const {
+    visibleIds: chatHistoryVisibleIds,
+    hiddenIds: chatHistoryHiddenIds,
+    orderedAllIds: chatHistoryOrderedIds,
+    toggleHidden: toggleChatHistoryHidden,
+    moveUp: moveChatHistoryUp,
+    moveDown: moveChatHistoryDown,
+  } = useMenuCustomization('chat-history', chatHistoryFooterDescriptors)
+  const [isChatHistoryEditMode, setIsChatHistoryEditMode] = useState(false)
+  const showNewChat = chatHistoryVisibleIds.includes('new-chat')
+
   if (reviewMode) {
     return (
       <div className="flex h-full flex-col bg-muted/20">
@@ -318,7 +336,7 @@ export function ChatPanel() {
               <TooltipContent>Document info</TooltipContent>
             </Tooltip>
             {conversations.length > 0 && (
-              <DropdownMenu>
+              <DropdownMenu onOpenChange={(open) => { if (!open) setIsChatHistoryEditMode(false) }}>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <DropdownMenuTrigger asChild>
@@ -334,43 +352,121 @@ export function ChatPanel() {
                   </TooltipTrigger>
                   <TooltipContent>Chat history</TooltipContent>
                 </Tooltip>
-                <DropdownMenuContent align="end" className="w-64">
-                  {conversations.map((conversation) => (
-                    <DropdownMenuItem
-                      key={conversation.id}
-                      className="flex items-center justify-between gap-2 cursor-pointer"
-                      onClick={() => handleSelectConversation(conversation.id)}
-                    >
-                      <span
-                        className={`truncate flex-1 ${
-                          conversation.id === activeConversationId
-                            ? 'font-medium'
-                            : ''
-                        }`}
-                      >
-                        {conversation.title ?? 'New Chat'}
-                      </span>
-                      {conversations.length > 1 && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6 shrink-0 opacity-50 hover:opacity-100"
-                          onClick={(e) =>
-                            handleDeleteConversation(e, conversation.id)
-                          }
-                          aria-label="Delete conversation"
+                {isChatHistoryEditMode ? (
+                  <DropdownMenuContent
+                    align="end"
+                    className="w-52"
+                    onCloseAutoFocus={(e) => e.preventDefault()}
+                    onInteractOutside={() => setIsChatHistoryEditMode(false)}
+                    onEscapeKeyDown={() => setIsChatHistoryEditMode(false)}
+                  >
+                    <div className="px-2 py-1 text-xs font-medium text-muted-foreground select-none">
+                      Customize menu
+                    </div>
+                    {chatHistoryOrderedIds.map((id, idx) => {
+                      const isHidden = chatHistoryHiddenIds.includes(id)
+                      const label = id === 'new-chat' ? 'New Chat' : id
+                      return (
+                        <div
+                          key={id}
+                          className={`flex items-center gap-1 px-1 py-0.5 rounded-sm${isHidden ? ' opacity-40' : ''}`}
                         >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      )}
+                          <div className="flex flex-col shrink-0">
+                            <button
+                              type="button"
+                              className="h-3.5 w-5 flex items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-25 focus:outline-none"
+                              onClick={(e) => { e.stopPropagation(); moveChatHistoryUp(id) }}
+                              disabled={idx === 0}
+                              aria-label={`Move ${label} up`}
+                              tabIndex={-1}
+                            >
+                              <ChevronUp className="h-3 w-3" />
+                            </button>
+                            <button
+                              type="button"
+                              className="h-3.5 w-5 flex items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-25 focus:outline-none"
+                              onClick={(e) => { e.stopPropagation(); moveChatHistoryDown(id) }}
+                              disabled={idx === chatHistoryOrderedIds.length - 1}
+                              aria-label={`Move ${label} down`}
+                              tabIndex={-1}
+                            >
+                              <ChevronDown className="h-3 w-3" />
+                            </button>
+                          </div>
+                          <div className="flex flex-1 items-center gap-2 px-1 py-1 text-sm animate-wiggle select-none">
+                            <Plus className="h-4 w-4 shrink-0 text-muted-foreground" />
+                            <span className="truncate">{label}</span>
+                          </div>
+                          <button
+                            type="button"
+                            className="shrink-0 h-6 w-6 flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent focus:outline-none"
+                            onClick={(e) => { e.stopPropagation(); toggleChatHistoryHidden(id) }}
+                            aria-label={isHidden ? `Show ${label}` : `Hide ${label}`}
+                            aria-pressed={isHidden}
+                            tabIndex={-1}
+                          >
+                            {isHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                          </button>
+                        </div>
+                      )
+                    })}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      className="cursor-pointer font-medium"
+                      onSelect={() => setIsChatHistoryEditMode(false)}
+                    >
+                      <Check className="mr-2 h-4 w-4" />
+                      Done
                     </DropdownMenuItem>
-                  ))}
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={handleNewChat} className="cursor-pointer">
-                    <Plus className="h-4 w-4 mr-2" />
-                    New Chat
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
+                  </DropdownMenuContent>
+                ) : (
+                  <DropdownMenuContent align="end" className="w-64">
+                    {conversations.map((conversation) => (
+                      <DropdownMenuItem
+                        key={conversation.id}
+                        className="flex items-center justify-between gap-2 cursor-pointer"
+                        onClick={() => handleSelectConversation(conversation.id)}
+                      >
+                        <span
+                          className={`truncate flex-1 ${
+                            conversation.id === activeConversationId
+                              ? 'font-medium'
+                              : ''
+                          }`}
+                        >
+                          {conversation.title ?? 'New Chat'}
+                        </span>
+                        {conversations.length > 1 && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 shrink-0 opacity-50 hover:opacity-100"
+                            onClick={(e) =>
+                              handleDeleteConversation(e, conversation.id)
+                            }
+                            aria-label="Delete conversation"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        )}
+                      </DropdownMenuItem>
+                    ))}
+                    <DropdownMenuSeparator />
+                    {showNewChat && (
+                      <DropdownMenuItem onClick={handleNewChat} className="cursor-pointer">
+                        <Plus className="h-4 w-4 mr-2" />
+                        New Chat
+                      </DropdownMenuItem>
+                    )}
+                    <DropdownMenuItem
+                      className="cursor-pointer text-muted-foreground"
+                      onSelect={(e) => { e.preventDefault(); setIsChatHistoryEditMode(true) }}
+                    >
+                      <SlidersHorizontal className="mr-2 h-4 w-4" />
+                      Customize…
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                )}
               </DropdownMenu>
             )}
             <Tooltip>

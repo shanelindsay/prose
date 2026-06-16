@@ -67,11 +67,16 @@ module.exports = {
           "0%": { transform: "translateX(-100%)" },
           "100%": { transform: "translateX(400%)" },
         },
+        "wiggle": {
+          "0%, 100%": { transform: "rotate(-1deg)" },
+          "50%": { transform: "rotate(1deg)" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
         "loading-bar": "loading-bar 1.5s ease-in-out infinite",
+        "wiggle": "wiggle 0.3s ease-in-out infinite",
       },
     },
   },
