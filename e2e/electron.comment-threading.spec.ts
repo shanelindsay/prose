@@ -4,10 +4,10 @@
  * Tests:
  * 1. reply_to_comment tool appends an AI reply to the persisted thread.
  * 2. resolve_comment sets resolved:true in the store instead of deleting the record.
- * 3. Resolved threads are not re-marked on restore (restoreComments skips resolved).
- * 4. list_comments returns replies + resolved state.
+ * 3. list_comments returns replies + resolved state.
+ * 4. Resolved threads are not re-marked on restoreComments.
  *
- * Uses an isolated PROSE_USER_DATA_DIR profile; runs against the out/ build.
+ * Each test opens a fresh markdown file for isolation. No tab sharing.
  * No LLM calls — all tools invoked via window.__prose_tools.executeTool.
  */
 
@@ -64,6 +64,19 @@ async function getCommentStore(testPage: Page): Promise<Array<Record<string, unk
 }
 
 /**
+ * Open a fresh markdown file (creates + writes it) and wait for the editor.
+ * Returns the file path.
+ */
+async function openFreshFile(testPage: Page, name: string, content: string): Promise<string> {
+  const mdPath = join(qaDocsDir, name)
+  writeFileSync(mdPath, content)
+  const openResult = await executeProseTool(testPage, 'open_file', { path: mdPath })
+  expect(openResult.success, `open_file ${name}`).toBe(true)
+  await waitForEditor(testPage)
+  return mdPath
+}
+
+/**
  * Find any non-empty paragraph node and add a comment to it.
  * Returns the new comment ID.
  */
@@ -81,7 +94,7 @@ async function addComment(testPage: Page, commentText: string): Promise<string> 
   const result = await executeProseTool(testPage, 'add_comment', {
     nodeId: node!.id,
     comment: commentText,
-  })
+  }, 'editor')
   expect(result.success, `add_comment: ${JSON.stringify(result)}`).toBe(true)
   return (result.data as { id: string }).id
 }
@@ -94,16 +107,14 @@ async function countCommentMarks(testPage: Page): Promise<number> {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 test('reply_to_comment appends AI reply to thread', async () => {
-  await page.click('.ProseMirror')
-  await page.keyboard.press('Control+a')
-  await page.keyboard.type('The quick brown fox jumps over the lazy dog.')
+  await openFreshFile(page, 'reply-test.md', '# Reply Test\n\nThe quick brown fox jumps over the lazy dog.\n')
 
   const commentId = await addComment(page, 'Check the rhythm of this sentence.')
 
   const replyResult = await executeProseTool(page, 'reply_to_comment', {
     id: commentId,
     text: 'The rhythm is fine — the stress pattern scans well.',
-  })
+  }, 'editor')
   expect(replyResult.success, `reply_to_comment: ${JSON.stringify(replyResult)}`).toBe(true)
   const replyId = (replyResult.data as { replyId: string }).replyId
   expect(typeof replyId).toBe('string')
@@ -121,9 +132,7 @@ test('reply_to_comment appends AI reply to thread', async () => {
 })
 
 test('resolve_comment sets resolved:true and removes mark', async () => {
-  await page.click('.ProseMirror')
-  await page.keyboard.press('Control+a')
-  await page.keyboard.type('A sentence to comment on for resolve testing.')
+  await openFreshFile(page, 'resolve-test.md', '# Resolve Test\n\nA sentence to comment on for resolve testing.\n')
 
   const commentId = await addComment(page, 'Resolve this thread.')
 
@@ -133,7 +142,7 @@ test('resolve_comment sets resolved:true and removes mark', async () => {
 
   const resolveResult = await executeProseTool(page, 'resolve_comment', {
     id: commentId,
-  })
+  }, 'editor')
   expect(resolveResult.success, `resolve_comment: ${JSON.stringify(resolveResult)}`).toBe(true)
 
   // Mark should be gone from the editor
@@ -148,16 +157,14 @@ test('resolve_comment sets resolved:true and removes mark', async () => {
 })
 
 test('list_comments includes replies and resolved state', async () => {
-  await page.click('.ProseMirror')
-  await page.keyboard.press('Control+a')
-  await page.keyboard.type('Content for list_comments threading test.')
+  await openFreshFile(page, 'list-test.md', '# List Test\n\nContent for list_comments threading test.\n')
 
   const commentId = await addComment(page, 'List comments should show replies.')
 
   await executeProseTool(page, 'reply_to_comment', {
     id: commentId,
     text: 'Acknowledged.',
-  })
+  }, 'editor')
 
   const listResult = await executeProseTool(page, 'list_comments', {})
   expect(listResult.success).toBe(true)
@@ -171,25 +178,31 @@ test('list_comments includes replies and resolved state', async () => {
 })
 
 test('resolved threads do not get re-marked on restoreComments', async () => {
-  // Write a markdown file so we can reopen the tab to trigger restoreComments
-  const mdPath = join(qaDocsDir, 'resolve-restore-test.md')
-  writeFileSync(mdPath, '# Restore Test\n\nThis text will be commented.\n')
-
-  const openResult = await executeProseTool(page, 'open_file', { path: mdPath })
-  expect(openResult.success, 'open_file').toBe(true)
-  await waitForEditor(page)
+  // Write the initial file
+  const mdPath = await openFreshFile(
+    page,
+    'resolve-restore-test.md',
+    '# Restore Test\n\nThis text will be commented then the thread resolved.\n'
+  )
 
   const commentId = await addComment(page, 'Should not re-appear after resolve.')
-  await executeProseTool(page, 'resolve_comment', { id: commentId })
 
-  // Close and reopen the file to trigger comment restoration
+  // Resolve the comment (sets resolved:true, removes mark, persists to IDB)
+  const resolveResult = await executeProseTool(page, 'resolve_comment', { id: commentId }, 'editor')
+  expect(resolveResult.success, 'resolve_comment').toBe(true)
+
+  // Confirm no mark in editor right now
+  expect(await countCommentMarks(page)).toBe(0)
+
+  // Close this tab (triggers save) then reopen the file to trigger restoreComments
   await page.keyboard.press('Control+w')
   await waitForEditor(page)
+
   const reopen = await executeProseTool(page, 'open_file', { path: mdPath })
-  expect(reopen.success).toBe(true)
+  expect(reopen.success, 'open_file reopen').toBe(true)
   await waitForEditor(page)
 
-  // The resolved comment must not be re-marked
+  // restoreComments must skip the resolved thread — no mark in the editor
   const marksAfterReopen = await countCommentMarks(page)
   expect(marksAfterReopen).toBe(0)
 })

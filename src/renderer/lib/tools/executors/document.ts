@@ -502,7 +502,69 @@ export function executeAddComment(args: {
     return toolError('Failed to apply comment mark — the range may not contain markable content', 'COMMENT_FAILED')
   }
 
+  // Immediately mirror the new comment into the store so reply_to_comment /
+  // resolve_comment can find it by ID in the same session without waiting for
+  // a tab-switch save (which is normally where the store gets populated).
+  const storeState = useCommentStore.getState()
+  const newEntry = {
+    id,
+    markedText: rangeText,
+    comment,
+    createdAt: Date.now(),
+    occurrenceIndex: 0,
+    from,
+    to,
+    replies: [] as CommentReply[],
+    resolved: false,
+  }
+  const updatedComments = [...storeState.pendingComments, newEntry]
+  useCommentStore.setState({ pendingComments: updatedComments })
+  if (storeState.documentId) {
+    storeState.saveComments(storeState.documentId, updatedComments)
+  }
+
   return toolSuccess({ id })
+}
+
+/**
+ * Resolve the comment store entry for a given ID, falling back to the live
+ * editor marks when the store doesn't have it yet.
+ *
+ * The comment store is only populated on tab-load (from IndexedDB) and on
+ * explicit saves (tab switch, resolve, reply). When `add_comment` creates a
+ * new mark inside the same "session" the mark exists only in the TipTap
+ * document — `pendingComments` won't have it until the next save. This helper
+ * bridges that gap so tools can act on freshly-created comments.
+ */
+function ensureInStore(
+  id: string,
+  store: ReturnType<typeof useCommentStore.getState>,
+  editor: ReturnType<typeof getEditor>
+): boolean {
+  const alreadyInStore = store.pendingComments.some((c) => c.id === id)
+  if (alreadyInStore) return true
+
+  // Fall back to live editor marks
+  if (!editor) return false
+  const liveMark = getComments(editor).find((c) => c.id === id)
+  if (!liveMark) return false
+
+  // Synthesize a minimal store entry from the live mark
+  const synth = {
+    id: liveMark.id,
+    markedText: liveMark.markedText,
+    comment: liveMark.comment,
+    createdAt: liveMark.createdAt,
+    occurrenceIndex: liveMark.occurrenceIndex ?? 0,
+    from: liveMark.from,
+    to: liveMark.to,
+    replies: [],
+    resolved: false,
+  }
+  useCommentStore.setState({
+    pendingComments: [...store.pendingComments, synth],
+  })
+  return true
 }
 
 /**
@@ -530,22 +592,23 @@ export function executeResolveComment(args: {
     return toolError('Comment ID is required', 'INVALID_INPUT')
   }
 
-  // Update the persisted thread (set resolved:true) before removing the mark.
+  // Ensure the comment is in the store (synthesizes from live mark if needed).
   const store = useCommentStore.getState()
-  const existing = store.pendingComments.find((c) => c.id === id)
-  if (!existing) {
+  const found = ensureInStore(id, store, editor)
+  if (!found) {
     return toolError(`Comment with ID "${id}" not found`, 'COMMENT_NOT_FOUND')
   }
 
-  const documentId = store.documentId
+  // Re-read after possible synthesis
+  const currentComments = useCommentStore.getState().pendingComments
+  const updated = currentComments.map((c) =>
+    c.id === id ? { ...c, resolved: true } : c
+  )
+  useCommentStore.setState({ pendingComments: updated })
+
+  const documentId = useCommentStore.getState().documentId
   if (documentId) {
-    const updated = store.pendingComments.map((c) =>
-      c.id === id ? { ...c, resolved: true } : c
-    )
-    store.saveComments(documentId, updated)
-    // Keep the in-memory list in sync so the store reflects the change
-    // immediately (Zustand state is immutable — we reach through to a re-set).
-    useCommentStore.setState({ pendingComments: updated })
+    useCommentStore.getState().saveComments(documentId, updated)
   }
 
   // Remove the editor mark so the highlight disappears.
@@ -574,9 +637,12 @@ export function executeReplyToComment(args: {
     return toolError('Reply text is required', 'INVALID_INPUT')
   }
 
+  const editor = getEditor()
+
+  // Ensure the comment is in the store (synthesizes from live mark if needed).
   const store = useCommentStore.getState()
-  const existing = store.pendingComments.find((c) => c.id === id)
-  if (!existing) {
+  const found = ensureInStore(id, store, editor)
+  if (!found) {
     return toolError(`Comment with ID "${id}" not found`, 'COMMENT_NOT_FOUND')
   }
 
@@ -587,15 +653,17 @@ export function executeReplyToComment(args: {
     createdAt: Date.now(),
   }
 
-  const documentId = store.documentId
-  const updated = store.pendingComments.map((c) =>
+  // Re-read after possible synthesis
+  const currentComments = useCommentStore.getState().pendingComments
+  const updated = currentComments.map((c) =>
     c.id === id ? { ...c, replies: [...(c.replies ?? []), reply] } : c
   )
 
   useCommentStore.setState({ pendingComments: updated })
 
+  const documentId = useCommentStore.getState().documentId
   if (documentId) {
-    store.saveComments(documentId, updated)
+    useCommentStore.getState().saveComments(documentId, updated)
   }
 
   return toolSuccess({ replyId: reply.id })
