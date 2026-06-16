@@ -10,7 +10,8 @@ import { useEditorInstanceStore } from '../../../stores/editorInstanceStore'
 import { useAnnotationStore } from '../../../extensions/ai-annotations'
 import { getNodesWithIds, findNodeById } from '../../../extensions/node-ids'
 import type { NodeWithId } from '../../../extensions/node-ids'
-import { getComments } from '../../../extensions/comments'
+import { getComments, useCommentStore } from '../../../extensions/comments'
+import type { CommentReply } from '../../../extensions/comments/types'
 import { getAISuggestions } from '../../../extensions/ai-suggestions'
 import { isEditorReadOnly } from './editor'
 import { getApi } from '../../browserApi'
@@ -367,7 +368,7 @@ export function executeGetOutline(): ToolResult<{ outline: OutlineEntry[]; summa
 // Comment tools
 // ============================================================================
 
-/** Minimal comment shape returned by list_comments */
+/** Comment shape returned by list_comments (includes thread data). */
 interface CommentEntry {
   id: string
   markedText: string
@@ -375,10 +376,16 @@ interface CommentEntry {
   createdAt: number
   from: number
   to: number
+  replies: CommentReply[]
+  resolved: boolean
 }
 
 /**
  * list_comments - Get all comments in the active document.
+ *
+ * Merges the live editor marks (positions) with persisted thread data
+ * (replies, resolved state) from the comment store so the AI gets the
+ * full thread context.
  */
 export function executeListComments(): ToolResult<{ comments: CommentEntry[] }> {
   const editor = getEditor()
@@ -387,15 +394,42 @@ export function executeListComments(): ToolResult<{ comments: CommentEntry[] }> 
     return toolError('Editor not available', 'EDITOR_NOT_AVAILABLE')
   }
 
-  const raw = getComments(editor)
-  const comments: CommentEntry[] = raw.map((c) => ({
-    id: c.id,
-    markedText: c.markedText,
-    comment: c.comment,
-    createdAt: c.createdAt,
-    from: c.from,
-    to: c.to,
-  }))
+  // Live marks give us current positions.
+  const liveMarks = getComments(editor)
+
+  // Persisted store holds replies + resolved state not carried by the mark.
+  const persistedComments = useCommentStore.getState().pendingComments
+
+  const comments: CommentEntry[] = liveMarks.map((c) => {
+    const persisted = persistedComments.find((p) => p.id === c.id)
+    return {
+      id: c.id,
+      markedText: c.markedText,
+      comment: c.comment,
+      createdAt: c.createdAt,
+      from: c.from,
+      to: c.to,
+      replies: persisted?.replies ?? [],
+      resolved: persisted?.resolved ?? false,
+    }
+  })
+
+  // Also include resolved threads (mark removed, but store still has them).
+  const resolvedIds = new Set(liveMarks.map((c) => c.id))
+  for (const p of persistedComments) {
+    if (!resolvedIds.has(p.id) && p.resolved) {
+      comments.push({
+        id: p.id,
+        markedText: p.markedText,
+        comment: p.comment,
+        createdAt: p.createdAt,
+        from: p.from,
+        to: p.to,
+        replies: p.replies ?? [],
+        resolved: true,
+      })
+    }
+  }
 
   return toolSuccess({ comments })
 }
@@ -472,7 +506,10 @@ export function executeAddComment(args: {
 }
 
 /**
- * resolve_comment - Remove a comment by its ID.
+ * resolve_comment - Mark a comment thread as resolved.
+ *
+ * Sets resolved:true on the persisted CommentData and removes the editor mark.
+ * The thread remains in the store as collapsed history — it is not deleted.
  */
 export function executeResolveComment(args: {
   id: string
@@ -493,11 +530,73 @@ export function executeResolveComment(args: {
     return toolError('Comment ID is required', 'INVALID_INPUT')
   }
 
-  const success = editor.commands.unsetComment(id)
-
-  if (!success) {
+  // Update the persisted thread (set resolved:true) before removing the mark.
+  const store = useCommentStore.getState()
+  const existing = store.pendingComments.find((c) => c.id === id)
+  if (!existing) {
     return toolError(`Comment with ID "${id}" not found`, 'COMMENT_NOT_FOUND')
   }
 
+  const documentId = store.documentId
+  if (documentId) {
+    const updated = store.pendingComments.map((c) =>
+      c.id === id ? { ...c, resolved: true } : c
+    )
+    store.saveComments(documentId, updated)
+    // Keep the in-memory list in sync so the store reflects the change
+    // immediately (Zustand state is immutable — we reach through to a re-set).
+    useCommentStore.setState({ pendingComments: updated })
+  }
+
+  // Remove the editor mark so the highlight disappears.
+  editor.commands.unsetComment(id)
+
   return toolSuccess({ resolved: true })
+}
+
+/**
+ * reply_to_comment - Append an AI reply to a comment thread.
+ */
+export function executeReplyToComment(args: {
+  id: string
+  text: string
+}): ToolResult<{ replyId: string }> {
+  if (isEditorReadOnly()) {
+    return toolError('Document is read-only in this mode', 'EDITOR_READ_ONLY')
+  }
+
+  const { id, text } = args
+
+  if (!id) {
+    return toolError('Comment ID is required', 'INVALID_INPUT')
+  }
+  if (!text?.trim()) {
+    return toolError('Reply text is required', 'INVALID_INPUT')
+  }
+
+  const store = useCommentStore.getState()
+  const existing = store.pendingComments.find((c) => c.id === id)
+  if (!existing) {
+    return toolError(`Comment with ID "${id}" not found`, 'COMMENT_NOT_FOUND')
+  }
+
+  const reply: CommentReply = {
+    id: generateId(),
+    author: 'ai',
+    text: text.trim(),
+    createdAt: Date.now(),
+  }
+
+  const documentId = store.documentId
+  const updated = store.pendingComments.map((c) =>
+    c.id === id ? { ...c, replies: [...(c.replies ?? []), reply] } : c
+  )
+
+  useCommentStore.setState({ pendingComments: updated })
+
+  if (documentId) {
+    store.saveComments(documentId, updated)
+  }
+
+  return toolSuccess({ replyId: reply.id })
 }

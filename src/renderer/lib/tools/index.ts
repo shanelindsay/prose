@@ -17,7 +17,8 @@ import {
   executeGetOutline,
   executeListComments,
   executeAddComment,
-  executeResolveComment
+  executeResolveComment,
+  executeReplyToComment
 } from './executors/document'
 
 // Editor executors
@@ -114,6 +115,8 @@ export async function executeTool(
         return executeAddComment(validatedArgs)
       case 'resolve_comment':
         return executeResolveComment(validatedArgs)
+      case 'reply_to_comment':
+        return executeReplyToComment(validatedArgs)
 
       // Editor tools
       case 'edit':

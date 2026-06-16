@@ -104,10 +104,11 @@ If the user asks for direct drafting — verbs like "rewrite", "write", "draft",
 
 - \`read_document\` — Returns document nodes with unique IDs
 - \`get_outline\` — Headings-only structural skim
-- \`list_comments\` — Existing comments in the document
+- \`list_comments\` — Existing comment threads (with replies + resolved state)
 - \`suggest_edit\` — Inline diff for a copy edit the user can accept or reject
 - \`add_comment\` — Editorial note attached to a range; the user decides the replacement
-- \`resolve_comment\` — Remove a comment by ID
+- \`reply_to_comment\` — Add an AI reply to a comment thread; use before or instead of editing
+- \`resolve_comment\` — Mark a comment thread resolved (it persists as history, not deleted)
 - \`move_cursor\` — Park the user's cursor at a specific node (no content change)
 - \`request_mode_switch\` — Offer the user a one-click switch to Create Mode for drafting requests
 
@@ -141,7 +142,7 @@ The user has opted in to LLM-authored prose. The no-authorship rule is lifted �
 
 - \`read_document\` — Returns document nodes with unique IDs
 - \`get_outline\` — Headings-only structural skim
-- \`list_comments\` / \`add_comment\` / \`resolve_comment\` — Editorial notes
+- \`list_comments\` / \`add_comment\` / \`reply_to_comment\` / \`resolve_comment\` — Comment threads: read, reply, and resolve
 - \`suggest_edit\` — Inline diff the user can accept or reject (use when the user should review)
 - \`edit\` — Directly replaces a node's content (the default tool for "edit X to be Y", "rewrite this paragraph", or other in-place rewrites the user has requested)
 - \`insert\` — Insert text at a position. Use \`position=after_node\` paired with a heading \`nodeId\` from \`read_document\` when adding to a specific section. Use \`position=cursor\` when the user said "here" — OR when the user has a non-empty selection and asks to replace it: \`position=cursor\` over a selection deletes the selection and inserts the new text in its place. (\`insert\` is the correct tool for "use insert to replace this with X" — don't redirect to \`edit\`.)
@@ -237,19 +238,31 @@ export function buildSystemPrompt(
 }
 
 /**
- * Build a prompt for processing comments
+ * Build a prompt for processing comments.
+ *
+ * The AI participates as a real collaborator: it replies, edits, or both,
+ * and calls resolve_comment when a thread is fully addressed.
  */
 export function buildCommentsPrompt(comments: CommentData[]): string {
   if (comments.length === 0) return ''
 
-  let prompt = `Process the following comments from the document. Each comment is an instruction for how to edit the marked text.\n\n`
+  let prompt = `The following comment${comments.length > 1 ? 's need' : ' needs'} your attention. For each thread:\n`
+  prompt += `- Call \`list_comments\` first to see the full thread context (replies, resolved state).\n`
+  prompt += `- Decide the right response: reply with \`reply_to_comment\`, propose an edit with \`suggest_edit\`, or both.\n`
+  prompt += `- Call \`resolve_comment\` when the thread is fully addressed — resolved threads persist as history.\n`
+  prompt += `- Use \`read_document\` for node IDs before editing.\n\n`
 
   comments.forEach((comment, index) => {
-    prompt += `${index + 1}. Text: "${comment.markedText}"\n`
-    prompt += `   Instruction: ${comment.comment}\n\n`
+    prompt += `${index + 1}. Comment ID: ${comment.id}\n`
+    prompt += `   Text: "${comment.markedText}"\n`
+    prompt += `   Instruction: ${comment.comment}\n`
+    if (comment.replies && comment.replies.length > 0) {
+      prompt += `   Replies so far: ${comment.replies.length}\n`
+    }
+    prompt += '\n'
   })
 
-  prompt += `Apply each comment as an edit. Use read_document for node IDs. Preserve the author's voice.`
+  prompt += `Preserve the author's voice. A reply alone is enough when an edit isn't warranted.`
 
   return prompt
 }

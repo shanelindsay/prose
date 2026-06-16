@@ -157,17 +157,37 @@ export const addCommentConfig: ToolConfig<typeof addCommentSchema> = {
 // ============================================================================
 
 export const resolveCommentSchema = z.object({
-  id: z.string().describe('ID of the comment to resolve (remove). Get IDs from list_comments.')
+  id: z.string().describe('ID of the comment to resolve. Get IDs from list_comments. Resolved threads persist as collapsed history rather than being deleted.')
 })
 
 export const resolveCommentConfig: ToolConfig<typeof resolveCommentSchema> = {
   name: 'resolve_comment',
   description:
-    'Resolve (remove) a comment by its ID. Use list_comments to see all comment IDs.',
+    'Resolve a comment by its ID. Sets resolved:true on the thread — the thread persists as collapsed history rather than being deleted. Use list_comments to see all comment IDs.',
   schema: resolveCommentSchema,
   category: 'document',
-  // Sibling of add_comment — removing a comment is also a mutation, so it
+  // Sibling of add_comment — resolving a comment is also a mutation, so it
   // belongs in Editor Mode and up. list_comments stays read-only.
+  requiresMode: 'editor',
+  dangerous: false
+}
+
+// ============================================================================
+// reply_to_comment
+// ============================================================================
+
+export const replyToCommentSchema = z.object({
+  id: z.string().describe('ID of the comment thread to reply to. Get IDs from list_comments.'),
+  text: z.string().describe('The reply text to add to the thread.')
+})
+
+export const replyToCommentConfig: ToolConfig<typeof replyToCommentSchema> = {
+  name: 'reply_to_comment',
+  description:
+    'Add an AI reply to an existing comment thread. Use list_comments to get comment IDs. The reply appears in the thread view. After replying, call resolve_comment if the comment is fully addressed.',
+  schema: replyToCommentSchema,
+  category: 'document',
+  // Posting a reply is a mutation; requires Editor Mode or above.
   requiresMode: 'editor',
   dangerous: false
 }
@@ -184,5 +204,6 @@ export const documentTools = [
   getOutlineConfig,
   listCommentsConfig,
   addCommentConfig,
-  resolveCommentConfig
+  resolveCommentConfig,
+  replyToCommentConfig
 ] as const

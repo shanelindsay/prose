@@ -956,6 +956,121 @@
   background: hsl(var(--accent));
 }
 
+/* ── Comment thread replies ──────────────────────────────────────────────── */
+
+.comment-popover .comment-replies {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin-bottom: 0.75rem;
+  border-left: 2px solid hsl(var(--border));
+  padding-left: 0.75rem;
+}
+
+.comment-popover .comment-reply {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.comment-popover .reply-author-icon {
+  display: flex;
+  align-items: center;
+  margin-top: 0.125rem;
+  color: hsl(var(--muted-foreground));
+  flex-shrink: 0;
+}
+
+.comment-popover .reply-text {
+  color: hsl(var(--foreground));
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.comment-popover .reply-ai .reply-author-icon {
+  color: hsl(var(--ai-action));
+}
+
+/* Reply input area */
+.comment-popover .comment-reply-input {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.comment-popover .reply-textarea {
+  flex: 1;
+  background: hsl(var(--muted));
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.375rem;
+  padding: 0.5rem 0.625rem;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: hsl(var(--foreground));
+  resize: none;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.comment-popover .reply-textarea:focus {
+  border-color: hsl(var(--ring));
+}
+
+.comment-popover .reply-textarea::placeholder {
+  color: hsl(var(--muted-foreground));
+}
+
+.comment-popover .reply-send-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.375rem;
+  background: hsl(var(--ai-action));
+  color: white;
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.comment-popover .reply-send-btn:hover {
+  background: hsl(var(--ai-action-hover));
+}
+
+.comment-popover .reply-send-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Resolve button */
+.comment-popover .resolve-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+  border: 1px solid hsl(var(--border));
+}
+
+.comment-popover .resolve-btn:hover {
+  background: hsl(142 50% 45% / 0.15);
+  color: hsl(142 60% 40%);
+  border-color: hsl(142 50% 45% / 0.4);
+}
+
 /* AI Suggestion Marks - Purple highlighting for AI edit suggestions */
 .prose-editor .ai-suggestion-mark {
   background: hsl(var(--ai-suggest-mark-bg) / 0.4);
