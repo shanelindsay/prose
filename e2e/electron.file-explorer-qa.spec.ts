@@ -228,19 +228,22 @@ test.describe('Electron — file explorer QA (#723)', () => {
     await panel.getByText('alpha').click()
     await page.waitForTimeout(100)
 
-    // Shift+click delta — should select alpha through delta
-    await panel.getByText('delta').click({ modifiers: ['Shift'] })
+    // The file list sorts by localeCompare, so the visible order is:
+    // alpha(0), beta(1), delta(2), epsilon(3), eta(4), gamma(5), iota(6), kappa(7), theta(8), zeta(9)
+    // Shift+click eta — should select the contiguous run alpha..eta (5 files)
+    await panel.getByText('eta').click({ modifiers: ['Shift'] })
     await page.waitForTimeout(100)
 
     const selected = await getSelectedPaths(page)
     const baseNames = selected.map((p) => p.split('/').pop() ?? '')
-    // alpha, beta, gamma, delta should all be selected
+    // All files alphabetically between alpha and eta should be selected
     expect(baseNames).toContain('alpha.md')
     expect(baseNames).toContain('beta.md')
-    expect(baseNames).toContain('gamma.md')
     expect(baseNames).toContain('delta.md')
-    // And selection should be at least 4
-    expect(selected.length).toBeGreaterThanOrEqual(4)
+    expect(baseNames).toContain('epsilon.md')
+    expect(baseNames).toContain('eta.md')
+    // And selection should be at least 5
+    expect(selected.length).toBeGreaterThanOrEqual(5)
   })
 
   test('Bug 2: plain click clears multi-select and selects single file', async () => {
