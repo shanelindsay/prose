@@ -313,10 +313,10 @@ export function Toolbar() {
     const isMas = window.api?.isMasBuild ?? false
     return [
       { id: 'new-document', label: 'New Document', icon: <FilePlus />, onSelect: handleNewFile },
-      { id: 'open', label: 'Open…', icon: <FolderOpen />, onSelect: () => openFile() },
+      { id: 'open', label: 'Open...', icon: <FolderOpen />, onSelect: () => openFile() },
       { id: 'save', label: 'Save', icon: <Save />, onSelect: saveFile },
-      { id: 'save-as', label: 'Save as…', icon: <FileDown />, onSelect: saveFileAs },
-      { id: 'export-html', label: 'Export HTML…', icon: <FileCode />, disabled: !document.content, onSelect: handleExportHtml },
+      { id: 'save-as', label: 'Save as...', icon: <FileDown />, onSelect: saveFileAs },
+      { id: 'export-html', label: 'Export HTML...', icon: <FileCode />, disabled: !document.content, onSelect: handleExportHtml },
       { id: 'settings', label: 'Settings', icon: <Settings />, separatorBefore: true, onSelect: () => setDialogOpen(true) },
       ...(!isMas
         ? [{ id: 'download-skill', label: 'Download Claude Skill', icon: <Sparkles />, onSelect: () => downloadSkillWithAlert() }]

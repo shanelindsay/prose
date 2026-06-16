@@ -54,7 +54,7 @@ test.describe('toolbar-more customizable menu', () => {
 
     // Default items should be present
     await expect(page.getByRole('menuitem', { name: 'New Document' })).toBeVisible()
-    await expect(page.getByRole('menuitem', { name: /^Open/ })).toBeVisible()
+    await expect(page.getByRole('menuitem', { name: 'Open...' })).toBeVisible()
     await expect(page.getByRole('menuitem', { name: 'Save' }).first()).toBeVisible()
     await expect(page.getByRole('menuitem', { name: 'Settings' })).toBeVisible()
     // Customize trigger should always be present
@@ -88,10 +88,10 @@ test.describe('toolbar-more customizable menu', () => {
     await page.getByRole('menuitem', { name: /Customize/i }).click()
     await expect(page.locator('text=Customize menu')).toBeVisible()
 
-    // Hide the "New Document" item (first eye button next to its wiggle row)
-    const newDocRow = page.locator('.animate-wiggle', { hasText: 'New Document' }).locator('..')
-    await expect(newDocRow.locator('button[aria-label*="Hide New Document"]')).toBeVisible()
-    await newDocRow.locator('button[aria-label*="Hide New Document"]').click()
+    // Hide the "New Document" item via its eye toggle button
+    const hideNewDocBtn = page.locator('button[aria-label="Hide New Document"]')
+    await expect(hideNewDocBtn).toBeVisible()
+    await hideNewDocBtn.click()
 
     // Done to save
     await page.getByRole('menuitem', { name: /Done/i }).click()
@@ -100,17 +100,24 @@ test.describe('toolbar-more customizable menu', () => {
     await page.click('[aria-label="More options"]')
     await page.waitForSelector('[role="menu"]')
     await expect(page.getByRole('menuitem', { name: 'New Document' })).not.toBeVisible()
+    // Close before reopening for restore
+    await page.keyboard.press('Escape')
+    await expect(page.locator('[role="menu"]')).not.toBeVisible()
 
     // Restore: enter edit mode again and re-show New Document
     await page.click('[aria-label="More options"]')
     await page.waitForSelector('[role="menu"]')
     await page.getByRole('menuitem', { name: /Customize/i }).click()
     await expect(page.locator('text=Customize menu')).toBeVisible()
-    const newDocRowRestored = page.locator('.animate-wiggle', { hasText: 'New Document' }).locator('..')
-    await newDocRowRestored.locator('button[aria-label*="Show New Document"]').click()
+    const showNewDocBtn = page.locator('button[aria-label="Show New Document"]')
+    await expect(showNewDocBtn).toBeVisible()
+    await showNewDocBtn.click()
+    // Wait for the eye toggle state to update before saving
+    await expect(page.locator('button[aria-label="Hide New Document"]')).toBeVisible()
     await page.getByRole('menuitem', { name: /Done/i }).click()
+    // Wait for menu to fully close before reopening
+    await expect(page.locator('[role="menu"]')).not.toBeVisible()
 
-    // Confirm "New Document" is back
     await page.click('[aria-label="More options"]')
     await page.waitForSelector('[role="menu"]')
     await expect(page.getByRole('menuitem', { name: 'New Document' })).toBeVisible()

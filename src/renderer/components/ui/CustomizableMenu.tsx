@@ -28,7 +28,7 @@
  *     the menu on interaction. "Done" is a DropdownMenuItem which closes normally.
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, Fragment } from 'react'
 import type { ReactNode } from 'react'
 import { Eye, EyeOff, ChevronUp, ChevronDown, SlidersHorizontal, Check } from 'lucide-react'
 import {
@@ -208,7 +208,7 @@ export function CustomizableMenu({ menuId, items, align = 'end', className }: Pr
   return (
     <DropdownMenuContent align={align} className={className}>
       {visibleItems.map((item, idx) => (
-        <span key={item.id}>
+        <Fragment key={item.id}>
           {item.separatorBefore && idx > 0 && <DropdownMenuSeparator />}
           <DropdownMenuItem
             onClick={item.onSelect}
@@ -220,7 +220,7 @@ export function CustomizableMenu({ menuId, items, align = 'end', className }: Pr
             )}
             {item.label}
           </DropdownMenuItem>
-        </span>
+        </Fragment>
       ))}
 
       {/* Pinned items at the bottom, separated */}
