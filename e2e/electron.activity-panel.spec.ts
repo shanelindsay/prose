@@ -126,17 +126,18 @@ test.describe('Electron — Activity panel', () => {
 
     // The superseded row + the filter funnel are present.
     await expect(page.getByTestId('annotation-detached-badge')).toBeVisible()
-    const filterBtn = page.getByRole('button', { name: 'Hide superseded edits' })
+    // Filter button covers both superseded edits and resolved comments (#699).
+    const filterBtn = page.getByRole('button', { name: 'Hide superseded and resolved' })
     await expect(filterBtn).toBeVisible()
 
     // Engage the filter → superseded hidden, badge drops to current-only (1).
     await filterBtn.click()
     await expect(badge).toHaveText('1')
     await expect(page.getByTestId('annotation-detached-badge')).toHaveCount(0)
-    await expect(page.getByRole('button', { name: 'Show superseded edits' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Show all activity' })).toBeVisible()
 
     // Toggle back → superseded reappears, badge back to 2.
-    await page.getByRole('button', { name: 'Show superseded edits' }).click()
+    await page.getByRole('button', { name: 'Show all activity' }).click()
     await expect(badge).toHaveText('2')
     await expect(page.getByTestId('annotation-detached-badge')).toBeVisible()
   })
