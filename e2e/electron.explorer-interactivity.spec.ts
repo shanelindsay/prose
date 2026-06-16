@@ -184,11 +184,14 @@ test.describe('Electron — explorer interactivity (#703)', () => {
     await renameItem.click()
 
     // Inline rename input should appear — the button text becomes an input
-    await page.waitForTimeout(200) // allow rename activation delay (rAF + 50ms)
+    await page.waitForTimeout(300) // allow rename activation delay (rAF + 50ms + context-menu close)
 
-    // Clear and type new name
-    await page.keyboard.press('Control+a')
-    await page.keyboard.type(newName)
+    // Select all text in the rename input and replace with the new name.
+    // Use the focused input directly via fill() to avoid OS-specific select-all
+    // keyboard shortcut differences (Cmd+A vs Ctrl+A on macOS vs Linux).
+    const renameInput = page.locator(`[data-testid="file-list-panel"] input`)
+    await renameInput.waitFor({ state: 'visible', timeout: 3_000 })
+    await renameInput.fill(newName)
     await page.keyboard.press('Enter')
 
     // Wait for the tree to refresh
@@ -204,9 +207,10 @@ test.describe('Electron — explorer interactivity (#703)', () => {
     const reRename = page.getByRole('menuitem', { name: 'Rename' })
     if (await reRename.isVisible({ timeout: 1_000 }).catch(() => false)) {
       await reRename.click()
-      await page.waitForTimeout(200)
-      await page.keyboard.press('Control+a')
-      await page.keyboard.type(originalName)
+      await page.waitForTimeout(300)
+      const reInput = page.locator(`[data-testid="file-list-panel"] input`)
+      await reInput.waitFor({ state: 'visible', timeout: 3_000 })
+      await reInput.fill(originalName)
       await page.keyboard.press('Enter')
       await panel.getByText(originalName).waitFor({ state: 'visible', timeout: 5_000 })
     }
