@@ -163,21 +163,46 @@ test.describe('Electron — Editor', () => {
   })
 
   test('more options menu shows expected items', async () => {
+    // Bring the window to front so it holds OS focus before keyboard/click ops.
+    await page.bringToFront()
+
+    // Wait for any stale Radix DropdownMenu portal to fully close (exit
+    // animation complete) before opening it again. The preceding "new document
+    // from menu" test leaves the dropdown in its closing animation; clicking
+    // the trigger during that window double-toggles it closed immediately.
+    // `[data-radix-popper-content-wrapper]` is the portal Radix renders for
+    // its dropdown content — wait for it to be gone before clicking.
+    await page.locator('[data-radix-popper-content-wrapper]').waitFor({
+      state: 'hidden',
+      timeout: 3_000,
+    }).catch(() => {
+      // May already be gone — proceed.
+    })
+
     await page.click(selectors.moreOptions)
+    // Wait for the menu to open before asserting items — Radix renders the
+    // content asynchronously into a portal.
+    const firstItem = page.getByRole('menuitem', { name: 'New Document' })
+    await firstItem.waitFor({ state: 'visible', timeout: 5_000 })
 
     const expectedItems = ['New Document', 'Open...', 'Settings']
     for (const item of expectedItems) {
-      await expect(page.getByRole('menuitem', { name: item })).toBeVisible({ timeout: 2_000 })
+      await expect(page.getByRole('menuitem', { name: item })).toBeVisible({ timeout: 5_000 })
     }
 
     await page.keyboard.press('Escape')
   })
 
   test('settings dialog opens via more options menu', async () => {
-    // Ensure any previous menu/dialog is dismissed
+    // Ensure any previous menu/dialog is dismissed.
     await page.keyboard.press('Escape')
-    // Debounce guard: no observable DOM signal after Escape dismissal
-    await page.waitForTimeout(100)
+    // Wait for the menu/dialog to be fully gone before proceeding rather than
+    // using a fixed timeout, which is unreliable under headless CI load.
+    await expect(page.getByRole('menuitem', { name: 'Settings' })).not.toBeVisible({
+      timeout: 3_000,
+    }).catch(() => {
+      // Menuitem may already be gone — that's fine, proceed.
+    })
 
     await page.click(selectors.moreOptions)
     const settingsItem = page.getByRole('menuitem', { name: 'Settings' })
