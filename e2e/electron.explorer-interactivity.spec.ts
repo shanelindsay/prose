@@ -175,44 +175,48 @@ test.describe('Electron — explorer interactivity (#703)', () => {
     const originalName = 'my-subfolder'
     const newName = 'renamed-subfolder'
 
-    // Right-click the folder
-    await panel.getByText(originalName).click({ button: 'right' })
+    // Right-click the folder button (use button[title] to target the exact row,
+    // not just the text span, so the ContextMenuTrigger gets the event).
+    const folderBtn = panel.locator('button[title]', { hasText: /^my-subfolder$/ })
+    await folderBtn.waitFor({ state: 'visible', timeout: 5_000 })
+    await folderBtn.click({ button: 'right' })
     await page.waitForSelector(selectors.contextMenu, { timeout: 5_000 })
 
     const renameItem = page.getByRole('menuitem', { name: 'Rename' })
     await renameItem.waitFor({ state: 'visible', timeout: 3_000 })
     await renameItem.click()
 
-    // Inline rename input should appear — the button text becomes an input
-    await page.waitForTimeout(300) // allow rename activation delay (rAF + 50ms + context-menu close)
-
-    // Select all text in the rename input and replace with the new name.
-    // Use the focused input directly via fill() to avoid OS-specific select-all
-    // keyboard shortcut differences (Cmd+A vs Ctrl+A on macOS vs Linux).
+    // The Radix context-menu close animation runs first, THEN React re-renders
+    // the FileTreeItem with isRenaming=true, and THEN the rAF+50ms timer inside
+    // the effect fires to focus the input. On CI/headless this chain can take
+    // longer than locally — wait up to 8s for the input to become visible.
     const renameInput = page.locator(`[data-testid="file-list-panel"] input`)
-    await renameInput.waitFor({ state: 'visible', timeout: 3_000 })
+    await renameInput.waitFor({ state: 'visible', timeout: 8_000 })
+
+    // Use fill() to replace the value atomically — avoids OS-specific select-all
+    // keyboard shortcut differences (Cmd+A vs Ctrl+A on macOS vs Linux CI).
     await renameInput.fill(newName)
     await page.keyboard.press('Enter')
 
     // Wait for the tree to refresh
-    await panel.getByText(newName).waitFor({ state: 'visible', timeout: 8_000 })
+    await panel.locator('button[title]', { hasText: /^renamed-subfolder$/ }).waitFor({ state: 'visible', timeout: 8_000 })
 
     // Confirm on disk
     expect(existsSync(join(qaFilesDir, newName))).toBe(true)
     expect(existsSync(join(qaFilesDir, originalName))).toBe(false)
 
     // Restore for test isolation (rename back)
-    await panel.getByText(newName).click({ button: 'right' })
+    const renamedBtn = panel.locator('button[title]', { hasText: /^renamed-subfolder$/ })
+    await renamedBtn.click({ button: 'right' })
     await page.waitForSelector(selectors.contextMenu, { timeout: 3_000 })
     const reRename = page.getByRole('menuitem', { name: 'Rename' })
     if (await reRename.isVisible({ timeout: 1_000 }).catch(() => false)) {
       await reRename.click()
-      await page.waitForTimeout(300)
       const reInput = page.locator(`[data-testid="file-list-panel"] input`)
-      await reInput.waitFor({ state: 'visible', timeout: 3_000 })
+      await reInput.waitFor({ state: 'visible', timeout: 8_000 })
       await reInput.fill(originalName)
       await page.keyboard.press('Enter')
-      await panel.getByText(originalName).waitFor({ state: 'visible', timeout: 5_000 })
+      await panel.locator('button[title]', { hasText: /^my-subfolder$/ }).waitFor({ state: 'visible', timeout: 5_000 })
     }
   })
 
