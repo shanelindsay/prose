@@ -196,6 +196,10 @@ export interface FileItem {
   modifiedAt: string
   children?: FileItem[]
   hasChildren?: boolean // For lazy loading - indicates folder has content without loading it
+  /** True for non-markdown, non-txt files — shown greyed and not openable in the editor. */
+  isNonMarkdown?: boolean
+  /** True for dotfiles/dot-dirs (name starts with '.') when shown via dotfile toggle. */
+  isDotfile?: boolean
 }
 
 export interface RemarkableRegisterResponse {
@@ -492,12 +496,14 @@ export interface ElectronAPI {
   deleteFile: (path: string) => Promise<void>
   trashFile: (path: string) => Promise<void>
   duplicateFile: (path: string) => Promise<string>
+  /** Create a new directory at the given path. Returns the created path. */
+  createDirectory: (dirPath: string) => Promise<string>
   // Window operations
   closeWindow: () => Promise<void>
   // External URL opening (for CMD+Click on links)
   openExternal?: (url: string) => Promise<void>
   // Directory listing (with lazy loading support via maxDepth parameter)
-  listDirectory: (path: string, maxDepth?: number) => Promise<FileItem[]>
+  listDirectory: (path: string, maxDepth?: number, showDotfiles?: boolean) => Promise<FileItem[]>
   // reMarkable sync
   remarkableRegister: (code: string) => Promise<RemarkableRegisterResponse>
   remarkableValidate: (deviceToken: string) => Promise<boolean>

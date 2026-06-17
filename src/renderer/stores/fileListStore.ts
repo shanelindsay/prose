@@ -144,6 +144,9 @@ interface FileListState {
   selectedPaths: Set<string>
   anchorPath: string | null // Shift+click range anchor
 
+  // Dotfile visibility — toggled by ⌘⇧. (session-only, not persisted)
+  showDotfiles: boolean
+
   // Google Docs sync state
   isGoogleSyncing: boolean
 
@@ -194,6 +197,8 @@ interface FileListState {
   rangeSelectTo: (path: string, visiblePaths: string[]) => void
   selectAll: (paths: string[]) => void
   clearMultiSelect: () => void
+  // Dotfile toggle
+  toggleShowDotfiles: () => void
 }
 
 export const useFileListStore = create<FileListState>()(
@@ -212,6 +217,7 @@ export const useFileListStore = create<FileListState>()(
     renamingPath: null,
     selectedPaths: new Set<string>(),
     anchorPath: null,
+    showDotfiles: false,
     isGoogleSyncing: false,
     remarkableSyncActive: false,
     remarkableSyncProgress: null,
@@ -413,13 +419,13 @@ export const useFileListStore = create<FileListState>()(
     },
 
     loadFiles: async () => {
-      const { rootPath, expandedFolders, files: oldFiles } = get()
+      const { rootPath, expandedFolders, files: oldFiles, showDotfiles } = get()
       if (!rootPath || !window.api) return
 
       set({ isLoading: true })
       try {
         // Use depth 1 for fast initial load - children loaded on demand
-        const fresh = await window.api.listDirectory(rootPath, 1)
+        const fresh = await window.api.listDirectory(rootPath, 1, showDotfiles)
         // The fresh listing only includes direct children. If the user had
         // any subfolders expanded (and their children fetched via
         // loadFolderChildren), those `children` arrays would be wiped on
@@ -451,7 +457,8 @@ export const useFileListStore = create<FileListState>()(
 
       try {
         // Load just this folder's children (depth 1)
-        const children = await window.api.listDirectory(folderPath, 1)
+        const { showDotfiles } = get()
+        const children = await window.api.listDirectory(folderPath, 1, showDotfiles)
 
         // Update the tree by finding and updating the folder
         const { files } = get()
@@ -591,6 +598,12 @@ export const useFileListStore = create<FileListState>()(
       selectedPaths: state.selectedPath ? new Set([state.selectedPath]) : new Set(),
       anchorPath: state.selectedPath,
     })),
+
+    toggleShowDotfiles: () => {
+      set((state) => ({ showDotfiles: !state.showDotfiles }))
+      // Reload the current directory with updated dotfile visibility
+      get().loadFiles()
+    },
 
     toggleFolder: (path) => {
       const { expandedFolders, files, loadFolderChildren } = get()

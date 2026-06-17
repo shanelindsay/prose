@@ -213,11 +213,12 @@ export interface ElectronAPI {
   deleteFile: (path: string) => Promise<void>
   trashFile: (path: string) => Promise<void>
   duplicateFile: (path: string) => Promise<string>
+  createDirectory: (dirPath: string) => Promise<string>
   // Window operations
   closeWindow: () => Promise<void>
   isFullScreen: () => Promise<boolean>
   exitFullScreen: () => Promise<void>
-  listDirectory: (path: string, maxDepth?: number) => Promise<FileItem[]>
+  listDirectory: (path: string, maxDepth?: number, showDotfiles?: boolean) => Promise<FileItem[]>
   remarkableRegister: (code: string) => Promise<RemarkableRegisterResponse>
   remarkableValidate: (deviceToken: string) => Promise<boolean>
   remarkableSync: (deviceToken: string, syncDirectory: string) => Promise<RemarkableSyncResult>
@@ -401,11 +402,12 @@ const api: ElectronAPI = {
   deleteFile: (path: string) => ipcRenderer.invoke('file:delete', path),
   trashFile: (path: string) => ipcRenderer.invoke('file:trash', path),
   duplicateFile: (path: string) => ipcRenderer.invoke('file:duplicate', path),
+  createDirectory: (dirPath: string) => ipcRenderer.invoke('file:createDirectory', dirPath),
   closeWindow: () => ipcRenderer.invoke('window:close'),
   isFullScreen: () => ipcRenderer.invoke('window:isFullScreen'),
   exitFullScreen: () => ipcRenderer.invoke('window:exitFullScreen'),
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
-  listDirectory: (path: string, maxDepth?: number) => ipcRenderer.invoke('file:listDirectory', path, maxDepth),
+  listDirectory: (path: string, maxDepth?: number, showDotfiles?: boolean) => ipcRenderer.invoke('file:listDirectory', path, maxDepth, showDotfiles),
   remarkableRegister: (code: string) => ipcRenderer.invoke('remarkable:register', code),
   remarkableValidate: (deviceToken: string) => ipcRenderer.invoke('remarkable:validate', deviceToken),
   remarkableSync: (deviceToken: string, syncDirectory: string) =>

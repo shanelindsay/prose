@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type { FileItem } from '../../types'
-import { ChevronRight, ChevronDown, FileText, FileType, Folder, FolderOpen, Loader2, Trash2, Edit3, ExternalLink, Copy, Scissors, ClipboardPaste, FilePlus, Boxes, Star } from 'lucide-react'
+import { ChevronRight, ChevronDown, FileText, FileType, Folder, FolderOpen, FolderPlus, Loader2, Trash2, Edit3, ExternalLink, Copy, Scissors, ClipboardPaste, FilePlus, Boxes, Star } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import {
   ContextMenu,
@@ -47,6 +47,7 @@ interface FileTreeProps {
   onRenameComplete?: (oldPath: string, newName: string) => void
   onRenameCancel?: () => void
   onNewFile?: (dirPath: string) => void
+  onNewFolder?: (parentDirPath: string) => void
   onAddProject?: (path: string) => void
   onAddFavorite?: (path: string, isDirectory: boolean) => void
   onRemoveProject?: (path: string) => void
@@ -84,6 +85,7 @@ export function FileTree({
   onRenameComplete,
   onRenameCancel,
   onNewFile,
+  onNewFolder,
   onAddProject,
   onAddFavorite,
   onRemoveProject,
@@ -124,6 +126,7 @@ export function FileTree({
           onRenameComplete={onRenameComplete}
           onRenameCancel={onRenameCancel}
           onNewFile={onNewFile}
+          onNewFolder={onNewFolder}
           onAddProject={onAddProject}
           onAddFavorite={onAddFavorite}
           onRemoveProject={onRemoveProject}
@@ -165,6 +168,7 @@ interface FileTreeItemProps {
   onRenameComplete?: (oldPath: string, newName: string) => void
   onRenameCancel?: () => void
   onNewFile?: (dirPath: string) => void
+  onNewFolder?: (parentDirPath: string) => void
   onAddProject?: (path: string) => void
   onAddFavorite?: (path: string, isDirectory: boolean) => void
   onRemoveProject?: (path: string) => void
@@ -202,6 +206,7 @@ function FileTreeItem({
   onRenameComplete,
   onRenameCancel,
   onNewFile,
+  onNewFolder,
   onAddProject,
   onAddFavorite,
   onRemoveProject,
@@ -306,7 +311,10 @@ function FileTreeItem({
 
   useEffect(() => {
     if (isRenaming) {
-      const nameWithoutExt = item.name.replace(/\.(md|markdown|txt)$/, '')
+      // Folders keep their full name; files strip the markdown extension for display
+      const nameWithoutExt = item.isDirectory
+        ? item.name
+        : item.name.replace(/\.(md|markdown|txt)$/, '')
       setRenameValue(nameWithoutExt)
       // Wait for Radix context menu close animation before focusing
       requestAnimationFrame(() => {
@@ -350,6 +358,8 @@ function FileTreeItem({
       onFolderToggle(item.path)
       return
     }
+    // Non-markdown files are not openable in the editor — clicks are inert
+    if (item.isNonMarkdown) return
     // Multi-select modifiers (files only — folders always just toggle expand)
     if ((e.metaKey || e.ctrlKey) && onFileToggleSelect) {
       e.preventDefault()
@@ -367,7 +377,7 @@ function FileTreeItem({
   const handleDoubleClick = () => {
     if (item.isDirectory && onFolderDoubleClick) {
       onFolderDoubleClick(item.path)
-    } else if (!item.isDirectory && onFileDoubleClick) {
+    } else if (!item.isDirectory && !item.isNonMarkdown && onFileDoubleClick) {
       onFileDoubleClick(item.path)
     }
   }
@@ -375,7 +385,9 @@ function FileTreeItem({
   // Remove .md extension for display
   const displayName = item.isDirectory
     ? item.name
-    : item.name.replace(/\.(md|markdown|txt)$/, '')
+    : item.isNonMarkdown
+      ? item.name  // show full filename including extension for non-markdown files
+      : item.name.replace(/\.(md|markdown|txt)$/, '')
 
   // Show chevron only if folder has or may have children
   const showChevron = item.isDirectory && (item.children?.length || item.hasChildren)
@@ -393,8 +405,11 @@ function FileTreeItem({
         onDoubleClick={handleDoubleClick}
         className={cn(
           'flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-sm text-left transition-colors outline-none',
-          'hover:bg-accent hover:text-accent-foreground',
-          isSelected && 'bg-accent text-accent-foreground',
+          // Non-markdown files are visible but greyed — not openable in the editor
+          item.isNonMarkdown
+            ? 'text-muted-foreground/50 hover:bg-accent/50 cursor-default'
+            : 'hover:bg-accent hover:text-accent-foreground',
+          isSelected && !item.isNonMarkdown && 'bg-accent text-accent-foreground',
           isCut && 'opacity-50',
           isDragOver && 'ring-1 ring-primary bg-primary/10'
         )}
@@ -551,12 +566,28 @@ function FileTreeItem({
           <ContextMenuShortcut>⌘N</ContextMenuShortcut>
         </ContextMenuItem>
       )}
-      {onFilePaste && (
-        <ContextMenuItem onClick={() => onFilePaste(item.path)} disabled={!clipboardPath}>
-          <ClipboardPaste className="h-4 w-4 mr-2" />
-          Paste
-          <ContextMenuShortcut>⌘V</ContextMenuShortcut>
+      {onNewFolder && (
+        <ContextMenuItem onClick={() => onNewFolder(item.path)}>
+          <FolderPlus className="h-4 w-4 mr-2" />
+          New Folder
         </ContextMenuItem>
+      )}
+      {onFileRename && (
+        <ContextMenuItem onClick={() => onFileRename(item.path)}>
+          <Edit3 className="h-4 w-4 mr-2" />
+          Rename
+          <ContextMenuShortcut>↵</ContextMenuShortcut>
+        </ContextMenuItem>
+      )}
+      {onFilePaste && (
+        <>
+          <ContextMenuSeparator />
+          <ContextMenuItem onClick={() => onFilePaste(item.path)} disabled={!clipboardPath}>
+            <ClipboardPaste className="h-4 w-4 mr-2" />
+            Paste
+            <ContextMenuShortcut>⌘V</ContextMenuShortcut>
+          </ContextMenuItem>
+        </>
       )}
       {onFileShowInFolder && (
         <>
@@ -597,6 +628,24 @@ function FileTreeItem({
     </ContextMenuContent>
   )
 
+  // Context menu for non-markdown files (greyed rows — not editable in Prose)
+  const nonMarkdownContextMenu = (
+    <ContextMenuContent>
+      {onFileShowInFolder && (
+        <ContextMenuItem onClick={() => onFileShowInFolder(item.path)}>
+          <ExternalLink className="h-4 w-4 mr-2" />
+          Show in Finder
+        </ContextMenuItem>
+      )}
+      {onFileOpen && (
+        <ContextMenuItem onClick={() => onFileOpen(item.path)}>
+          <ExternalLink className="h-4 w-4 mr-2" />
+          Open Externally
+        </ContextMenuItem>
+      )}
+    </ContextMenuContent>
+  )
+
   return (
     <div
       onDragOver={handleDragOver}
@@ -608,7 +657,7 @@ function FileTreeItem({
         <ContextMenuTrigger asChild>
           {buttonElement}
         </ContextMenuTrigger>
-        {item.isDirectory ? folderContextMenu : fileContextMenu}
+        {item.isDirectory ? folderContextMenu : item.isNonMarkdown ? nonMarkdownContextMenu : fileContextMenu}
       </ContextMenu>
 
       {item.isDirectory && isExpanded && item.children && (
@@ -641,6 +690,7 @@ function FileTreeItem({
           onRenameComplete={onRenameComplete}
           onRenameCancel={onRenameCancel}
           onNewFile={onNewFile}
+          onNewFolder={onNewFolder}
           onAddProject={onAddProject}
           onAddFavorite={onAddFavorite}
           onRemoveProject={onRemoveProject}

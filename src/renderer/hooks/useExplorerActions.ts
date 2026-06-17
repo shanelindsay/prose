@@ -53,6 +53,7 @@ export function useExplorerActions({
   const setRenamingPath = useFileListStore((s) => s.setRenamingPath)
   const renamingPath = useFileListStore((s) => s.renamingPath)
   const selectAll = useFileListStore((s) => s.selectAll)
+  const toggleShowDotfiles = useFileListStore((s) => s.toggleShowDotfiles)
 
   const api = getApi()
 
@@ -305,6 +306,14 @@ export function useExplorerActions({
         return
       }
 
+      // Cmd+Shift+. → toggle dotfile visibility (mirrors macOS Finder convention)
+      if (e.key === '.' && isMeta && e.shiftKey) {
+        e.preventDefault()
+        e.stopPropagation()
+        toggleShowDotfiles()
+        return
+      }
+
       // Cmd+A → select all visible files
       if (e.key === 'a' && isMeta) {
         e.preventDefault()
@@ -393,7 +402,7 @@ export function useExplorerActions({
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [containerRef, selectedPath, clipboardPath, renamingPath, startRename, trashSelected, copySelected, cutSelected, pasteFile, newFileInContext, selectAll, onFilePreview, onFileTrash])
+  }, [containerRef, selectedPath, clipboardPath, renamingPath, startRename, trashSelected, copySelected, cutSelected, pasteFile, newFileInContext, selectAll, toggleShowDotfiles, onFilePreview, onFileTrash])
 
   return {
     trashSelected,
