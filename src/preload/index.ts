@@ -1,6 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { Settings, RemarkableSyncPhase, IconId } from '../renderer/types'
 import type { ToolResult } from '../shared/tools/types'
+import {
+  unwrapReadFileResult,
+  unwrapSaveFileResult,
+  type ReadFileResult,
+  type SaveFileResult
+} from '../shared/fileOperationResult'
 
 export interface FileResult {
   path: string
@@ -350,11 +356,17 @@ export interface RemarkableSyncState {
 
 const api: ElectronAPI = {
   openFile: () => ipcRenderer.invoke('file:open'),
-  saveFile: (path: string, content: string) => ipcRenderer.invoke('file:save', path, content),
+  saveFile: async (path: string, content: string) => {
+    const result = await ipcRenderer.invoke('file:save', path, content) as SaveFileResult
+    unwrapSaveFileResult(result)
+  },
   saveFileAs: (content: string, defaultFilename?: string) => ipcRenderer.invoke('file:saveAs', content, defaultFilename),
   exportTxt: (content: string, defaultFilename?: string) => ipcRenderer.invoke('file:exportTxt', content, defaultFilename),
   exportHtml: (content: string, defaultFilename?: string) => ipcRenderer.invoke('file:exportHtml', content, defaultFilename),
-  readFile: (path: string) => ipcRenderer.invoke('file:read', path),
+  readFile: async (path: string) => {
+    const result = await ipcRenderer.invoke('file:read', path) as ReadFileResult
+    return unwrapReadFileResult(result)
+  },
   readFileBase64: (path: string) => ipcRenderer.invoke('file:readBase64', path),
   loadSettings: () => ipcRenderer.invoke('settings:load'),
   saveSettings: (settings: Settings) => ipcRenderer.invoke('settings:save', settings),

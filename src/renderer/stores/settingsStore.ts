@@ -91,6 +91,7 @@ interface SettingsState {
   toggleAutosaveActive: () => void
   addRecentFile: (path: string) => void
   removeRecentFile: (path: string) => void
+  pruneRecentFiles: (paths: string[]) => void
   setErrorTracking: (enabled: boolean) => void
   setFeatureFlag: (flag: keyof NonNullable<Settings['featureFlags']>, enabled: boolean) => void
   setAIConsent: (consented: boolean) => void
@@ -470,7 +471,28 @@ export const useSettingsStore = create<SettingsState>()(subscribeWithSelector((s
         settings: { ...state.settings, recentFiles: filtered }
       }
     })
-    get().saveSettings()
+    get().saveSettings().then(() => {
+      window.api?.refreshRecentMenu()
+    })
+  },
+
+  pruneRecentFiles: (paths) => {
+    const stale = new Set(paths)
+    let changed = false
+    set((state) => {
+      const current = state.settings.recentFiles || []
+      const filtered = current.filter((p) => !stale.has(p))
+      if (filtered.length === current.length) return state
+      changed = true
+      return {
+        settings: { ...state.settings, recentFiles: filtered }
+      }
+    })
+    if (changed) {
+      get().saveSettings().then(() => {
+        window.api?.refreshRecentMenu()
+      })
+    }
   },
 
   setFeatureFlag: (flag, enabled) => {

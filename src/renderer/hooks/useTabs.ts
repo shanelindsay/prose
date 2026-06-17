@@ -12,6 +12,7 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { useFileListStore } from '../stores/fileListStore'
 import { parseMarkdown, serializeMarkdown, prepareTextContent } from '../lib/markdown'
 import { pipelineLog } from '../lib/aiPipelineLog'
+import { handleMissingPath, isMissingPathFileError } from '../lib/stalePath'
 import {
   generateId,
   generateIdFromPath,
@@ -37,6 +38,14 @@ import type { DraftState } from '../lib/persistence'
 // Track chat panel state before preview mode so we can restore on promote
 let chatPanelStateBeforePreview: boolean | null = null
 
+function restoreAfterPreviewBrowsing(): void {
+  useEditorStore.getState().setPreviewTab(false)
+  if (chatPanelStateBeforePreview !== null) {
+    useChatStore.getState().setPanelOpen(chatPanelStateBeforePreview)
+    chatPanelStateBeforePreview = null
+  }
+}
+
 /**
  * Promote the current preview tab to permanent and restore UI state.
  * Can be called from outside the hook (e.g., Editor mousedown handler).
@@ -46,11 +55,7 @@ export function promoteCurrentPreview(): void {
   if (previewTab) {
     useTabStore.getState().promotePreviewTab(previewTab.id)
   }
-  useEditorStore.getState().setPreviewTab(false)
-  if (chatPanelStateBeforePreview !== null) {
-    useChatStore.getState().setPanelOpen(chatPanelStateBeforePreview)
-    chatPanelStateBeforePreview = null
-  }
+  restoreAfterPreviewBrowsing()
 }
 
 export function useTabs() {
@@ -360,8 +365,21 @@ export function useTabs() {
     useAnnotationStore.getState().setLoadingDocument(true)
 
     // Read file content
-    if (!window.api) return false
-    const rawContent = await window.api.readFile(filePath)
+    if (!window.api) {
+      useAnnotationStore.getState().setLoadingDocument(false)
+      return false
+    }
+    let rawContent: string
+    try {
+      rawContent = await window.api.readFile(filePath)
+    } catch (error) {
+      useAnnotationStore.getState().setLoadingDocument(false)
+      if (isMissingPathFileError(error)) {
+        handleMissingPath(filePath, 'open')
+      }
+      console.error('[useTabs] Failed to open file:', error)
+      return false
+    }
     const isTxt = filePath.endsWith('.txt')
     const parsed = parseMarkdown(isTxt ? prepareTextContent(rawContent) : rawContent)
 
@@ -490,10 +508,21 @@ export function useTabs() {
 
     // Read file content
     if (!window.api) {
-      useEditorStore.getState().setPreviewTab(false)
+      restoreAfterPreviewBrowsing()
       return false
     }
-    const rawContent = await window.api.readFile(filePath)
+    let rawContent: string
+    try {
+      rawContent = await window.api.readFile(filePath)
+    } catch (error) {
+      restoreAfterPreviewBrowsing()
+      useAnnotationStore.getState().setLoadingDocument(false)
+      if (isMissingPathFileError(error)) {
+        handleMissingPath(filePath, 'open')
+      }
+      console.error('[useTabs] Failed to preview file:', error)
+      return false
+    }
     const isTxt = filePath.endsWith('.txt')
     const parsed = parseMarkdown(isTxt ? prepareTextContent(rawContent) : rawContent)
     const newDocumentId = await generateIdFromPath(filePath)

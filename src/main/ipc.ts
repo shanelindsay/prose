@@ -11,6 +11,7 @@ import { getSettingsDir, LEGACY_SETTINGS_DIR } from './paths'
 import { clearRecentFiles } from './recentFiles'
 import { refreshMenu, setReopenClosedTabEnabled } from './menu'
 import { credentialStore } from './credentialStore'
+import { toFileOperationFailure, type ReadFileResult, type SaveFileResult } from '../shared/fileOperationResult'
 
 // Credential store keys
 const LLM_API_KEY = 'llm-api-key'
@@ -195,15 +196,25 @@ export function setupIpcHandlers(): void {
   })
 
   // File: Save content to path
-  ipcMain.handle('file:save', async (_event, path: string, content: string) => {
-    const safePath = validatePath(path)
-    await writeFile(safePath, content, 'utf-8')
+  ipcMain.handle('file:save', async (_event, path: string, content: string): Promise<SaveFileResult> => {
+    try {
+      const safePath = validatePath(path)
+      await writeFile(safePath, content, 'utf-8')
+      return { ok: true }
+    } catch (error) {
+      return toFileOperationFailure(path, error)
+    }
   })
 
   // File: Read file at path
-  ipcMain.handle('file:read', async (_event, path: string) => {
-    const safePath = validatePath(path)
-    return await readFile(safePath, 'utf-8')
+  ipcMain.handle('file:read', async (_event, path: string): Promise<ReadFileResult> => {
+    try {
+      const safePath = validatePath(path)
+      const content = await readFile(safePath, 'utf-8')
+      return { ok: true, content }
+    } catch (error) {
+      return toFileOperationFailure(path, error)
+    }
   })
 
   // File: Read binary file as base64

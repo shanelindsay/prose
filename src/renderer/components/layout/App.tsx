@@ -59,6 +59,7 @@ import {
   deleteConversations
 } from '../../lib/persistence'
 import { extractFirstH1 } from '../../lib/markdown'
+import { handleMissingPath } from '../../lib/stalePath'
 import type { DraftState, SessionState } from '../../lib/persistence'
 import { executeTool } from '../../lib/tools'
 import { useReviewMode, useWasChatOpenBeforeReview, usePreviousChatWidth, useReviewStore, type ReviewMode } from '../../stores/reviewStore'
@@ -242,14 +243,25 @@ export function App() {
       for (let i = 0; i < session.tabs.length; i++) {
         const tabDraft = session.tabs[i]
         const isActiveTab = tabDraft.tabId === session.activeTabId
+        let restoredPath = tabDraft.path
+        let restoredIsDirty = tabDraft.isDirty
+
+        if (tabDraft.path && window.api) {
+          const exists = await window.api.fileExists(tabDraft.path).catch(() => false)
+          if (!exists) {
+            handleMissingPath(tabDraft.path, 'restore')
+            restoredPath = null
+            restoredIsDirty = true
+          }
+        }
 
         addTab({
           id: tabDraft.tabId,
           documentId: tabDraft.documentId,
-          path: tabDraft.path,
+          path: restoredPath,
           title: tabDraft.title,
           baseTitle: tabDraft.baseTitle,
-          isDirty: tabDraft.isDirty,
+          isDirty: restoredIsDirty,
           content: tabDraft.content,
           frontmatter: tabDraft.frontmatter,
           cursorPosition: tabDraft.cursorPosition
@@ -261,10 +273,10 @@ export function App() {
           useEditorStore.setState({
             document: {
               documentId: tabDraft.documentId,
-              path: tabDraft.path,
+              path: restoredPath,
               content: documentContent,
               frontmatter: tabDraft.frontmatter ?? {},
-              isDirty: tabDraft.isDirty
+              isDirty: restoredIsDirty
             }
           })
           setCurrentDocumentId(tabDraft.documentId)
@@ -699,14 +711,20 @@ export function App() {
               if (result) {
                 await openFileInTab(result.path)
               }
+            }).catch((error) => {
+              console.error('[App] Failed to open file from menu:', error)
             })
           }
           break
         case 'save':
-          saveFile()
+          saveFile().catch((error) => {
+            console.error('[App] Failed to save from menu:', error)
+          })
           break
         case 'saveAs':
-          saveFileAs()
+          saveFileAs().catch((error) => {
+            console.error('[App] Failed to save as from menu:', error)
+          })
           break
         case 'exportHtml':
           // Delegate to Toolbar, which owns the export handler
@@ -852,7 +870,9 @@ export function App() {
           // Handle openRecentFile:${path} actions
           if (action.startsWith('openRecentFile:')) {
             const filePath = action.slice('openRecentFile:'.length)
-            openFileInTab(filePath)
+            openFileInTab(filePath).catch((error) => {
+              console.error('[App] Failed to open recent file from menu:', error)
+            })
           }
           break
       }
