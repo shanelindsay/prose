@@ -22,6 +22,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip'
 import { ReviewContainer } from '../review/ReviewContainer'
 import { AIEditsHistoryPanel } from '../editor/AIEditsHistoryPanel'
 import { useAnnotationStore } from '../../extensions/ai-annotations/store'
+import { useCommentStore } from '../../extensions/comments/store'
 import { MODE_SWITCH_RUN_EVENT } from './toolResultRenderers/RequestModeSwitchResult'
 import { cn } from '../../lib/utils'
 import { supportsAdaptiveThinking } from '../../../shared/llm/models'
@@ -43,6 +44,8 @@ export function ChatPanel() {
   // because the toggle lives in this header but the filtering happens in
   // AIEditsHistoryPanel.
   const [hideSuperseded, setHideSuperseded] = useState(false)
+  // Filter resolved comment threads in the Activity list.
+  const [hideResolved, setHideResolved] = useState(false)
 
   const {
     conversations,
@@ -101,9 +104,23 @@ export function ChatPanel() {
     () => annotations.reduce((n, a) => (a.detached ? n + 1 : n), 0),
     [annotations]
   )
+
+  // Comment thread counts for the Activity tab badge.
+  const pendingComments = useCommentStore((s) => s.pendingComments)
+  const commentActivityCount = useMemo(
+    () => pendingComments.reduce((n, c) => n + (c.replies?.length ?? 0), 0),
+    [pendingComments]
+  )
+  const resolvedCount = useMemo(
+    () => pendingComments.filter((c) => c.resolved).length,
+    [pendingComments]
+  )
+
   // Badge reflects what's currently shown: total when including superseded,
   // current-only when the filter is engaged.
-  const activityCount = hideSuperseded ? annotations.length - supersededCount : annotations.length
+  const activityCount =
+    (hideSuperseded ? annotations.length - supersededCount : annotations.length) +
+    commentActivityCount
 
   // Track pending suggestion count
   const suggestionCount = useMemo(() => {
@@ -270,8 +287,8 @@ export function ChatPanel() {
             </button>
           </div>
 
-          {/* Filter: hide/show superseded — only when there's something to filter */}
-          {sidebarMode === 'activity' && supersededCount > 0 && (
+          {/* Filter: hide/show superseded + resolved — only when there's something to filter */}
+          {sidebarMode === 'activity' && (supersededCount > 0 || resolvedCount > 0) && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -279,19 +296,23 @@ export function ChatPanel() {
                   size="icon"
                   className={cn(
                     'h-6 w-6',
-                    hideSuperseded ? 'bg-accent text-primary' : 'text-muted-foreground hover:text-foreground'
+                    (hideSuperseded || hideResolved) ? 'bg-accent text-primary' : 'text-muted-foreground hover:text-foreground'
                   )}
-                  onClick={() => setHideSuperseded((v) => !v)}
-                  aria-pressed={hideSuperseded}
-                  aria-label={hideSuperseded ? 'Show superseded edits' : 'Hide superseded edits'}
+                  onClick={() => {
+                    const filtering = hideSuperseded || hideResolved
+                    setHideSuperseded(!filtering)
+                    setHideResolved(!filtering)
+                  }}
+                  aria-pressed={hideSuperseded || hideResolved}
+                  aria-label={(hideSuperseded || hideResolved) ? 'Show all activity' : 'Hide superseded and resolved'}
                 >
                   <Filter className="h-3.5 w-3.5" />
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
-                {hideSuperseded
-                  ? 'Showing current edits · click to include superseded'
-                  : 'Hide superseded edits'}
+                {(hideSuperseded || hideResolved)
+                  ? 'Showing current activity · click to include superseded and resolved'
+                  : 'Hide superseded edits and resolved comments'}
               </TooltipContent>
             </Tooltip>
           )}
@@ -449,7 +470,8 @@ export function ChatPanel() {
         {sidebarMode === 'activity' ? (
           <AIEditsHistoryPanel
             hideSuperseded={hideSuperseded}
-            onShowAll={() => setHideSuperseded(false)}
+            hideResolved={hideResolved}
+            onShowAll={() => { setHideSuperseded(false); setHideResolved(false) }}
           />
         ) : (
           <>

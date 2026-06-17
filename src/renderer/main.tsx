@@ -8,6 +8,7 @@ import { ErrorBoundary } from './lib/sentry'
 import { dumpPipelineLog, clearPipelineLog } from './lib/aiPipelineLog'
 import { executeTool } from './lib/tools'
 import { useAnnotationStore } from './extensions/ai-annotations'
+import { useCommentStore } from './extensions/comments/store'
 import { useTabStore } from './stores/tabStore'
 import { useChatStore } from './stores/chatStore'
 import type { ChatMessage } from './types'
@@ -40,6 +41,9 @@ import './index.css'
   isAnnotationMappingPaused: () => useAnnotationStore.getState().isLoadingDocument,
   getActiveTabId: () => useTabStore.getState().activeTabId,
   loadAnnotationsFromDB,
+  // Comment store access for e2e verification of threading (#699).
+  getCommentStore: () => useCommentStore.getState().pendingComments,
+  getCommentDocId: () => useCommentStore.getState().documentId,
 }
 // Test seam — INTENTIONALLY always-on, same tier as __prose_tools/__prose_debug.
 // Lets Playwright drive the chat surface with zero LLM: seed a conversation and

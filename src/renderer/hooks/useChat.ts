@@ -768,18 +768,17 @@ export function useChat() {
     const comments = getComments(editor)
     if (comments.length === 0) return
 
-    // Build the prompt from comments
+    // Build the prompt from comments. The AI uses reply_to_comment /
+    // suggest_edit / resolve_comment to act on each thread — marks are not
+    // removed here; the AI resolves them via tools when done.
     const commentsPrompt = buildCommentsPrompt(comments)
-
-    // Only remove comments if the message was actually dispatched to the AI (#631)
-    const dispatched = await sendMessage(commentsPrompt)
-    if (dispatched) {
-      editor.commands.unsetAllComments()
-    }
+    await sendMessage(commentsPrompt)
   }, [sendMessage])
 
-  // Process a single comment by id — same prompt shape as processComments,
-  // but scoped to just one mark so the user can act per-comment from the popover.
+  // Process a single comment by id — launches the AI to read the thread and
+  // decide: reply, suggest_edit, or both, then resolve when done.
+  // The AI uses list_comments / reply_to_comment / suggest_edit / resolve_comment
+  // rather than the host deleting the mark immediately.
   const processComment = useCallback(async (commentId: string) => {
     const editor = useEditorInstanceStore.getState().editor
     if (!editor) return
@@ -788,10 +787,8 @@ export function useChat() {
     if (!target) return
 
     const commentsPrompt = buildCommentsPrompt([target])
-    const dispatched = await sendMessage(commentsPrompt)
-    if (dispatched) {
-      editor.commands.unsetComment(commentId)
-    }
+    // Do NOT delete the mark before or after — the AI decides when to resolve.
+    await sendMessage(commentsPrompt)
   }, [sendMessage])
 
   // Helper to get current comment count

@@ -1,15 +1,22 @@
 /**
- * Comment Popover — shows an existing comment's text with a Remove action.
- * Mirrors the visual language of AISuggestionPopover.
+ * Comment Popover — thread view for an existing comment.
+ *
+ * Shows the original comment, any replies (user + AI), a reply input, a
+ * resolve control, and a remove button. Mirrors the visual language of
+ * AISuggestionPopover.
  */
 
 import { useEffect, useRef, useState, useCallback, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
 import type { Editor } from '@tiptap/core'
-import { Trash2, X, Sparkles } from 'lucide-react'
+import { Trash2, X, Sparkles, CheckCheck, Send, Bot, User } from 'lucide-react'
 import { useChat } from '../hooks/useChat'
 import { useAIConfigured } from '../hooks/useAIConfigured'
 import { aiUnavailableMessage } from '../lib/llm'
+import { useCommentStore } from '../extensions/comments/store'
+import type { CommentData, CommentReply } from '../extensions/comments/types'
+import { generateId } from '../lib/persistence'
+import { cn } from '../lib/utils'
 
 const NAV_BAR_HEIGHT = 48
 const VIEWPORT_PADDING = 16
@@ -33,9 +40,20 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
     position: { x: 0, y: 0 },
   })
   const [adjustedPosition, setAdjustedPosition] = useState<{ x: number; y: number } | null>(null)
+  const [replyText, setReplyText] = useState('')
   const popoverRef = useRef<HTMLDivElement>(null)
+  const replyInputRef = useRef<HTMLTextAreaElement>(null)
   const { processComment } = useChat()
   const ai = useAIConfigured()
+
+  // Get persisted comment data (replies + resolved state)
+  const pendingComments = useCommentStore((s) => s.pendingComments)
+  const documentId = useCommentStore((s) => s.documentId)
+  const saveComments = useCommentStore((s) => s.saveComments)
+
+  const currentComment: CommentData | undefined = popover.commentId
+    ? pendingComments.find((c) => c.id === popover.commentId)
+    : undefined
 
   useEffect(() => {
     const handleClick = (event: MouseEvent) => {
@@ -61,6 +79,7 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
           commentText: text,
           position: { x: rect.left + rect.width / 2, y: rect.bottom + 8 },
         })
+        setReplyText('')
         return
       }
 
@@ -115,11 +134,29 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
   }, [popover.isOpen, popover.position, adjustedPosition])
 
   const handleRemove = useCallback(() => {
-    if (popover.commentId) {
-      editor.commands.unsetComment(popover.commentId)
-      setPopover((prev) => ({ ...prev, isOpen: false }))
-    }
-  }, [editor, popover.commentId])
+    if (!popover.commentId) return
+    const id = popover.commentId
+    // Remove the editor mark and drop the persisted record entirely.
+    editor.commands.unsetComment(id)
+    const { pendingComments: current } = useCommentStore.getState()
+    const updated = current.filter((c) => c.id !== id)
+    useCommentStore.setState({ pendingComments: updated })
+    if (documentId) saveComments(documentId, updated)
+    setPopover((prev) => ({ ...prev, isOpen: false }))
+  }, [editor, popover.commentId, documentId, saveComments])
+
+  const handleResolve = useCallback(() => {
+    if (!popover.commentId) return
+    const id = popover.commentId
+    // Mark resolved:true in the store (thread persists as history),
+    // then remove the editor mark so the highlight disappears.
+    const { pendingComments: current } = useCommentStore.getState()
+    const updated = current.map((c) => c.id === id ? { ...c, resolved: true } : c)
+    useCommentStore.setState({ pendingComments: updated })
+    if (documentId) saveComments(documentId, updated)
+    editor.commands.unsetComment(id)
+    setPopover((prev) => ({ ...prev, isOpen: false }))
+  }, [editor, popover.commentId, documentId, saveComments])
 
   const handleProcess = useCallback(() => {
     if (popover.commentId) {
@@ -133,9 +170,42 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
     setPopover((prev) => ({ ...prev, isOpen: false }))
   }, [])
 
+  // Add a user reply to the thread
+  const handleAddReply = useCallback(() => {
+    const text = replyText.trim()
+    if (!text || !popover.commentId) return
+    const id = popover.commentId
+    const reply: CommentReply = {
+      id: generateId(),
+      author: 'user',
+      text,
+      createdAt: Date.now(),
+    }
+    const { pendingComments: current } = useCommentStore.getState()
+    const updated = current.map((c) =>
+      c.id === id ? { ...c, replies: [...(c.replies ?? []), reply] } : c
+    )
+    useCommentStore.setState({ pendingComments: updated })
+    if (documentId) saveComments(documentId, updated)
+    setReplyText('')
+    replyInputRef.current?.focus()
+  }, [replyText, popover.commentId, documentId, saveComments])
+
+  const handleReplyKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault()
+        handleAddReply()
+      }
+    },
+    [handleAddReply]
+  )
+
   if (!popover.isOpen) return null
 
   const displayPosition = adjustedPosition || popover.position
+  const replies = currentComment?.replies ?? []
+  const isResolved = currentComment?.resolved === true
 
   return createPortal(
     <div
@@ -149,17 +219,59 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
         visibility: adjustedPosition ? 'visible' : 'hidden',
       }}
     >
+      {/* Original comment */}
       <div className="comment-label">Comment:</div>
       <div className="comment-text">{popover.commentText}</div>
+
+      {/* Thread replies */}
+      {replies.length > 0 && (
+        <div className="comment-replies">
+          {replies.map((reply) => (
+            <ReplyRow key={reply.id} reply={reply} />
+          ))}
+        </div>
+      )}
+
+      {/* Reply input (hidden for resolved threads) */}
+      {!isResolved && (
+        <div className="comment-reply-input">
+          <textarea
+            ref={replyInputRef}
+            className="reply-textarea"
+            value={replyText}
+            onChange={(e) => setReplyText(e.target.value)}
+            onKeyDown={handleReplyKeyDown}
+            placeholder="Reply… (Enter to send)"
+            rows={2}
+          />
+          <button
+            className="reply-send-btn"
+            onClick={handleAddReply}
+            disabled={!replyText.trim()}
+            aria-label="Send reply"
+          >
+            <Send size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* Actions */}
       <div className="actions">
         <button
           className="process-btn"
           onClick={handleProcess}
-          disabled={!ai.available}
+          disabled={!ai.available || isResolved}
+          title={isResolved ? 'Thread is resolved' : undefined}
         >
           <Sparkles size={16} />
           Process
         </button>
+        {!isResolved && (
+          <button className="resolve-btn" onClick={handleResolve}>
+            <CheckCheck size={16} />
+            Resolve
+          </button>
+        )}
         <button className="remove-btn" onClick={handleRemove}>
           <Trash2 size={16} />
           Remove
@@ -174,5 +286,19 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
       )}
     </div>,
     document.body
+  )
+}
+
+// ─── Sub-components ────────────────────────────────────────────────────────────
+
+function ReplyRow({ reply }: { reply: CommentReply }) {
+  const isAI = reply.author === 'ai'
+  return (
+    <div className={cn('comment-reply', isAI ? 'reply-ai' : 'reply-user')}>
+      <span className="reply-author-icon" aria-label={isAI ? 'AI' : 'You'}>
+        {isAI ? <Bot size={12} /> : <User size={12} />}
+      </span>
+      <span className="reply-text">{reply.text}</span>
+    </div>
   )
 }
