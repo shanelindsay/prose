@@ -483,34 +483,34 @@ function FileTreeItem({
   const fileContextMenu = (
     <ContextMenuContent>
       {onFileOpen && (
-        <ContextMenuItem onClick={() => onFileOpen(item.path)}>
+        <ContextMenuItem onClick={() => onFileOpen?.(item.path)}>
           <FileText className="h-4 w-4 mr-2" />
           Open
         </ContextMenuItem>
       )}
       {onFileRename && (
-        <ContextMenuItem onClick={() => onFileRename(item.path)}>
+        <ContextMenuItem onClick={() => onFileRename?.(item.path)}>
           <Edit3 className="h-4 w-4 mr-2" />
           Rename
           <ContextMenuShortcut>↵</ContextMenuShortcut>
         </ContextMenuItem>
       )}
       {onFileCopy && (
-        <ContextMenuItem onClick={() => onFileCopy(item.path)}>
+        <ContextMenuItem onClick={() => onFileCopy?.(item.path)}>
           <Copy className="h-4 w-4 mr-2" />
           Copy
           <ContextMenuShortcut>⌘C</ContextMenuShortcut>
         </ContextMenuItem>
       )}
       {onFileCut && (
-        <ContextMenuItem onClick={() => onFileCut(item.path)}>
+        <ContextMenuItem onClick={() => onFileCut?.(item.path)}>
           <Scissors className="h-4 w-4 mr-2" />
           Cut
           <ContextMenuShortcut>⌘X</ContextMenuShortcut>
         </ContextMenuItem>
       )}
       {onFilePaste && (
-        <ContextMenuItem onClick={() => onFilePaste()} disabled={!clipboardPath}>
+        <ContextMenuItem onClick={() => onFilePaste?.()} disabled={!clipboardPath}>
           <ClipboardPaste className="h-4 w-4 mr-2" />
           Paste
           <ContextMenuShortcut>⌘V</ContextMenuShortcut>
@@ -519,7 +519,7 @@ function FileTreeItem({
       {onFileShowInFolder && (
         <>
           <ContextMenuSeparator />
-          <ContextMenuItem onClick={() => onFileShowInFolder(item.path)}>
+          <ContextMenuItem onClick={() => onFileShowInFolder?.(item.path)}>
             <ExternalLink className="h-4 w-4 mr-2" />
             Show in Finder
           </ContextMenuItem>
@@ -529,12 +529,12 @@ function FileTreeItem({
         <>
           <ContextMenuSeparator />
           {isFavoritePath && onRemoveFavorite ? (
-            <ContextMenuItem onClick={() => onRemoveFavorite(item.path)}>
+            <ContextMenuItem onClick={() => onRemoveFavorite?.(item.path)}>
               <Star className="h-4 w-4 mr-2 fill-current" />
               Remove from Favorites
             </ContextMenuItem>
           ) : (
-            <ContextMenuItem onClick={() => onAddFavorite(item.path, false)}>
+            <ContextMenuItem onClick={() => onAddFavorite?.(item.path, false)}>
               <Star className="h-4 w-4 mr-2" />
               Add to Favorites
             </ContextMenuItem>
@@ -560,7 +560,7 @@ function FileTreeItem({
   const folderContextMenu = (
     <ContextMenuContent>
       {onNewFile && (
-        <ContextMenuItem onClick={() => onNewFile(item.path)}>
+        <ContextMenuItem onClick={() => onNewFile?.(item.path)}>
           <FilePlus className="h-4 w-4 mr-2" />
           New File
           <ContextMenuShortcut>⌘N</ContextMenuShortcut>
@@ -592,7 +592,7 @@ function FileTreeItem({
       {onFileShowInFolder && (
         <>
           <ContextMenuSeparator />
-          <ContextMenuItem onClick={() => onFileShowInFolder(item.path)}>
+          <ContextMenuItem onClick={() => onFileShowInFolder?.(item.path)}>
             <ExternalLink className="h-4 w-4 mr-2" />
             Show in Finder
           </ContextMenuItem>
@@ -601,12 +601,12 @@ function FileTreeItem({
       {(onAddProject || onAddFavorite) && <ContextMenuSeparator />}
       {onAddProject && (
         isProjectPath && onRemoveProject ? (
-          <ContextMenuItem onClick={() => onRemoveProject(item.path)}>
+          <ContextMenuItem onClick={() => onRemoveProject?.(item.path)}>
             <Boxes className="h-4 w-4 mr-2" />
             Remove from Projects
           </ContextMenuItem>
         ) : (
-          <ContextMenuItem onClick={() => onAddProject(item.path)}>
+          <ContextMenuItem onClick={() => onAddProject?.(item.path)}>
             <Boxes className="h-4 w-4 mr-2" />
             Add as Project
           </ContextMenuItem>
@@ -614,12 +614,12 @@ function FileTreeItem({
       )}
       {onAddFavorite && (
         isFavoritePath && onRemoveFavorite ? (
-          <ContextMenuItem onClick={() => onRemoveFavorite(item.path)}>
+          <ContextMenuItem onClick={() => onRemoveFavorite?.(item.path)}>
             <Star className="h-4 w-4 mr-2 fill-amber-400 text-amber-400" />
             Remove from Favorites
           </ContextMenuItem>
         ) : (
-          <ContextMenuItem onClick={() => onAddFavorite(item.path, true)}>
+          <ContextMenuItem onClick={() => onAddFavorite?.(item.path, true)}>
             <Star className="h-4 w-4 mr-2" />
             Add to Favorites
           </ContextMenuItem>

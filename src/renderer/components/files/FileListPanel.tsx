@@ -1550,7 +1550,6 @@ export function FileListPanel() {
                       onFileCopy={(path: string) => useFileListStore.getState().setClipboardPath(path, 'copy')}
                       onFileCut={(path: string) => useFileListStore.getState().setClipboardPath(path, 'cut')}
                       onFilePaste={pasteFile}
-                      onFileMove={moveFile}
                       onFileOpen={handleFileDoubleClick}
                       onRenameComplete={handleRenameComplete}
                       onRenameCancel={handleRenameCancel}
