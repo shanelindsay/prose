@@ -28,6 +28,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu'
 import {
@@ -40,7 +41,7 @@ import {
 } from '../ui/dialog'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
-import { History, Cloud, Plus, FileText, BookOpen, CloudOff, ChevronUp, ChevronLeft, ChevronRight, ChevronDown, Folder, FolderOpen, FolderInput, FolderPlus, Download, Trash2, FilePlus, ClipboardPaste, ExternalLink, X, Globe, Edit3, RefreshCw, Loader2, AlertTriangle, Bug, Boxes, Star, MoreHorizontal } from 'lucide-react'
+import { History, Cloud, Plus, FileText, BookOpen, CloudOff, ChevronUp, ChevronLeft, ChevronRight, ChevronDown, Folder, FolderOpen, FolderInput, FolderPlus, Download, Trash2, FilePlus, ClipboardPaste, ExternalLink, X, Globe, Edit3, RefreshCw, Loader2, AlertTriangle, Bug, Boxes, Star, MoreHorizontal, Eye, EyeOff, SlidersHorizontal, Check } from 'lucide-react'
 import { useSettings } from '../../hooks/useSettings'
 import { cn } from '../../lib/utils'
 import { getApi } from '../../lib/browserApi'
@@ -49,6 +50,8 @@ import { requestBugReport } from '../EnableLoggingDialog'
 import type { RemarkableNotebookMetadata, RemarkableCloudNotebook, GoogleDocEntry } from '../../types'
 import { ProjectsPanel } from './ProjectsPanel'
 import { useProjects, useFavorites, useProjectsStore } from '../../stores/projectsStore'
+import { useMenuCustomization } from '../../hooks/useMenuCustomization'
+import type { MenuItemDescriptor } from '../../hooks/useMenuCustomization'
 
 export function FileListPanel() {
   const {
@@ -131,7 +134,8 @@ export function FileListPanel() {
   }, [])
 
   // View toggles in priority order (earliest stay inline longest).
-  const viewToggles = [
+  // All possible toggles — feature-gated ones are only present when enabled.
+  const allViewToggles = [
     {
       key: 'folder', Icon: Folder, label: 'Files', active: viewMode === 'folder',
       onClick: () => {
@@ -157,6 +161,27 @@ export function FileListPanel() {
         : setViewMode('notebooks'),
     }] : []),
   ]
+
+  // Apply user-saved customization: order + visibility.
+  // Unknown/new toggle IDs append visible so upgrades never hide new toggles.
+  const toggleDescriptors: MenuItemDescriptor[] = allViewToggles.map((t) => ({ id: t.key, label: t.label }))
+  const {
+    visibleIds: toggleVisibleIds,
+    hiddenIds: toggleHiddenIds,
+    orderedAllIds: toggleOrderedAllIds,
+    toggleHidden: toggleViewToggleHidden,
+    moveUp: moveToggleUp,
+    moveDown: moveToggleDown,
+  } = useMenuCustomization('files-header', toggleDescriptors)
+  const toggleById = new Map(allViewToggles.map((t) => [t.key, t]))
+  // viewToggles is the filtered + ordered set fed into the responsive layout below
+  const viewToggles = toggleVisibleIds
+    .map((id) => toggleById.get(id))
+    .filter((t): t is (typeof allViewToggles)[number] => !!t)
+
+  // Edit mode for the header view-toggle customization overlay
+  const [isToggleEditMode, setIsToggleEditMode] = useState(false)
+
   const TOGGLE_PX = 36 // 32px button + 4px gap
   // Title gets a real min-width: shown at >=120px, otherwise hidden entirely
   // (rather than shrinking to a sliver) so the toggles collapse into ··· sooner.
@@ -1211,32 +1236,111 @@ export function FileListPanel() {
               <TooltipContent>{t.label}</TooltipContent>
             </Tooltip>
           ))}
-          {overflowToggles.length > 0 && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className={cn("h-8 w-8", overflowToggles.some((t) => t.active) && "bg-accent text-accent-foreground")}
-                  aria-label="More views"
+          <DropdownMenu onOpenChange={(open) => { if (!open) setIsToggleEditMode(false) }}>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className={cn("h-8 w-8", overflowToggles.some((t) => t.active) && "bg-accent text-accent-foreground")}
+                aria-label="More views"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            {isToggleEditMode ? (
+              <DropdownMenuContent
+                align="end"
+                className="w-52"
+                onCloseAutoFocus={(e) => e.preventDefault()}
+                onInteractOutside={() => setIsToggleEditMode(false)}
+                onEscapeKeyDown={() => setIsToggleEditMode(false)}
+              >
+                <div className="px-2 py-1 text-xs font-medium text-muted-foreground select-none">
+                  Customize views
+                </div>
+                {toggleOrderedAllIds.map((id, idx) => {
+                  const toggle = toggleById.get(id)
+                  if (!toggle) return null
+                  const isHidden = toggleHiddenIds.includes(id)
+                  return (
+                    <div
+                      key={id}
+                      className={cn(
+                        'flex items-center gap-1 px-1 py-0.5 rounded-sm',
+                        isHidden && 'opacity-40'
+                      )}
+                    >
+                      <div className="flex flex-col shrink-0">
+                        <button
+                          type="button"
+                          className="h-3.5 w-5 flex items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-25 focus:outline-none"
+                          onClick={(e) => { e.stopPropagation(); moveToggleUp(id) }}
+                          disabled={idx === 0}
+                          aria-label={`Move ${toggle.label} up`}
+                          tabIndex={-1}
+                        >
+                          <ChevronUp className="h-3 w-3" />
+                        </button>
+                        <button
+                          type="button"
+                          className="h-3.5 w-5 flex items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-25 focus:outline-none"
+                          onClick={(e) => { e.stopPropagation(); moveToggleDown(id) }}
+                          disabled={idx === toggleOrderedAllIds.length - 1}
+                          aria-label={`Move ${toggle.label} down`}
+                          tabIndex={-1}
+                        >
+                          <ChevronDown className="h-3 w-3" />
+                        </button>
+                      </div>
+                      <div className="flex flex-1 items-center gap-2 px-1 py-1 text-sm animate-wiggle select-none">
+                        <toggle.Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        <span className="truncate">{toggle.label}</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="shrink-0 h-6 w-6 flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent focus:outline-none"
+                        onClick={(e) => { e.stopPropagation(); toggleViewToggleHidden(id) }}
+                        aria-label={isHidden ? `Show ${toggle.label}` : `Hide ${toggle.label}`}
+                        aria-pressed={isHidden}
+                        tabIndex={-1}
+                      >
+                        {isHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                      </button>
+                    </div>
+                  )
+                })}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="cursor-pointer font-medium"
+                  onSelect={() => setIsToggleEditMode(false)}
                 >
-                  <MoreHorizontal className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
+                  <Check className="mr-2 h-4 w-4" />
+                  Done
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            ) : (
               <DropdownMenuContent align="end">
                 {overflowToggles.map((t) => (
                   <DropdownMenuItem
                     key={t.key}
-                    className={cn(t.active && "bg-muted")}
+                    className={cn(t.active && "bg-muted", "cursor-pointer")}
                     onClick={t.onClick}
                   >
                     <t.Icon className="h-4 w-4 mr-2" />
                     {t.label}
                   </DropdownMenuItem>
                 ))}
+                {overflowToggles.length > 0 && <DropdownMenuSeparator />}
+                <DropdownMenuItem
+                  className="cursor-pointer text-muted-foreground"
+                  onSelect={(e) => { e.preventDefault(); setIsToggleEditMode(true) }}
+                >
+                  <SlidersHorizontal className="mr-2 h-4 w-4" />
+                  Customize…
+                </DropdownMenuItem>
               </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+            )}
+          </DropdownMenu>
         </div>
       </div>
 

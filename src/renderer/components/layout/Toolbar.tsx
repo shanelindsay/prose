@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, type KeyboardEvent } from 'react'
 import { downloadSkillWithAlert } from '../../lib/skillDownload'
 import { requestBugReport } from '../EnableLoggingDialog'
 import { useEditor } from '../../hooks/useEditor'
@@ -18,9 +18,6 @@ import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import {
   DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger
 } from '../ui/dropdown-menu'
 import {
@@ -39,6 +36,8 @@ import {
   AlertDialogTitle
 } from '../ui/alert-dialog'
 import { TabBar } from './TabBar'
+import { CustomizableMenu } from '../ui/CustomizableMenu'
+import type { CustomizableMenuItem } from '../ui/CustomizableMenu'
 import {
   Moon,
   Monitor,
@@ -307,6 +306,32 @@ export function Toolbar() {
     await createNewTab()
   }
 
+  // Build the items list for the "More options" customizable menu.
+  // Items are computed once per render — stable ids let the customization hook
+  // merge saved order/hidden with any new items added in future releases.
+  const moreMenuItems = useMemo((): CustomizableMenuItem[] => {
+    const isMas = window.api?.isMasBuild ?? false
+    return [
+      { id: 'new-document', label: 'New Document', icon: <FilePlus />, onSelect: handleNewFile },
+      { id: 'open', label: 'Open...', icon: <FolderOpen />, onSelect: () => openFile() },
+      { id: 'save', label: 'Save', icon: <Save />, onSelect: saveFile },
+      { id: 'save-as', label: 'Save as...', icon: <FileDown />, onSelect: saveFileAs },
+      { id: 'export-html', label: 'Export HTML...', icon: <FileCode />, disabled: !document.content, onSelect: handleExportHtml },
+      { id: 'settings', label: 'Settings', icon: <Settings />, separatorBefore: true, onSelect: () => setDialogOpen(true) },
+      ...(!isMas
+        ? [{ id: 'download-skill', label: 'Download Claude Skill', icon: <Sparkles />, onSelect: () => downloadSkillWithAlert() }]
+        : []),
+      ...(isMas
+        ? [{ id: 'support', label: 'Request Support', icon: <LifeBuoy />, separatorBefore: true, onSelect: () => window.open('https://solo.ist/prose/support', '_blank', 'noopener,noreferrer') }]
+        : [{ id: 'report-bug', label: 'Report a Bug', icon: <Bug />, separatorBefore: true, onSelect: () => requestBugReport('https://github.com/solo-ist/prose/issues/new?template=bug-report.yml') }]),
+      { id: 'request-feature', label: 'Request a Feature', icon: <MessageSquarePlus />, onSelect: () => window.open('https://github.com/solo-ist/prose/issues/new?template=feature-request.yml', '_blank', 'noopener,noreferrer') },
+      { id: 'discuss-ideas', label: 'Discuss Ideas', icon: <MessagesSquare />, onSelect: () => window.open('https://github.com/solo-ist/prose/discussions/categories/ideas', '_blank', 'noopener,noreferrer') },
+      // Close is pinned: always last, not customizable
+      { id: 'close', label: 'Close', icon: <X />, onSelect: handleClose, pinned: true },
+    ]
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [document.content, handleExportHtml, handleClose, openFile, saveFile, saveFileAs, setDialogOpen])
+
   // Add left padding on macOS to clear traffic lights (less when fullscreen)
   const leftPadding = isMacOS() ? (isFullscreen ? 'pl-4' : 'pl-[88px]') : 'pl-4'
 
@@ -572,64 +597,7 @@ export function Toolbar() {
                 <MoreHorizontal className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={handleNewFile}>
-                <FilePlus className="mr-2 h-4 w-4" />
-                New Document
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => openFile()}>
-                <FolderOpen className="mr-2 h-4 w-4" />
-                Open...
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={saveFile}>
-                <Save className="mr-2 h-4 w-4" />
-                Save
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={saveFileAs}>
-                <FileDown className="mr-2 h-4 w-4" />
-                Save as...
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={handleExportHtml} disabled={!document.content}>
-                <FileCode className="mr-2 h-4 w-4" />
-                Export HTML...
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => setDialogOpen(true)}>
-                <Settings className="mr-2 h-4 w-4" />
-                Settings
-              </DropdownMenuItem>
-              {!window.api?.isMasBuild && (
-                <DropdownMenuItem onClick={() => downloadSkillWithAlert()}>
-                  <Sparkles className="mr-2 h-4 w-4" />
-                  Download Claude Skill
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuSeparator />
-              {window.api?.isMasBuild ? (
-                <DropdownMenuItem onClick={() => window.open('https://solo.ist/prose/support', '_blank', 'noopener,noreferrer')}>
-                  <LifeBuoy className="mr-2 h-4 w-4" />
-                  Request Support
-                </DropdownMenuItem>
-              ) : (
-                <DropdownMenuItem onClick={() => requestBugReport('https://github.com/solo-ist/prose/issues/new?template=bug-report.yml')}>
-                  <Bug className="mr-2 h-4 w-4" />
-                  Report a Bug
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem onClick={() => window.open('https://github.com/solo-ist/prose/issues/new?template=feature-request.yml', '_blank', 'noopener,noreferrer')}>
-                <MessageSquarePlus className="mr-2 h-4 w-4" />
-                Request a Feature
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => window.open('https://github.com/solo-ist/prose/discussions/categories/ideas', '_blank', 'noopener,noreferrer')}>
-                <MessagesSquare className="mr-2 h-4 w-4" />
-                Discuss Ideas
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={handleClose}>
-                <X className="mr-2 h-4 w-4" />
-                Close
-              </DropdownMenuItem>
-            </DropdownMenuContent>
+            <CustomizableMenu menuId="toolbar-more" items={moreMenuItems} align="end" />
           </DropdownMenu>
         </div>
       </div>

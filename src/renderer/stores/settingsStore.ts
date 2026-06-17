@@ -142,6 +142,8 @@ interface SettingsState {
   addFavorite: (favorite: Favorite) => void
   removeFavorite: (id: string) => void
   updateFavorite: (id: string, patch: Partial<Omit<Favorite, 'id'>>) => void
+  // Menu customization
+  setMenuCustomization: (menuId: string, config: { order: string[]; hidden: string[] }) => void
 }
 
 const defaultSettings: Settings = {
@@ -693,6 +695,23 @@ export const useSettingsStore = create<SettingsState>()(subscribeWithSelector((s
         favorites: (state.settings.favorites ?? []).map((f) =>
           f.id === id ? { ...f, ...patch } : f
         )
+      }
+    }))
+    get().saveSettings()
+  },
+
+  // -------------------------------------------------------------------------
+  // Menu customization
+  // -------------------------------------------------------------------------
+
+  setMenuCustomization: (menuId, config) => {
+    set((state) => ({
+      settings: {
+        ...state.settings,
+        menuCustomization: {
+          ...(state.settings.menuCustomization ?? {}),
+          [menuId]: config
+        }
       }
     }))
     get().saveSettings()
