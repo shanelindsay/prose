@@ -44,6 +44,7 @@ interface FileTreeProps {
   onFilePaste?: (targetDir?: string) => void
   onFileTrash?: (path: string) => void
   onFileOpen?: (path: string) => void
+  onOpenExternally?: (path: string) => void
   onRenameComplete?: (oldPath: string, newName: string) => void
   onRenameCancel?: () => void
   onNewFile?: (dirPath: string) => void
@@ -82,6 +83,7 @@ export function FileTree({
   onFilePaste,
   onFileTrash,
   onFileOpen,
+  onOpenExternally,
   onRenameComplete,
   onRenameCancel,
   onNewFile,
@@ -123,6 +125,7 @@ export function FileTree({
           onFilePaste={onFilePaste}
           onFileTrash={onFileTrash}
           onFileOpen={onFileOpen}
+          onOpenExternally={onOpenExternally}
           onRenameComplete={onRenameComplete}
           onRenameCancel={onRenameCancel}
           onNewFile={onNewFile}
@@ -165,6 +168,7 @@ interface FileTreeItemProps {
   onFilePaste?: (targetDir?: string) => void
   onFileTrash?: (path: string) => void
   onFileOpen?: (path: string) => void
+  onOpenExternally?: (path: string) => void
   onRenameComplete?: (oldPath: string, newName: string) => void
   onRenameCancel?: () => void
   onNewFile?: (dirPath: string) => void
@@ -203,6 +207,7 @@ function FileTreeItem({
   onFilePaste,
   onFileTrash,
   onFileOpen,
+  onOpenExternally,
   onRenameComplete,
   onRenameCancel,
   onNewFile,
@@ -637,8 +642,8 @@ function FileTreeItem({
           Show in Finder
         </ContextMenuItem>
       )}
-      {onFileOpen && (
-        <ContextMenuItem onClick={() => onFileOpen(item.path)}>
+      {onOpenExternally && (
+        <ContextMenuItem onClick={() => onOpenExternally(item.path)}>
           <ExternalLink className="h-4 w-4 mr-2" />
           Open Externally
         </ContextMenuItem>
@@ -687,6 +692,7 @@ function FileTreeItem({
           onFilePaste={onFilePaste}
           onFileTrash={onFileTrash}
           onFileOpen={onFileOpen}
+          onOpenExternally={onOpenExternally}
           onRenameComplete={onRenameComplete}
           onRenameCancel={onRenameCancel}
           onNewFile={onNewFile}

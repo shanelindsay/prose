@@ -549,6 +549,8 @@ export interface ElectronAPI {
   createDirectory: (dirPath: string) => Promise<string>
   // Window operations
   closeWindow: () => Promise<void>
+  // Open a local file in its default app (for non-markdown "Open Externally")
+  openPath?: (path: string) => Promise<string>
   // External URL opening (for CMD+Click on links)
   openExternal?: (url: string) => Promise<void>
   // Directory listing (with lazy loading support via maxDepth parameter)

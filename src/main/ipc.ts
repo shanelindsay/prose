@@ -1560,6 +1560,12 @@ export function setupIpcHandlers(): void {
     setReopenClosedTabEnabled(!!enabled)
   })
 
+  // Shell: Open a local file in its default app (for non-markdown "Open Externally")
+  ipcMain.handle('shell:openPath', async (_event, path: string) => {
+    const safe = validatePath(path)
+    return shell.openPath(safe)
+  })
+
   // Shell: Open external URL (for CMD+Click on links)
   ipcMain.handle('shell:openExternal', async (_event, url: string) => {
     // Validate URL before opening

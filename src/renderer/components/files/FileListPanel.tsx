@@ -401,9 +401,9 @@ export function FileListPanel() {
     }
   }
 
-  // Open a non-markdown file externally (Show in Finder / Open with default app)
+  // Open a non-markdown file in its default external app
   const handleOpenExternally = useCallback((path: string) => {
-    window.api?.showInFolder(path)
+    window.api?.openPath(path)
   }, [])
 
   // Add a path to the persisted pointer list (folders → projects/favorites,
@@ -1666,7 +1666,8 @@ export function FileListPanel() {
                       onRenameCancel={handleRenameCancel}
                       onNewFile={handleNewFileInDir}
                       onNewFolder={handleNewFolderInDir}
-                      onFileOpen={handleOpenExternally}
+                      onFileOpen={handleFileDoubleClick}
+                      onOpenExternally={handleOpenExternally}
                       onAddProject={addPathAsProject}
                       onAddFavorite={addPathAsFavorite}
                       onRemoveProject={removePathAsProject}

@@ -440,6 +440,7 @@ const api: ElectronAPI = {
   closeWindow: () => ipcRenderer.invoke('window:close'),
   isFullScreen: () => ipcRenderer.invoke('window:isFullScreen'),
   exitFullScreen: () => ipcRenderer.invoke('window:exitFullScreen'),
+  openPath: (path: string) => ipcRenderer.invoke('shell:openPath', path),
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   listDirectory: (path: string, maxDepth?: number, showDotfiles?: boolean) => ipcRenderer.invoke('file:listDirectory', path, maxDepth, showDotfiles),
   remarkableRegister: (code: string) => ipcRenderer.invoke('remarkable:register', code),
