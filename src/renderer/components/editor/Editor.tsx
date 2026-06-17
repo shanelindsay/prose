@@ -54,6 +54,15 @@ import { promoteCurrentPreview } from '../../hooks/useTabs'
 import { FindBar } from './FindBar'
 import { SelectionPopover } from './SelectionPopover'
 import { AddCommentDialog } from './AddCommentDialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../ui/dialog'
+import { Button } from '../ui/button'
 import { EmptyState } from '../layout/EmptyState'
 import { FrontmatterDisplay, hasFrontmatter, getContentWithoutFrontmatter, getFrontmatterRaw } from './FrontmatterDisplay'
 import { FrontmatterEditor, serializeFrontmatter } from './FrontmatterEditor'
@@ -67,6 +76,21 @@ import { useCommentStore } from '../../extensions/comments/store'
 import { LinkPopover } from './LinkPopover'
 import { SourceEditor, SourceEditorHandle } from './SourceEditor'
 import { getApi } from '../../lib/browserApi'
+
+const AI_PASTE_PROMPT_MIN_CHARS = 200
+
+interface PendingPasteAnnotation {
+  documentId: string
+  from: number
+  to: number
+  text: string
+}
+
+function shouldPromptForAIPaste(text: string): boolean {
+  const trimmed = text.trim()
+  if (!trimmed) return false
+  return trimmed.length >= AI_PASTE_PROMPT_MIN_CHARS || trimmed.includes('\n')
+}
 
 // Lowlight instance with a curated set of common languages.
 // Using individual imports (not the full `common` preset) keeps the bundle
@@ -117,6 +141,7 @@ export function Editor() {
     to: number
     text: string
   } | null>(null)
+  const [pendingPasteAnnotation, setPendingPasteAnnotation] = useState<PendingPasteAnnotation | null>(null)
   const { isTransforming, startTransform, completeTransform } = useTransformAnimation()
 
   // Source mode: holds markdown content while CodeMirror is mounted
@@ -246,6 +271,52 @@ export function Editor() {
     editorProps: {
       attributes: {
         class: 'outline-none min-h-full'
+      },
+      handlePaste: (view, event) => {
+        const pastedText = event.clipboardData?.getData('text/plain') ?? ''
+        if (!shouldPromptForAIPaste(pastedText)) return false
+
+        const editorState = useEditorStore.getState()
+        if (
+          editorState.sourceMode ||
+          editorState.isRemarkableReadOnly ||
+          editorState.isPreviewTab ||
+          !editorState.document.documentId
+        ) {
+          return false
+        }
+
+        const documentId = editorState.document.documentId
+        const selectionFrom = view.state.selection.from
+        const selectionTo = view.state.selection.to
+        const replacedSize = selectionTo - selectionFrom
+        const sizeBefore = view.state.doc.content.size
+
+        setTimeout(() => {
+          const activeEditor = useEditorInstanceStore.getState().editor
+          const activeDocumentId = useEditorStore.getState().document.documentId
+          if (!activeEditor || activeDocumentId !== documentId) return
+
+          const sizeAfter = activeEditor.state.doc.content.size
+          const insertedSize = Math.max(0, sizeAfter - sizeBefore + replacedSize)
+          const selectionEnd = activeEditor.state.selection.from
+          const fallbackTo = selectionFrom + insertedSize
+          const annotationTo = Math.min(
+            activeEditor.state.doc.content.size,
+            Math.max(selectionEnd, fallbackTo)
+          )
+
+          if (annotationTo > selectionFrom) {
+            setPendingPasteAnnotation({
+              documentId,
+              from: selectionFrom,
+              to: annotationTo,
+              text: pastedText,
+            })
+          }
+        }, 0)
+
+        return false
       },
       handleDOMEvents: {
         mousedown: () => {
@@ -929,6 +1000,40 @@ export function Editor() {
     setContent(currentBody)
   }, [setFrontmatter, setContent, editor])
 
+  const handleConfirmPasteAI = useCallback(() => {
+    if (!pendingPasteAnnotation) return
+
+    const activeDocumentId = useEditorStore.getState().document.documentId
+    const activeEditor = useEditorInstanceStore.getState().editor
+    if (activeDocumentId !== pendingPasteAnnotation.documentId || !activeEditor) {
+      setPendingPasteAnnotation(null)
+      return
+    }
+
+    const annotationTo = Math.min(
+      pendingPasteAnnotation.to,
+      activeEditor.state.doc.content.size
+    )
+    if (annotationTo > pendingPasteAnnotation.from) {
+      const messageId = `paste-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+      useAnnotationStore.getState().addAnnotation({
+        documentId: pendingPasteAnnotation.documentId,
+        type: 'insertion',
+        from: pendingPasteAnnotation.from,
+        to: annotationTo,
+        content: pendingPasteAnnotation.text,
+        provenance: {
+          model: 'External AI',
+          conversationId: 'paste',
+          messageId,
+        },
+        explanation: 'Marked pasted text as AI-authored',
+      })
+    }
+
+    setPendingPasteAnnotation(null)
+  }, [pendingPasteAnnotation])
+
   return (
     <div className="h-full flex flex-col relative">
       {/* Hide FindBar in source mode — CodeMirror has built-in Ctrl+F */}
@@ -1105,6 +1210,29 @@ export function Editor() {
           setPendingCommentSelection(null)
         }}
       />
+      <Dialog
+        open={pendingPasteAnnotation !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingPasteAnnotation(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Mark pasted text as AI-authored?</DialogTitle>
+            <DialogDescription>
+              Save provenance for this pasted block in the document activity.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingPasteAnnotation(null)}>
+              Not now
+            </Button>
+            <Button onClick={handleConfirmPasteAI}>
+              Mark as AI-authored
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {editor && <AISuggestionPopover editor={editor} />}
       {editor && <CommentPopover editor={editor} />}
       {editor && (

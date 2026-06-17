@@ -344,14 +344,15 @@ export async function executeProseTool(
   toolName: string,
   args: Record<string, unknown>,
   mode: 'chat' | 'editor' | 'create' = 'create',
+  provenance?: Record<string, string>,
 ): Promise<ProseToolResult> {
   return page.evaluate(
-    async ({ name, toolArgs, toolMode }) => {
+    async ({ name, toolArgs, toolMode, toolProvenance }) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const tools = (window as any).__prose_tools
-      return tools.executeTool(name, toolArgs, toolMode)
+      return tools.executeTool(name, toolArgs, toolMode, toolProvenance)
     },
-    { name: toolName, toolArgs: args, toolMode: mode },
+    { name: toolName, toolArgs: args, toolMode: mode, toolProvenance: provenance },
   )
 }
 

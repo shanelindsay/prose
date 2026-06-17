@@ -6,6 +6,7 @@
 import type { ToolResult, FileItem } from '../../../../shared/tools/types'
 import { toolSuccess, toolError } from '../../../../shared/tools/types'
 import { useEditorStore } from '../../../stores/editorStore'
+import { useEditorInstanceStore } from '../../../stores/editorInstanceStore'
 import { useChatStore, setCurrentDocumentId } from '../../../stores/chatStore'
 import { useSettingsStore } from '../../../stores/settingsStore'
 import { useFileListStore } from '../../../stores/fileListStore'
@@ -21,11 +22,40 @@ import {
 import { useTabStore, generateUntitledTitle } from '../../../stores/tabStore'
 import { useSuggestionStore } from '../../../extensions/ai-suggestions/store'
 
+interface ToolProvenance {
+  model: string
+  conversationId: string
+  messageId: string
+  documentId: string
+}
+
 /**
  * Get the Electron API.
  */
 function getApi() {
   return window.api
+}
+
+async function waitForEditorDocumentContent(documentId: string, markdown: string): Promise<number | null> {
+  const expected = markdown.trim()
+
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const editor = useEditorInstanceStore.getState().editor
+    const activeDocumentId = useEditorStore.getState().document.documentId
+    const currentMarkdown = editor?.storage.markdown?.getMarkdown?.()
+
+    if (
+      editor &&
+      activeDocumentId === documentId &&
+      (!expected || currentMarkdown?.trim() === expected)
+    ) {
+      return editor.state.doc.content.size
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 16))
+  }
+
+  return null
 }
 
 /**
@@ -418,7 +448,7 @@ export async function executeReadFile(args: {
 export async function executeCreateAndOpenFile(args: {
   filename?: string
   content?: string
-}): Promise<ToolResult<{ path: string; opened: boolean }>> {
+}, provenance?: ToolProvenance): Promise<ToolResult<{ path: string; opened: boolean }>> {
   const api = getApi()
 
   if (!api) {
@@ -465,6 +495,30 @@ export async function executeCreateAndOpenFile(args: {
         `File created at ${fullPath} but failed to open: ${openResult.error}`,
         'OPEN_FAILED'
       )
+    }
+
+    if (provenance && content.trim().length > 0) {
+      const editorDocument = useEditorStore.getState().document
+      const annotationContent = editorDocument.content || content
+      const annotationTo = await waitForEditorDocumentContent(editorDocument.documentId, annotationContent)
+
+      // Skip the annotation if the editor isn't ready yet — annotationTo must be a
+      // ProseMirror position (doc.content.size), not a raw character count.
+      if (annotationTo !== null) {
+        useAnnotationStore.getState().addAnnotation({
+          documentId: editorDocument.documentId,
+          type: 'insertion',
+          from: 0,
+          to: annotationTo,
+          content: annotationContent,
+          provenance: {
+            model: provenance.model,
+            conversationId: provenance.conversationId,
+            messageId: provenance.messageId,
+          },
+          explanation: `Created ${attemptFilename}`,
+        })
+      }
     }
 
     return toolSuccess({ path: fullPath, opened: true })

@@ -148,7 +148,7 @@ export async function executeTool(
       case 'read_file':
         return await executeReadFile(validatedArgs)
       case 'create_and_open_file':
-        return await executeCreateAndOpenFile(validatedArgs)
+        return await executeCreateAndOpenFile(validatedArgs, provenance)
 
       // Tab tools
       case 'list_tabs':
