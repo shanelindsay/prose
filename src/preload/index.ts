@@ -42,6 +42,9 @@ export interface LLMStreamRequest extends LLMRequest {
   streamId: string
   tools?: LLMToolDefinition[]
   maxToolRoundtrips?: number
+  maxTokens?: number
+  /** Enable adaptive thinking (Anthropic-only). Defaults to true when omitted in the main handler. */
+  thinking?: boolean
 }
 
 export interface LLMStreamChunk {
@@ -64,6 +67,22 @@ export interface LLMStreamToolCallStart {
   toolName: string
 }
 
+/**
+ * Thinking block from the Anthropic API. Preserved verbatim in assistant
+ * content for tool-loop continuations; never modified by the renderer.
+ */
+export interface LLMThinkingBlock {
+  type: 'thinking'
+  thinking: string
+  signature?: string
+}
+
+export interface LLMStreamThinkingDelta {
+  streamId: string
+  /** Cumulative thinking text so far (not a bare delta — simpler store handling). */
+  thinking: string
+}
+
 export interface LLMStreamComplete {
   streamId: string
   content: string
@@ -72,6 +91,8 @@ export interface LLMStreamComplete {
     name: string
     args: unknown
   }>
+  /** Full thinking blocks from this turn, preserved for tool-loop continuations. */
+  thinkingBlocks?: LLMThinkingBlock[]
 }
 
 export interface LLMStreamError {
@@ -207,6 +228,7 @@ export interface ElectronAPI {
   onLLMStreamToolCallStart: (callback: (start: LLMStreamToolCallStart) => void) => () => void
   onLLMStreamComplete: (callback: (complete: LLMStreamComplete) => void) => () => void
   onLLMStreamError: (callback: (error: LLMStreamError) => void) => () => void
+  onLLMStreamThinkingDelta: (callback: (delta: LLMStreamThinkingDelta) => void) => () => void
   // Folder operations for quick save
   selectFolder: (defaultPath?: string, message?: string) => Promise<{ path: string; bookmark: string | null } | null>
   activateBookmark: (kind: 'project' | 'favorite', id: string, bookmark: string) => Promise<boolean>
@@ -533,6 +555,15 @@ const api: ElectronAPI = {
     ipcRenderer.on('llm:stream:error', handler)
     return () => {
       ipcRenderer.removeListener('llm:stream:error', handler)
+    }
+  },
+  onLLMStreamThinkingDelta: (callback: (delta: LLMStreamThinkingDelta) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, delta: LLMStreamThinkingDelta): void => {
+      callback(delta)
+    }
+    ipcRenderer.on('llm:stream:thinking:delta', handler)
+    return () => {
+      ipcRenderer.removeListener('llm:stream:thinking:delta', handler)
     }
   },
   // File association

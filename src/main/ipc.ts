@@ -6,7 +6,7 @@ import { randomUUID } from 'crypto'
 import { homedir } from 'os'
 import type { Settings } from '../renderer/types'
 import { withRetry, getNetworkErrorMessage } from '../shared/utils/retry'
-import { getDefaultModel, getDefaultHaikuModel } from '../shared/llm/models'
+import { getDefaultModel, getDefaultHaikuModel, supportsAdaptiveThinking } from '../shared/llm/models'
 import { getSettingsDir, LEGACY_SETTINGS_DIR } from './paths'
 import { clearRecentFiles } from './recentFiles'
 import { refreshMenu, setReopenClosedTabEnabled } from './menu'
@@ -62,6 +62,8 @@ interface LLMStreamRequest extends LLMRequest {
   streamId: string
   tools?: LLMToolDefinition[]
   maxToolRoundtrips?: number
+  maxTokens?: number
+  thinking?: boolean
 }
 
 // Track active streams for abort support
@@ -996,16 +998,38 @@ export function setupIpcHandlers(): void {
 
         console.log('[LLM:stream] Creating Anthropic stream with tools:', anthropicTools.map(t => t.name))
 
-        const stream = client.messages.stream({
+        // Extended thinking — adaptive mode, capability-gated per model.
+        // Only Opus 4.7+, Opus 4.8, and Fable 5 support it; Sonnet/Haiku return
+        // HTTP 400 if the param is sent. `display: "summarized"` is mandatory —
+        // the default "omitted" yields an empty thinking string. Depth is
+        // controlled by output_config.effort, not a token budget.
+        const thinkingEnabled = request.thinking !== false && supportsAdaptiveThinking(request.model)
+        const thinkingParam = thinkingEnabled
+          ? { type: 'adaptive' as const, display: 'summarized' as const }
+          : undefined
+
+        const maxTokens = request.maxTokens || 16000
+
+        const streamParams: Parameters<typeof client.messages.stream>[0] = {
           model: request.model,
-          max_tokens: request.maxTokens || 4096,
+          max_tokens: maxTokens,
           system: request.system,
           messages: anthropicMessages,
-          tools: anthropicTools
-        })
+          tools: anthropicTools,
+          ...(thinkingParam ? { thinking: thinkingParam } : {}),
+          ...(thinkingEnabled ? { output_config: { effort: 'high' as const } } : {})
+        }
+
+        const stream = client.messages.stream(streamParams)
 
         let fullContent = ''
         const toolCalls: Array<{ id: string; name: string; args: unknown }> = []
+
+        // Track thinking block accumulation for streaming delta events.
+        // We send cumulative thinking text on each thinking_delta so the
+        // renderer can update its display without managing deltas itself.
+        let currentThinkingText = ''
+        let inThinkingBlock = false
 
         stream.on('text', (text) => {
           if (abortController.signal.aborted) return
@@ -1014,25 +1038,49 @@ export function setupIpcHandlers(): void {
           event.sender.send('llm:stream:chunk', { streamId, delta: text })
         })
 
-        stream.on('contentBlockStart', (block) => {
+        // The SDK provides a dedicated `thinking` event that fires once per
+        // thinking_delta. The second argument is the cumulative snapshot, which
+        // we forward directly to the renderer as a "thinking delta" so the
+        // store doesn't need to accumulate increments itself.
+        stream.on('thinking', (_thinkingDelta, thinkingSnapshot) => {
           if (abortController.signal.aborted) return
-          console.log('[LLM:stream] Content block start:', block.content_block.type)
-          if (block.content_block.type === 'tool_use') {
-            console.log('[LLM:stream] Tool use started:', block.content_block.name)
-            // Fire a drafting event before any input_json_delta arrives — the
-            // visible latency for tools like `insert`/`edit` is the LLM
-            // composing the input, not the tool's actual execution.
-            event.sender.send('llm:stream:tool-call:start', {
-              streamId,
-              toolCallId: block.content_block.id,
-              toolName: block.content_block.name
-            })
-          }
+          inThinkingBlock = true
+          currentThinkingText = thinkingSnapshot
+          event.sender.send('llm:stream:thinking:delta', {
+            streamId,
+            thinking: thinkingSnapshot
+          })
         })
 
-        stream.on('contentBlockStop', (block) => {
+        // Use the typed `streamEvent` to detect tool_use block start (for the
+        // drafting chip) and thinking block boundaries.
+        stream.on('streamEvent', (rawEvent) => {
           if (abortController.signal.aborted) return
-          console.log('[LLM:stream] Content block stop')
+          if (rawEvent.type === 'content_block_start') {
+            const blockType = (rawEvent as { type: string; index: number; content_block: { type: string; id?: string; name?: string } }).content_block.type
+            const contentBlock = (rawEvent as { type: string; index: number; content_block: { type: string; id?: string; name?: string } }).content_block
+            console.log('[LLM:stream] Content block start:', blockType)
+            if (blockType === 'thinking') {
+              inThinkingBlock = true
+              currentThinkingText = ''
+              console.log('[LLM:stream] Thinking block started')
+            } else if (blockType === 'tool_use') {
+              console.log('[LLM:stream] Tool use started:', contentBlock.name)
+              // Fire a drafting event before any input_json_delta arrives — the
+              // visible latency for tools like `insert`/`edit` is the LLM
+              // composing the input, not the tool's actual execution.
+              event.sender.send('llm:stream:tool-call:start', {
+                streamId,
+                toolCallId: contentBlock.id,
+                toolName: contentBlock.name
+              })
+            }
+          } else if (rawEvent.type === 'content_block_stop') {
+            if (inThinkingBlock) {
+              inThinkingBlock = false
+              console.log('[LLM:stream] Thinking block complete, length:', currentThinkingText.length)
+            }
+          }
         })
 
         stream.on('error', (err) => {
@@ -1048,7 +1096,11 @@ export function setupIpcHandlers(): void {
         const finalMessage = await stream.finalMessage()
         console.log('[LLM:stream] Got finalMessage, stop_reason:', finalMessage.stop_reason)
 
-        // Extract tool calls from the final message
+        // Extract tool calls and thinking blocks from the final message.
+        // Thinking blocks are passed back so useChat can embed them verbatim
+        // in the assistant content array for tool-loop continuations — the
+        // Anthropic API requires thinking blocks to be preserved unmodified.
+        const thinkingBlocks: Array<{ type: 'thinking'; thinking: string; signature?: string }> = []
         for (const block of finalMessage.content) {
           if (block.type === 'tool_use') {
             const toolCall = {
@@ -1058,14 +1110,21 @@ export function setupIpcHandlers(): void {
             }
             toolCalls.push(toolCall)
             event.sender.send('llm:stream:tool-call', { streamId, toolCall })
+          } else if (block.type === 'thinking') {
+            thinkingBlocks.push({
+              type: 'thinking',
+              thinking: block.thinking,
+              ...(block.signature ? { signature: block.signature } : {})
+            })
           }
         }
 
-        console.log('[LLM:stream] Sending complete:', fullContent.length, 'chars, toolCalls:', toolCalls.length)
+        console.log('[LLM:stream] Sending complete:', fullContent.length, 'chars, toolCalls:', toolCalls.length, 'thinkingBlocks:', thinkingBlocks.length)
         event.sender.send('llm:stream:complete', {
           streamId,
           content: fullContent,
-          toolCalls: toolCalls.length > 0 ? toolCalls : undefined
+          toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+          thinkingBlocks: thinkingBlocks.length > 0 ? thinkingBlocks : undefined
         })
 
         return { success: true }

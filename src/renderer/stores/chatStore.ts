@@ -71,6 +71,12 @@ interface ChatState {
   appendStreamChunk: (delta: string) => void
   completeStreaming: () => void
 
+  // Extended thinking toggle — controls whether the model is asked to use
+  // adaptive thinking. Only Opus 4.7+ and Fable 5 honour the param; the
+  // main-process handler capability-gates by model ID automatically.
+  thinkingEnabled: boolean
+  setThinkingEnabled: (enabled: boolean) => void
+
   // Initialization actions
   setInitializing: (isInitializing: boolean) => void
 
@@ -101,6 +107,7 @@ export const useChatStore = create<ChatState>()(
     isStreaming: false,
     currentStreamId: null,
     streamingMessageId: null,
+    thinkingEnabled: true,
 
     setConversations: (conversations) => set({ conversations }),
 
@@ -300,6 +307,8 @@ export const useChatStore = create<ChatState>()(
         streamingMessageId: null,
         isLoading: false
       }),
+
+    setThinkingEnabled: (enabled) => set({ thinkingEnabled: enabled }),
 
     setInitializing: (isInitializing) => set({ isInitializing }),
 

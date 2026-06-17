@@ -182,6 +182,14 @@ export interface ChatMessage {
    * decisions already made.
    */
   toolActions?: Record<number, 'switched' | 'dismissed'>
+  /**
+   * Accumulated thinking text for this assistant turn (concatenated from
+   * all thinking blocks the model produced). Stored separately from
+   * `content` so it can be rendered in a collapsible UI block without
+   * polluting the text that goes through the tool-tag parser.
+   * Only set on assistant messages when the model produced thinking blocks.
+   */
+  thinkingText?: string
 }
 
 export interface FileResult {
@@ -362,7 +370,20 @@ export interface LLMToolResultBlock {
   content: string
 }
 
-export type LLMContentBlock = LLMTextBlock | LLMToolUseBlock | LLMToolResultBlock
+/**
+ * Thinking block returned by the Anthropic API when adaptive thinking is enabled.
+ * Preserved unmodified in assistant messages passed to continuations (required
+ * by the API — dropping or modifying thinking blocks in tool-use continuations
+ * causes a 400 error). The `signature` field is an opaque integrity token that
+ * the API generates and validates; we store it but never inspect it.
+ */
+export interface LLMThinkingBlock {
+  type: 'thinking'
+  thinking: string
+  signature?: string
+}
+
+export type LLMContentBlock = LLMTextBlock | LLMToolUseBlock | LLMToolResultBlock | LLMThinkingBlock
 
 export interface LLMMessage {
   role: 'user' | 'assistant' | 'tool'
@@ -395,6 +416,8 @@ export interface LLMStreamRequest extends LLMRequest {
   tools?: LLMToolDefinition[]
   maxToolRoundtrips?: number
   maxTokens?: number
+  /** Enable adaptive thinking (Anthropic-only). Defaults to true when omitted. */
+  thinking?: boolean
 }
 
 export interface LLMStreamChunk {
@@ -417,6 +440,12 @@ export interface LLMStreamToolCallStart {
   toolName: string
 }
 
+export interface LLMStreamThinkingDelta {
+  streamId: string
+  /** Cumulative thinking text so far (not an incremental delta — simpler to handle in the store). */
+  thinking: string
+}
+
 export interface LLMStreamComplete {
   streamId: string
   content: string
@@ -425,6 +454,13 @@ export interface LLMStreamComplete {
     name: string
     args: unknown
   }>
+  /**
+   * Full thinking blocks from this turn, if the model produced any.
+   * Passed back so `useChat` can embed them verbatim in the assistant
+   * content array for tool-loop continuations (the API requires them
+   * to be preserved unmodified).
+   */
+  thinkingBlocks?: LLMThinkingBlock[]
 }
 
 export interface LLMStreamError {
@@ -479,6 +515,7 @@ export interface ElectronAPI {
   onLLMStreamToolCallStart: (callback: (start: LLMStreamToolCallStart) => void) => () => void
   onLLMStreamComplete: (callback: (complete: LLMStreamComplete) => void) => () => void
   onLLMStreamError: (callback: (error: LLMStreamError) => void) => () => void
+  onLLMStreamThinkingDelta: (callback: (delta: LLMStreamThinkingDelta) => void) => () => void
   // Folder operations for quick save
   selectFolder: (defaultPath?: string, message?: string) => Promise<{ path: string; bookmark: string | null } | null>
   /** Activate a MAS security-scoped bookmark in-session (#654). Optional: older

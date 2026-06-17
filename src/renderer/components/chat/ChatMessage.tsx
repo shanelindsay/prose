@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { cn } from '../../lib/utils'
 import type { ChatMessage as ChatMessageType } from '../../types'
-import { User, AlertCircle, Sparkles, CheckCircle2, XCircle, RotateCcw, ChevronDown } from 'lucide-react'
+import { User, AlertCircle, Sparkles, CheckCircle2, XCircle, RotateCcw, ChevronDown, Brain } from 'lucide-react'
 import { useEditorInstanceStore } from '../../stores/editorInstanceStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { CopyButton } from '../ui/copy-button'
@@ -9,6 +9,38 @@ import { jumpToLine } from '../../lib/lineNavigation'
 import { getAISuggestions } from '../../extensions/ai-suggestions/extension'
 import { renderToolResult } from './toolResultRenderers'
 import { PROSE_ICONS, IconThumb } from '../../lib/prose-icons'
+
+/**
+ * Collapsible thinking block — shown above the assistant's main reply when the
+ * model produced thinking content. Collapsed by default; streaming state shown
+ * via a subtle pulsing indicator on the header when `isStreaming` is true.
+ */
+function ThinkingBlock({ text, isStreaming }: { text: string; isStreaming: boolean }) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <div className="rounded-md border border-border/50 bg-muted/10 overflow-hidden mb-2">
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground hover:bg-muted/20 transition-colors"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Brain className={cn('h-3 w-3 shrink-0', isStreaming && 'animate-pulse text-primary/70')} />
+        <span className="flex-1 font-medium">
+          {isStreaming ? 'Thinking…' : 'Thought process'}
+        </span>
+        <ChevronDown
+          className={cn('h-3 w-3 shrink-0 transition-transform', open && 'rotate-180')}
+        />
+      </button>
+      {open && text && (
+        <div className="px-3 pb-3 pt-1 text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap break-words border-t border-border/30">
+          {text}
+        </div>
+      )}
+    </div>
+  )
+}
 
 // Single source of truth for the "drafting" verb shown while the LLM is
 // composing tool arguments. Update here to tune copy app-wide.
@@ -477,6 +509,11 @@ export function ChatMessage({ message, isStreaming, onRetry }: ChatMessageProps)
           </div>
         )}
         <div className="text-sm leading-relaxed">
+          {/* Collapsible thinking block — only shown on assistant messages that
+              have thinking text (either streamed in progress or complete). */}
+          {!isUser && message.thinkingText && (
+            <ThinkingBlock text={message.thinkingText} isStreaming={!!isStreaming} />
+          )}
           {isUser ? (
             <p className="whitespace-pre-wrap break-words font-mono">{message.content}</p>
           ) : message.isError ? (
