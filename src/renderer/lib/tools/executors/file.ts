@@ -500,23 +500,25 @@ export async function executeCreateAndOpenFile(args: {
     if (provenance && content.trim().length > 0) {
       const editorDocument = useEditorStore.getState().document
       const annotationContent = editorDocument.content || content
-      const annotationTo =
-        await waitForEditorDocumentContent(editorDocument.documentId, annotationContent) ??
-        annotationContent.length
+      const annotationTo = await waitForEditorDocumentContent(editorDocument.documentId, annotationContent)
 
-      useAnnotationStore.getState().addAnnotation({
-        documentId: editorDocument.documentId,
-        type: 'insertion',
-        from: 0,
-        to: annotationTo,
-        content: annotationContent,
-        provenance: {
-          model: provenance.model,
-          conversationId: provenance.conversationId,
-          messageId: provenance.messageId,
-        },
-        explanation: `Created ${attemptFilename}`,
-      })
+      // Skip the annotation if the editor isn't ready yet — annotationTo must be a
+      // ProseMirror position (doc.content.size), not a raw character count.
+      if (annotationTo !== null) {
+        useAnnotationStore.getState().addAnnotation({
+          documentId: editorDocument.documentId,
+          type: 'insertion',
+          from: 0,
+          to: annotationTo,
+          content: annotationContent,
+          provenance: {
+            model: provenance.model,
+            conversationId: provenance.conversationId,
+            messageId: provenance.messageId,
+          },
+          explanation: `Created ${attemptFilename}`,
+        })
+      }
     }
 
     return toolSuccess({ path: fullPath, opened: true })
