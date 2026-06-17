@@ -3,6 +3,7 @@ import { useEditorStore } from '../stores/editorStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useEditorInstanceStore } from '../stores/editorInstanceStore'
 import { serializeMarkdown } from '../lib/markdown'
+import { handleMissingPath, isMissingPathFileError } from '../lib/stalePath'
 
 /**
  * Hook that handles automatic saving of documents.
@@ -14,6 +15,7 @@ import { serializeMarkdown } from '../lib/markdown'
 export function useAutosave() {
   const timerRef = useRef<NodeJS.Timeout | null>(null)
   const isSavingRef = useRef(false)
+  const blockedPathRef = useRef<string | null>(null)
   const editorUnsubscribeRef = useRef<(() => void) | null>(null)
 
   const clearTimer = useCallback(() => {
@@ -30,7 +32,12 @@ export function useAutosave() {
     // - Already saving
     // - No file path (new unsaved document)
     // - Document is not dirty
-    if (isSavingRef.current || !document.path || !document.isDirty) {
+    if (
+      isSavingRef.current ||
+      !document.path ||
+      !document.isDirty ||
+      blockedPathRef.current === document.path
+    ) {
       return
     }
 
@@ -45,12 +52,30 @@ export function useAutosave() {
         new Promise((r) => setTimeout(r, 500))
       ])
       setDirty(false)
+      blockedPathRef.current = null
     } catch (error) {
+      if (isMissingPathFileError(error)) {
+        blockedPathRef.current = document.path
+        clearTimer()
+        handleMissingPath(document.path, 'autosave')
+        return
+      }
       console.error('[Autosave] Failed to save:', error)
     } finally {
       isSavingRef.current = false
       setAutosaving(false)
     }
+  }, [clearTimer])
+
+  useEffect(() => {
+    return useEditorStore.subscribe(
+      (state) => state.document.path,
+      (path) => {
+        if (path !== blockedPathRef.current) {
+          blockedPathRef.current = null
+        }
+      }
+    )
   }, [])
 
   useEffect(() => {

@@ -3,8 +3,10 @@ import { useEditorStore } from '../stores/editorStore'
 import { useChatStore, setCurrentDocumentId } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useFileListStore } from '../stores/fileListStore'
+import { useNotificationStore } from '../stores/notificationStore'
 import { parseMarkdown, serializeMarkdown, extractFirstH1, prepareTextContent } from '../lib/markdown'
 import { extractMarkdownFromHtml } from '../lib/htmlExport'
+import { handleMissingPath, isMissingPathFileError } from '../lib/stalePath'
 import {
   generateId,
   generateIdFromPath,
@@ -29,6 +31,10 @@ function buildSaveContent(
     return content
   }
   return serializeMarkdown(content, frontmatter)
+}
+
+function getPathFilename(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? 'document.md'
 }
 
 export function useEditor() {
@@ -121,6 +127,9 @@ export function useEditor() {
       const conversations = useChatStore.getState().conversations
       return parsed.content.trim().length > 0 && conversations.length === 0
     } catch (error) {
+      if (isMissingPathFileError(error)) {
+        handleMissingPath(filePath, 'open')
+      }
       console.error('Failed to open file:', error)
       return false
     }
@@ -186,18 +195,10 @@ export function useEditor() {
     return false
   }, [setDocument, document.documentId, saveCurrentConversation, loadForDocument, setEditing])
 
-  const saveFile = useCallback(async () => {
+  const saveContentAs = useCallback(async (content: string, defaultFilename?: string | null) => {
     if (!window.api) return
-    const content = buildSaveContent(document.content, document.frontmatter, document.path)
-
-    if (document.path) {
-      await window.api.saveFile(document.path, content)
-      setDirty(false)
-    } else {
-      // Pre-fill the Save As dialog with the H1 heading (sanitized) if available
-      const h1 = extractFirstH1(document.content)
-      const defaultFilename = h1 ? sanitizeFilename(h1) + '.md' : undefined
-      const path = await window.api.saveFileAs(content, defaultFilename)
+    try {
+      const path = await window.api.saveFileAs(content, defaultFilename ?? undefined)
       if (path) {
         // Migrate chat history to path-based ID
         const newDocumentId = await generateIdFromPath(path)
@@ -230,8 +231,45 @@ export function useEditor() {
         setDirty(false)
         setCurrentDocumentId(newDocumentId)
       }
+    } catch (error) {
+      console.error('Failed to save file as:', error)
+      useNotificationStore.getState().notify({
+        id: 'save-as-failed',
+        message: 'Could not save this document. Choose another location and try again.',
+        durationMs: 0
+      })
     }
-  }, [document, setDirty, setDocument])
+  }, [setDocument, setDirty])
+
+  const saveFile = useCallback(async () => {
+    if (!window.api) return
+    const content = buildSaveContent(document.content, document.frontmatter, document.path)
+
+    if (document.path) {
+      try {
+        await window.api.saveFile(document.path, content)
+        setDirty(false)
+      } catch (error) {
+        if (isMissingPathFileError(error)) {
+          handleMissingPath(document.path, 'save')
+          await saveContentAs(content, getPathFilename(document.path))
+          return
+        }
+
+        console.error('Failed to save file:', error)
+        useNotificationStore.getState().notify({
+          id: `save-failed:${document.path}`,
+          message: `Could not save "${getPathFilename(document.path)}". Use Save As to keep your edits.`,
+          durationMs: 0
+        })
+      }
+    } else {
+      // Pre-fill the Save As dialog with the H1 heading (sanitized) if available
+      const h1 = extractFirstH1(document.content)
+      const defaultFilename = h1 ? sanitizeFilename(h1) + '.md' : undefined
+      await saveContentAs(content, defaultFilename)
+    }
+  }, [document, saveContentAs, setDirty])
 
   const saveFileAs = useCallback(async () => {
     if (!window.api) return
@@ -239,40 +277,8 @@ export function useEditor() {
     // Pre-fill the Save As dialog with the H1 heading (sanitized) if the document is untitled
     const h1 = !document.path ? extractFirstH1(document.content) : null
     const defaultFilename = h1 ? sanitizeFilename(h1) + '.md' : undefined
-    const path = await window.api.saveFileAs(content, defaultFilename)
-    if (path) {
-      // Migrate chat history to path-based ID
-      const newDocumentId = await generateIdFromPath(path)
-      const conversations = useChatStore.getState().conversations
-
-      // Save conversations under new path-based ID
-      if (conversations.length > 0) {
-        const migratedConversations = conversations.map((c) => ({
-          ...c,
-          documentId: newDocumentId
-        }))
-        await saveConversations(newDocumentId, migratedConversations)
-        useChatStore.setState({ conversations: migratedConversations })
-      }
-
-      // Migrate annotations to path-based ID
-      const annotations = useAnnotationStore.getState().annotations
-      if (annotations.length > 0) {
-        const migratedAnnotations = annotations.map((a) => ({
-          ...a,
-          documentId: newDocumentId
-        }))
-        await saveAnnotations(newDocumentId, migratedAnnotations)
-        useAnnotationStore.setState({ annotations: migratedAnnotations, documentId: newDocumentId })
-      } else {
-        useAnnotationStore.getState().setDocumentId(newDocumentId)
-      }
-
-      setDocument({ documentId: newDocumentId, path })
-      setDirty(false)
-      setCurrentDocumentId(newDocumentId)
-    }
-  }, [document, setDocument, setDirty])
+    await saveContentAs(content, defaultFilename)
+  }, [document, saveContentAs])
 
   const newFile = useCallback(async () => {
     // Save current conversations before switching
@@ -352,7 +358,12 @@ export function useEditor() {
       if (isRename && oldPath) {
         // Rename the file: save new content to new path, then delete old file
         await window.api.saveFile(finalPath, content)
-        await window.api.deleteFile(oldPath)
+        try {
+          await window.api.deleteFile(oldPath)
+        } catch (error) {
+          if (!isMissingPathFileError(error)) throw error
+          handleMissingPath(oldPath, 'save')
+        }
       } else {
         // New file or same name: just save
         await window.api.saveFile(finalPath, content)
@@ -393,10 +404,15 @@ export function useEditor() {
 
       return true
     } catch (error) {
+      if (oldPath && isMissingPathFileError(error)) {
+        handleMissingPath(oldPath, 'save')
+        await saveContentAs(content, getPathFilename(oldPath))
+        return !useEditorStore.getState().document.isDirty
+      }
       console.error('Failed to quick save:', error)
       return false
     }
-  }, [document, setDocument, setDirty])
+  }, [document, saveContentAs, setDocument, setDirty])
 
   return {
     document,

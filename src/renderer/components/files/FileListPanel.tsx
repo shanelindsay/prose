@@ -44,6 +44,7 @@ import { History, Cloud, Plus, FileText, BookOpen, CloudOff, ChevronUp, ChevronL
 import { useSettings } from '../../hooks/useSettings'
 import { cn } from '../../lib/utils'
 import { getApi } from '../../lib/browserApi'
+import { pruneMissingRecentFiles } from '../../lib/stalePath'
 import { requestBugReport } from '../EnableLoggingDialog'
 import type { RemarkableNotebookMetadata, RemarkableCloudNotebook, GoogleDocEntry } from '../../types'
 import { ProjectsPanel } from './ProjectsPanel'
@@ -614,6 +615,13 @@ export function FileListPanel() {
       }
     }
   }, [viewMode, googleConnected]) // Intentionally exclude googleSync and isGoogleSyncing to only trigger on view change
+
+  useEffect(() => {
+    if (viewMode !== 'recent' || recentFiles.length === 0) return
+    pruneMissingRecentFiles(recentFiles).catch((error) => {
+      console.error('[FileListPanel] Failed to prune missing recent files:', error)
+    })
+  }, [viewMode, recentFiles])
 
   const handleFileClick = async (path: string) => {
     selectFile(path)

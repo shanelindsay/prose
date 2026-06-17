@@ -623,7 +623,9 @@ export function Editor() {
       openFile()
     } else if (isMod && e.key === 's' && !e.shiftKey) {
       e.preventDefault()
-      saveFile()
+      saveFile().catch((error) => {
+        console.error('[Editor] Failed to save from shortcut:', error)
+      })
     } else if (isMod && e.key === ',') {
       e.preventDefault()
       setDialogOpen(true)
