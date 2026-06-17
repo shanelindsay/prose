@@ -42,11 +42,17 @@ export type IconId =
   | 'legacy'
 
 export interface Appearance {
-  color: ColorTheme
+  lightColor: ColorTheme
+  darkColor: ColorTheme
   mode: ThemeMode
   icon: IconId
   /** True on fresh installs and once the one-time post-migration toast has been dismissed. */
   migrationToastShown: boolean
+}
+
+export type AppearanceOnDisk = Partial<Appearance> & {
+  /** Pre-#722 structured appearance files used one color for both modes. */
+  color?: ColorTheme
 }
 
 /** Legacy theme values from v1.1 settings files. Read by the migrator only. */
@@ -143,7 +149,7 @@ interface SettingsBase {
  */
 export interface SettingsOnDisk extends SettingsBase {
   /** Absent for pre-v1.2 settings files. */
-  appearance?: Appearance
+  appearance?: AppearanceOnDisk
   /** Present in pre-v1.2 settings files; stripped after migration. */
   theme?: LegacyTheme
 }

@@ -1,4 +1,4 @@
-// ThemeCard.tsx — Color theme selection card for Settings → Appearance.
+// ThemeCard.tsx — Theme selection card for Settings → Appearance.
 // The nested theme-scoped wrapper applies `theme-{id}` + effective `dark` class
 // so the preview tile renders in ITS OWN theme even when the surrounding pane
 // uses a different theme.
@@ -20,8 +20,6 @@ export const THEMES: ThemeCardEntry[] = [
   { id: 'prose', name: 'Prose', subtitle: 'paper + gold',    tag: 'NEW', official: true },
   { id: 'termy', name: 'Termy', subtitle: 'phosphor green',  tag: 'DEEP CUT' },
 ]
-
-export const DEFAULT_COLOR: ColorTheme = 'mono'
 
 interface ThemeCardProps {
   theme: ThemeCardEntry

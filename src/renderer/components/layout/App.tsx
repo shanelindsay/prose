@@ -77,7 +77,7 @@ export function App() {
   const googleDocsEnabled = useGoogleDocsEnabled()
   const { openFile, openFileFromPath, saveFile, saveFileAs, newFile } = useEditor()
   const { createNewTab, openFileInTab, reopenLastClosedTab } = useTabs()
-  const { setDialogOpen, isShortcutsDialogOpen, setShortcutsDialogOpen, isAboutDialogOpen, setAboutDialogOpen, isModelPickerOpen, setModelPickerOpen, settings, effectiveTheme, autosaveActive, isLoaded: settingsLoaded } = useSettings()
+  const { setDialogOpen, isShortcutsDialogOpen, setShortcutsDialogOpen, isAboutDialogOpen, setAboutDialogOpen, isModelPickerOpen, setModelPickerOpen, settings, effectiveTheme, effectiveColor, autosaveActive, isLoaded: settingsLoaded } = useSettings()
   const [recoveryDialogOpen, setRecoveryDialogOpen] = useState(false)
   const [pendingDraft, setPendingDraft] = useState<DraftState | null>(null)
   const [pendingSession, setPendingSession] = useState<SessionState | null>(null)
@@ -949,9 +949,9 @@ export function App() {
       <div
         className={[
           'flex h-screen flex-col bg-background text-foreground',
-          settings.appearance?.color === 'termy' && effectiveTheme === 'dark' ? 'termy-scanline-scope' : '',
+          effectiveColor === 'termy' && effectiveTheme === 'dark' ? 'termy-scanline-scope' : '',
         ].filter(Boolean).join(' ')}
-        data-color={settings.appearance?.color}
+        data-color={effectiveColor}
       >
         <Toolbar />
         <UpdateBanner />
