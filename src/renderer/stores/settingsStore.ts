@@ -478,17 +478,21 @@ export const useSettingsStore = create<SettingsState>()(subscribeWithSelector((s
 
   pruneRecentFiles: (paths) => {
     const stale = new Set(paths)
+    let changed = false
     set((state) => {
       const current = state.settings.recentFiles || []
       const filtered = current.filter((p) => !stale.has(p))
       if (filtered.length === current.length) return state
+      changed = true
       return {
         settings: { ...state.settings, recentFiles: filtered }
       }
     })
-    get().saveSettings().then(() => {
-      window.api?.refreshRecentMenu()
-    })
+    if (changed) {
+      get().saveSettings().then(() => {
+        window.api?.refreshRecentMenu()
+      })
+    }
   },
 
   setFeatureFlag: (flag, enabled) => {
