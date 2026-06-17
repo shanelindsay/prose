@@ -52,6 +52,7 @@ export function useExplorerActions({
   const setClipboardPath = useFileListStore((s) => s.setClipboardPath)
   const setRenamingPath = useFileListStore((s) => s.setRenamingPath)
   const renamingPath = useFileListStore((s) => s.renamingPath)
+  const selectAll = useFileListStore((s) => s.selectAll)
 
   const api = getApi()
 
@@ -304,6 +305,19 @@ export function useExplorerActions({
         return
       }
 
+      // Cmd+A → select all visible files
+      if (e.key === 'a' && isMeta) {
+        e.preventDefault()
+        e.stopPropagation()
+        const { files, expandedFolders } = useFileListStore.getState()
+        const visible = getVisibleItems(files, expandedFolders)
+        const filePaths = visible.filter(item => !item.isDirectory).map(item => item.path)
+        if (filePaths.length > 0) {
+          selectAll(filePaths)
+        }
+        return
+      }
+
       // Arrow key navigation (no modifier keys)
       if (!isMeta && !e.shiftKey && !e.altKey) {
         const { files, expandedFolders, toggleFolder, selectFile, setExpanded } = useFileListStore.getState()
@@ -379,7 +393,7 @@ export function useExplorerActions({
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [containerRef, selectedPath, clipboardPath, renamingPath, startRename, trashSelected, copySelected, cutSelected, pasteFile, newFileInContext, onFilePreview, onFileTrash])
+  }, [containerRef, selectedPath, clipboardPath, renamingPath, startRename, trashSelected, copySelected, cutSelected, pasteFile, newFileInContext, selectAll, onFilePreview, onFileTrash])
 
   return {
     trashSelected,

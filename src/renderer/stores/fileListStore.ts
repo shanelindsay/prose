@@ -138,6 +138,12 @@ interface FileListState {
   clipboardOperation: 'copy' | 'cut' | null
   renamingPath: string | null
 
+  // Multi-select — contains all currently selected paths (files only for now).
+  // selectedPath remains the "anchor" for single-file operations; selectedPaths
+  // is the full set for bulk actions (delete, copy, cut).
+  selectedPaths: Set<string>
+  anchorPath: string | null // Shift+click range anchor
+
   // Google Docs sync state
   isGoogleSyncing: boolean
 
@@ -183,6 +189,11 @@ interface FileListState {
   setExpanded: (path: string, expanded: boolean) => void
   toggleNotebookFolderExpanded: (folderId: string) => void
   revealAndSelectPath: (path: string) => void
+  // Multi-select actions
+  toggleSelectFile: (path: string) => void
+  rangeSelectTo: (path: string, visiblePaths: string[]) => void
+  selectAll: (paths: string[]) => void
+  clearMultiSelect: () => void
 }
 
 export const useFileListStore = create<FileListState>()(
@@ -199,6 +210,8 @@ export const useFileListStore = create<FileListState>()(
     clipboardPath: null,
     clipboardOperation: null,
     renamingPath: null,
+    selectedPaths: new Set<string>(),
+    anchorPath: null,
     isGoogleSyncing: false,
     remarkableSyncActive: false,
     remarkableSyncProgress: null,
@@ -538,7 +551,46 @@ export const useFileListStore = create<FileListState>()(
       }
     },
 
-    selectFile: (path) => set({ selectedPath: path }),
+    selectFile: (path) => set({ selectedPath: path, selectedPaths: path ? new Set([path]) : new Set(), anchorPath: path }),
+
+    toggleSelectFile: (path) => set((state) => {
+      const next = new Set(state.selectedPaths)
+      if (next.has(path)) {
+        next.delete(path)
+      } else {
+        next.add(path)
+      }
+      // Last toggled path becomes anchor and primary selection
+      const primary = next.size > 0 ? path : null
+      return { selectedPaths: next, selectedPath: primary, anchorPath: path }
+    }),
+
+    rangeSelectTo: (path, visiblePaths) => set((state) => {
+      const anchor = state.anchorPath ?? state.selectedPath
+      if (!anchor) {
+        // No anchor — treat as plain select
+        return { selectedPaths: new Set([path]), selectedPath: path, anchorPath: path }
+      }
+      const anchorIdx = visiblePaths.indexOf(anchor)
+      const targetIdx = visiblePaths.indexOf(path)
+      if (anchorIdx === -1 || targetIdx === -1) {
+        return { selectedPaths: new Set([path]), selectedPath: path }
+      }
+      const lo = Math.min(anchorIdx, targetIdx)
+      const hi = Math.max(anchorIdx, targetIdx)
+      const rangeSet = new Set(visiblePaths.slice(lo, hi + 1))
+      return { selectedPaths: rangeSet, selectedPath: path }
+    }),
+
+    selectAll: (paths) => set((state) => {
+      const all = new Set(paths)
+      return { selectedPaths: all, selectedPath: state.selectedPath ?? paths[0] ?? null }
+    }),
+
+    clearMultiSelect: () => set((state) => ({
+      selectedPaths: state.selectedPath ? new Set([state.selectedPath]) : new Set(),
+      anchorPath: state.selectedPath,
+    })),
 
     toggleFolder: (path) => {
       const { expandedFolders, files, loadFolderChildren } = get()

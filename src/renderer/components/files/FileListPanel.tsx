@@ -185,6 +185,12 @@ export function FileListPanel() {
   const renamingPath = useFileListStore((s) => s.renamingPath)
   const setRenamingPath = useFileListStore((s) => s.setRenamingPath)
 
+  // Multi-select state and actions
+  const selectedPaths = useFileListStore((s) => s.selectedPaths)
+  const toggleSelectFile = useFileListStore((s) => s.toggleSelectFile)
+  const rangeSelectTo = useFileListStore((s) => s.rangeSelectTo)
+  const clearMultiSelect = useFileListStore((s) => s.clearMultiSelect)
+
   // Delete confirmation state
   const [deleteTarget, setDeleteTarget] = useState<{
     path: string
@@ -312,8 +318,11 @@ export function FileListPanel() {
       // Refresh file list
       await loadFiles()
 
-      // Close dialog
+      // Close dialog and return focus to the explorer panel
       setDeleteTarget(null)
+      requestAnimationFrame(() => {
+        containerRef.current?.focus()
+      })
     } catch (error) {
       console.error('Failed to delete file:', error)
       setOperationError('Failed to delete file. Please try again.')
@@ -465,6 +474,24 @@ export function FileListPanel() {
   const handleRenameCancel = useCallback(() => {
     setRenamingPath(null)
   }, [setRenamingPath])
+
+  // Range-select: resolves visible file paths and delegates to the store
+  const handleFileRangeSelect = useCallback((path: string) => {
+    const { files, expandedFolders } = useFileListStore.getState()
+    // Collect visible file paths (not folders) in tree order
+    const collectVisible = (items: typeof files): string[] => {
+      const paths: string[] = []
+      for (const item of items) {
+        if (!item.isDirectory) paths.push(item.path)
+        if (item.isDirectory && expandedFolders.has(item.path) && item.children) {
+          paths.push(...collectVisible(item.children))
+        }
+      }
+      return paths
+    }
+    const visibleFilePaths = collectVisible(files)
+    rangeSelectTo(path, visibleFilePaths)
+  }, [rangeSelectTo])
 
   // Dialog-based rename (for Google Docs view where inline isn't available)
   const handleFileRename = (path: string) => {
@@ -1453,11 +1480,14 @@ export function FileListPanel() {
                       projectPaths={projectPaths}
                       expandedFolders={expandedFolders}
                       selectedPath={selectedPath}
+                      selectedPaths={selectedPaths}
                       loadingFolders={loadingFolders}
                       renamingPath={renamingPath}
                       clipboardPath={clipboardPath}
                       clipboardOperation={clipboardOperation}
                       onFileClick={handleFileClick}
+                      onFileToggleSelect={toggleSelectFile}
+                      onFileRangeSelect={handleFileRangeSelect}
                       onFileDoubleClick={handleFileDoubleClick}
                       onFolderToggle={toggleFolder}
                       onFolderDoubleClick={setRootPath}
