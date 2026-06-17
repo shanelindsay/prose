@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { subscribeWithSelector } from 'zustand/middleware'
-import type { Appearance, Favorite, LegacyTheme, Project, Settings, SettingsOnDisk } from '../types'
+import type { Appearance, AppearanceOnDisk, ColorTheme, Favorite, LegacyTheme, Project, Settings, SettingsOnDisk } from '../types'
 import { initRendererSentry, setRendererSentryEnabled } from '../lib/sentry'
 import { getDefaultModel } from '../../shared/llm/models'
 import type { ModelInfo } from '../../shared/llm/models'
@@ -13,7 +13,8 @@ type SettingsTab = 'general' | 'appearance' | 'editor' | 'llm' | 'integrations' 
 export const AI_CONSENT_VERSION = 1
 
 const FRESH_INSTALL_APPEARANCE: Appearance = {
-  color: 'mono',
+  lightColor: 'mono',
+  darkColor: 'prose',
   mode: 'system',
   icon: 'pilcrow',
   // Fresh installs never had a legacy theme to migrate from, so the v1.2
@@ -21,14 +22,28 @@ const FRESH_INSTALL_APPEARANCE: Appearance = {
   migrationToastShown: true,
 }
 
+function appearanceFromSingleColor(
+  color: ColorTheme,
+  mode: Appearance['mode'],
+  migrationToastShown: boolean,
+): Appearance {
+  return {
+    lightColor: color,
+    darkColor: color,
+    mode,
+    icon: 'pilcrow',
+    migrationToastShown,
+  }
+}
+
 // Migrated users keep their color/mode (derived from the legacy theme) but
 // adopt the new default Pilcrow icon.
 const LEGACY_THEME_TO_APPEARANCE: Record<LegacyTheme, Appearance> = {
-  light:               { color: 'mono',  mode: 'light',  icon: 'pilcrow', migrationToastShown: false },
-  dark:                { color: 'mono',  mode: 'dark',   icon: 'pilcrow', migrationToastShown: false },
-  system:              { color: 'mono',  mode: 'system', icon: 'pilcrow', migrationToastShown: false },
-  'termy-green-light': { color: 'termy', mode: 'light',  icon: 'pilcrow', migrationToastShown: false },
-  'termy-green-dark':  { color: 'termy', mode: 'dark',   icon: 'pilcrow', migrationToastShown: false },
+  light:               appearanceFromSingleColor('mono', 'light', false),
+  dark:                appearanceFromSingleColor('mono', 'dark', false),
+  system:              appearanceFromSingleColor('mono', 'system', false),
+  'termy-green-light': appearanceFromSingleColor('termy', 'light', false),
+  'termy-green-dark':  appearanceFromSingleColor('termy', 'dark', false),
 }
 
 function resolveEffectiveMode(mode: Appearance['mode']): 'dark' | 'light' {
@@ -38,18 +53,37 @@ function resolveEffectiveMode(mode: Appearance['mode']): 'dark' | 'light' {
   return mode
 }
 
+function resolveEffectiveColor(appearance: Appearance): ColorTheme {
+  return resolveEffectiveMode(appearance.mode) === 'dark' ? appearance.darkColor : appearance.lightColor
+}
+
+function normalizeAppearance(appearance: AppearanceOnDisk | undefined): Appearance {
+  if (!appearance) return FRESH_INSTALL_APPEARANCE
+
+  const fallbackColor = appearance.color ?? FRESH_INSTALL_APPEARANCE.lightColor
+  return {
+    lightColor: appearance.lightColor ?? fallbackColor,
+    darkColor: appearance.darkColor ?? fallbackColor,
+    mode: appearance.mode ?? FRESH_INSTALL_APPEARANCE.mode,
+    icon: appearance.icon ?? FRESH_INSTALL_APPEARANCE.icon,
+    migrationToastShown: appearance.migrationToastShown ?? FRESH_INSTALL_APPEARANCE.migrationToastShown,
+  }
+}
+
 // Toggle theme classes on <html>. Mono is implicit — no `theme-mono` class —
 // so `:root` defaults apply naturally for that palette.
 function applyAppearance(appearance: Appearance): void {
   const html = document.documentElement
+  const effectiveMode = resolveEffectiveMode(appearance.mode)
+  const effectiveColor = resolveEffectiveColor(appearance)
   // Remove every class this module may have written, including legacy v1.1
   // class names that older settings files would have produced before migration.
   html.classList.remove('dark', 'theme-prose', 'theme-termy', 'termy-green-dark', 'termy-green-light')
 
-  if (appearance.color === 'prose' || appearance.color === 'termy') {
-    html.classList.add(`theme-${appearance.color}`)
+  if (effectiveColor === 'prose' || effectiveColor === 'termy') {
+    html.classList.add(`theme-${effectiveColor}`)
   }
-  if (resolveEffectiveMode(appearance.mode) === 'dark') {
+  if (effectiveMode === 'dark') {
     html.classList.add('dark')
   }
 }
@@ -67,6 +101,7 @@ interface SettingsState {
   isFetchingModels: boolean
   dialogTab: SettingsTab
   effectiveTheme: 'dark' | 'light'
+  effectiveColor: ColorTheme
   // Runtime state for autosave toggle (not persisted)
   autosaveActive: boolean
   setSettings: (settings: Partial<Settings>) => void
@@ -143,7 +178,7 @@ function migrateOnDiskSettings(raw: SettingsOnDisk): Settings {
   if (theme && LEGACY_THEME_TO_APPEARANCE[theme]) {
     resolved = LEGACY_THEME_TO_APPEARANCE[theme]
   } else if (appearance) {
-    resolved = appearance
+    resolved = normalizeAppearance(appearance)
   } else {
     resolved = FRESH_INSTALL_APPEARANCE
   }
@@ -199,8 +234,9 @@ function setupSystemModeListener(
 
   const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
   const handler = () => {
+    const effectiveTheme = resolveEffectiveMode(appearance.mode)
     applyAppearance(appearance)
-    set({ effectiveTheme: resolveEffectiveMode(appearance.mode) })
+    set({ effectiveTheme, effectiveColor: resolveEffectiveColor(appearance) })
   }
   mediaQuery.addEventListener('change', handler)
   systemModeCleanup = () => mediaQuery.removeEventListener('change', handler)
@@ -219,6 +255,7 @@ export const useSettingsStore = create<SettingsState>()(subscribeWithSelector((s
   isAIConsentDialogOpen: false,
   dialogTab: 'general' as SettingsTab,
   effectiveTheme: 'dark',
+  effectiveColor: FRESH_INSTALL_APPEARANCE.darkColor,
   autosaveActive: true, // Runtime toggle, starts active
 
   setSettings: (newSettings) =>
@@ -231,8 +268,13 @@ export const useSettingsStore = create<SettingsState>()(subscribeWithSelector((s
       // Guard for when running in browser without Electron
       if (!window.api) {
         console.warn('window.api not available - using default settings')
+        const effectiveTheme = resolveEffectiveMode(defaultSettings.appearance.mode)
         applyAppearance(defaultSettings.appearance)
-        set({ isLoaded: true })
+        set({
+          isLoaded: true,
+          effectiveTheme,
+          effectiveColor: resolveEffectiveColor(defaultSettings.appearance)
+        })
         return
       }
       const raw = await window.api.loadSettings()
@@ -248,11 +290,13 @@ export const useSettingsStore = create<SettingsState>()(subscribeWithSelector((s
 
       const migrated = migrateOnDiskSettings(raw)
       const effectiveTheme = resolveEffectiveMode(migrated.appearance.mode)
+      const effectiveColor = resolveEffectiveColor(migrated.appearance)
 
       set({
         settings: { ...defaultSettings, ...migrated },
         isLoaded: true,
-        effectiveTheme
+        effectiveTheme,
+        effectiveColor
       })
 
       // Apply appearance and (re)attach the system-mode listener
@@ -270,6 +314,11 @@ export const useSettingsStore = create<SettingsState>()(subscribeWithSelector((s
       // no-op for this user.
       if (
         raw.theme ||
+        (raw.appearance && (
+          raw.appearance.color !== undefined ||
+          raw.appearance.lightColor === undefined ||
+          raw.appearance.darkColor === undefined
+        )) ||
         raw.defaultSaveDirectory !== migrated.defaultSaveDirectory ||
         raw.masDirectoryBookmark !== migrated.masDirectoryBookmark
       ) {
@@ -346,9 +395,11 @@ export const useSettingsStore = create<SettingsState>()(subscribeWithSelector((s
     const prevIcon = get().settings.appearance.icon
     const merged: Appearance = { ...get().settings.appearance, ...patch }
     const effectiveTheme = resolveEffectiveMode(merged.mode)
+    const effectiveColor = resolveEffectiveColor(merged)
     set((state) => ({
       settings: { ...state.settings, appearance: merged },
-      effectiveTheme
+      effectiveTheme,
+      effectiveColor
     }))
 
     applyAppearance(merged)

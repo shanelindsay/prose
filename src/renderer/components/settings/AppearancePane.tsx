@@ -1,11 +1,11 @@
 // AppearancePane.tsx — Settings → Appearance pane (#504, #499 PR 2).
-// Three sections: Mode (segmented), Color (3 ThemeCards), App Icon (11 IconCells).
+// Three sections: Mode (segmented), Theme (Light/Dark ThemeCards), App Icon (11 IconCells).
 // All three sections implement ARIA radio group semantics with full keyboard nav.
 
 import { useRef, useCallback } from 'react'
 import { Sun, Moon, Monitor, Info } from 'lucide-react'
 import { Button } from '../ui/button'
-import { ThemeCard, THEMES, DEFAULT_COLOR } from './ThemeCard'
+import { ThemeCard, THEMES } from './ThemeCard'
 import { IconCell } from './IconCell'
 import { PROSE_ICONS } from '../../lib/prose-icons'
 import type { ColorTheme, ThemeMode, IconId } from '../../types'
@@ -19,8 +19,10 @@ const MODES: { id: ThemeMode; label: string; Icon: typeof Sun }[] = [
   { id: 'system', label: 'System', Icon: Monitor },
 ]
 
-// Must match FRESH_INSTALL_APPEARANCE in settingsStore (mono / system / pilcrow)
+// Must match FRESH_INSTALL_APPEARANCE in settingsStore (mono/prose / system / pilcrow)
 // so "Reset all to default" and the at-defaults check agree with fresh installs.
+const DEFAULT_LIGHT_COLOR: ColorTheme = 'mono'
+const DEFAULT_DARK_COLOR: ColorTheme = 'prose'
 const DEFAULT_MODE: ThemeMode = 'system'
 const DEFAULT_ICON: IconId = 'pilcrow'
 
@@ -79,21 +81,26 @@ interface AppearancePaneProps {
 // ── Pane ──────────────────────────────────────────────────────────────────────
 
 export function AppearancePane({ appearance, effectiveMode, onAppearanceChange }: AppearancePaneProps) {
-  const { color, mode, icon } = appearance
+  const { lightColor, darkColor, mode, icon } = appearance
   // Capitalized for display (e.g. "System · Light", matching the mode labels).
   const effectiveModeLabel = effectiveMode === 'dark' ? 'Dark' : 'Light'
+  const effectiveColor = effectiveMode === 'dark' ? darkColor : lightColor
 
   const isAllDefault =
-    color === DEFAULT_COLOR &&
+    lightColor === DEFAULT_LIGHT_COLOR &&
+    darkColor === DEFAULT_DARK_COLOR &&
     mode === DEFAULT_MODE &&
     icon === DEFAULT_ICON
 
-  const currentTheme = THEMES.find((t) => t.id === color) ?? THEMES[0]
+  const currentTheme = THEMES.find((t) => t.id === effectiveColor) ?? THEMES[0]
+  const lightTheme = THEMES.find((t) => t.id === lightColor) ?? THEMES[0]
+  const darkTheme = THEMES.find((t) => t.id === darkColor) ?? THEMES[0]
   const currentIcon = PROSE_ICONS.find((i) => i.id === icon) ?? PROSE_ICONS[0]
 
   // ── Refs for focus management after arrow-key selection ──────────────────
   const modeButtonRefs = useRef<Map<ThemeMode, HTMLButtonElement | null>>(new Map())
-  const themeButtonRefs = useRef<Map<ColorTheme, HTMLButtonElement | null>>(new Map())
+  const lightThemeButtonRefs = useRef<Map<ColorTheme, HTMLButtonElement | null>>(new Map())
+  const darkThemeButtonRefs = useRef<Map<ColorTheme, HTMLButtonElement | null>>(new Map())
   const iconButtonRefs = useRef<Map<IconId, HTMLButtonElement | null>>(new Map())
 
   // ── Selection handlers with focus follow ──────────────────────────────────
@@ -103,9 +110,14 @@ export function AppearancePane({ appearance, effectiveMode, onAppearanceChange }
     requestAnimationFrame(() => modeButtonRefs.current.get(id)?.focus())
   }, [onAppearanceChange])
 
-  const handleColorSelect = useCallback((id: ColorTheme) => {
-    onAppearanceChange({ color: id })
-    requestAnimationFrame(() => themeButtonRefs.current.get(id)?.focus())
+  const handleLightColorSelect = useCallback((id: ColorTheme) => {
+    onAppearanceChange({ lightColor: id })
+    requestAnimationFrame(() => lightThemeButtonRefs.current.get(id)?.focus())
+  }, [onAppearanceChange])
+
+  const handleDarkColorSelect = useCallback((id: ColorTheme) => {
+    onAppearanceChange({ darkColor: id })
+    requestAnimationFrame(() => darkThemeButtonRefs.current.get(id)?.focus())
   }, [onAppearanceChange])
 
   const handleIconSelect = useCallback((id: IconId) => {
@@ -119,7 +131,8 @@ export function AppearancePane({ appearance, effectiveMode, onAppearanceChange }
   const iconIds = PROSE_ICONS.map((i) => i.id)
 
   const modeKeyHandler = makeRadioKeyHandler(modeIds, mode, handleModeSelect)
-  const colorKeyHandler = makeRadioKeyHandler(colorIds, color, handleColorSelect)
+  const lightColorKeyHandler = makeRadioKeyHandler(colorIds, lightColor, handleLightColorSelect)
+  const darkColorKeyHandler = makeRadioKeyHandler(colorIds, darkColor, handleDarkColorSelect)
   const iconKeyHandler = makeRadioKeyHandler(iconIds, icon, handleIconSelect)
 
   return (
@@ -188,25 +201,57 @@ export function AppearancePane({ appearance, effectiveMode, onAppearanceChange }
         </div>
       </div>
 
-      {/* ── COLOR ── */}
-      <SectionLabel>Color</SectionLabel>
-      <div
-        role="radiogroup"
-        aria-label="Color theme"
-        className="grid grid-cols-3 gap-3.5 mb-5"
-      >
-        {THEMES.map((t) => (
-          <ThemeCard
-            key={t.id}
-            theme={t}
-            selected={t.id === color}
-            effectiveMode={effectiveMode}
-            onSelect={handleColorSelect}
-            onKeyDown={colorKeyHandler as React.KeyboardEventHandler<HTMLButtonElement>}
-            tabIndex={t.id === color ? 0 : -1}
-            ref={(el: HTMLButtonElement | null) => themeButtonRefs.current.set(t.id, el)}
-          />
-        ))}
+      {/* ── THEME ── */}
+      <SectionLabel>Theme</SectionLabel>
+      <div className="space-y-4 mb-5">
+        <div>
+          <div className="mb-2 flex items-center justify-between text-[11px] text-muted-foreground">
+            <span>Light theme</span>
+            <span className="text-foreground">{lightTheme.name}</span>
+          </div>
+          <div
+            role="radiogroup"
+            aria-label="Light theme"
+            className="grid grid-cols-3 gap-3.5"
+          >
+            {THEMES.map((t) => (
+              <ThemeCard
+                key={`light-${t.id}`}
+                theme={t}
+                selected={t.id === lightColor}
+                effectiveMode="light"
+                onSelect={handleLightColorSelect}
+                onKeyDown={lightColorKeyHandler as React.KeyboardEventHandler<HTMLButtonElement>}
+                tabIndex={t.id === lightColor ? 0 : -1}
+                ref={(el: HTMLButtonElement | null) => lightThemeButtonRefs.current.set(t.id, el)}
+              />
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className="mb-2 flex items-center justify-between text-[11px] text-muted-foreground">
+            <span>Dark theme</span>
+            <span className="text-foreground">{darkTheme.name}</span>
+          </div>
+          <div
+            role="radiogroup"
+            aria-label="Dark theme"
+            className="grid grid-cols-3 gap-3.5"
+          >
+            {THEMES.map((t) => (
+              <ThemeCard
+                key={`dark-${t.id}`}
+                theme={t}
+                selected={t.id === darkColor}
+                effectiveMode="dark"
+                onSelect={handleDarkColorSelect}
+                onKeyDown={darkColorKeyHandler as React.KeyboardEventHandler<HTMLButtonElement>}
+                tabIndex={t.id === darkColor ? 0 : -1}
+                ref={(el: HTMLButtonElement | null) => darkThemeButtonRefs.current.set(t.id, el)}
+              />
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* ── APP ICON ── */}
@@ -260,7 +305,12 @@ export function AppearancePane({ appearance, effectiveMode, onAppearanceChange }
           size="sm"
           disabled={isAllDefault}
           onClick={() => {
-            onAppearanceChange({ color: DEFAULT_COLOR, mode: DEFAULT_MODE, icon: DEFAULT_ICON })
+            onAppearanceChange({
+              lightColor: DEFAULT_LIGHT_COLOR,
+              darkColor: DEFAULT_DARK_COLOR,
+              mode: DEFAULT_MODE,
+              icon: DEFAULT_ICON
+            })
           }}
           className="text-[11px] h-7 px-3"
           style={{ fontFamily: '"IBM Plex Mono", monospace' }}
