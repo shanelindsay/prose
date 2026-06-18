@@ -210,6 +210,13 @@ export interface FileResult {
 }
 
 export interface FileItem {
+  /**
+   * Stable identity for this tree node, assigned by fileListStore after each
+   * IPC call and preserved across reloads via path matching. Used as the React
+   * key in FileTree so renames don't unmount/remount rows whose paths didn't
+   * change. Optional only at the IPC boundary — the store always stamps it.
+   */
+  id?: string
   name: string
   path: string
   isDirectory: boolean

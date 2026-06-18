@@ -542,13 +542,14 @@ export function FileListPanel() {
         }
       }
 
-      // Refresh file list and select the renamed entry
-      await loadFiles()
+      // Update the tree in-place — no IPC round-trip, so no flicker from
+      // unmounting rows whose paths didn't change.
+      useFileListStore.getState().renameInTree(oldPath, newPath, finalName)
       selectFile(newPath)
     } catch (error) {
       console.error('Error renaming:', error)
     }
-  }, [api, googleDocsMetadata, loadGoogleDocsMetadata, loadFiles, selectFile, setRenamingPath])
+  }, [api, googleDocsMetadata, loadGoogleDocsMetadata, selectFile, setRenamingPath])
 
   const handleRenameCancel = useCallback(() => {
     setRenamingPath(null)

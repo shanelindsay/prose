@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, memo } from 'react'
 import type { FileItem } from '../../types'
 import { ChevronRight, ChevronDown, FileText, FileType, Folder, FolderOpen, FolderPlus, Loader2, Trash2, Edit3, ExternalLink, Copy, Scissors, ClipboardPaste, FilePlus, Boxes, Star } from 'lucide-react'
 import { cn } from '../../lib/utils'
@@ -99,7 +99,7 @@ export function FileTree({
     <div className="space-y-0.5">
       {items.map((item) => (
         <FileTreeItem
-          key={item.path}
+          key={item.id ?? item.path}
           item={item}
           favoritePaths={favoritePaths}
           projectPaths={projectPaths}
@@ -181,7 +181,7 @@ interface FileTreeItemProps {
   depth: number
 }
 
-function FileTreeItem({
+const FileTreeItem = memo(function FileTreeItem({
   item,
   favoritePaths,
   projectPaths,
@@ -707,4 +707,4 @@ function FileTreeItem({
       )}
     </div>
   )
-}
+})

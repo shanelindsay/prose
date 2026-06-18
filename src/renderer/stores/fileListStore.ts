@@ -2,6 +2,39 @@ import { create } from 'zustand'
 import { subscribeWithSelector } from 'zustand/middleware'
 import type { FileItem, RemarkableSyncMetadata, RemarkableCloudNotebook, RemarkableSyncState, RemarkableSyncPhase, GoogleSyncMetadata } from '../types'
 
+/**
+ * Build a flat path→id map from the current tree so freshly-loaded nodes can
+ * reuse their existing id rather than getting a new one on every reload.
+ * This is the key to React not unmounting unchanged rows on a reload.
+ */
+function buildIdMap(items: FileItem[]): Map<string, string> {
+  const map = new Map<string, string>()
+  const walk = (nodes: FileItem[]): void => {
+    for (const node of nodes) {
+      if (node.id) map.set(node.path, node.id)
+      if (node.children) walk(node.children)
+    }
+  }
+  walk(items)
+  return map
+}
+
+/**
+ * Stamp each incoming FileItem (from IPC, which has no id) with a stable id:
+ * reuse the existing id when the path matches something already in the tree,
+ * otherwise mint a new UUID. Operates recursively so nested children are also
+ * stamped in one pass.
+ */
+function stampIds(items: FileItem[], idMap: Map<string, string>): FileItem[] {
+  return items.map((item) => {
+    const id = idMap.get(item.path) ?? crypto.randomUUID()
+    if (item.children) {
+      return { ...item, id, children: stampIds(item.children, idMap) }
+    }
+    return { ...item, id }
+  })
+}
+
 export interface SyncProgress {
   message: string
   notebookId?: string
@@ -180,6 +213,13 @@ interface FileListState {
   navigateToParent: () => void
   loadFiles: () => Promise<void>
   loadFolderChildren: (folderPath: string) => Promise<void>
+  /**
+   * Surgically update the tree after a rename — no IPC round-trip.
+   * Finds the node at `oldPath`, updates its `path` and `name` while
+   * preserving its `id`, and rewrites descendant paths for directories.
+   * Only the changed branch gets new array references (structural sharing).
+   */
+  renameInTree: (oldPath: string, newPath: string, newName: string) => void
   loadNotebooks: (syncDirectory: string) => Promise<void>
   loadCloudNotebooks: (deviceToken: string, syncDirectory: string) => Promise<void>
   toggleNotebookSync: (notebookId: string, syncDirectory: string) => Promise<void>
@@ -435,8 +475,13 @@ export const useFileListStore = create<FileListState>()(
         // This trades a small risk of stale deep state (until the user
         // collapses/reopens) for not bursting IPC reads on every event.
         const merged = mergeExpandedChildren(fresh, oldFiles, expandedFolders)
-        set({ files: merged, isLoading: false })
-        syncWatchedExpandedFolders(merged, expandedFolders)
+        // Stamp ids last so mergeExpandedChildren can first re-attach old
+        // subtrees (which already carry their ids), and we only need to
+        // stamp the shallow fresh nodes that weren't pulled from oldFiles.
+        const idMap = buildIdMap(oldFiles)
+        const stamped = stampIds(merged, idMap)
+        set({ files: stamped, isLoading: false })
+        syncWatchedExpandedFolders(stamped, expandedFolders)
       } catch (error) {
         console.error('Failed to load files:', error)
         set({ files: [], isLoading: false })
@@ -462,10 +507,12 @@ export const useFileListStore = create<FileListState>()(
 
         // Update the tree by finding and updating the folder
         const { files } = get()
+        const idMap = buildIdMap(files)
+        const stampedChildren = stampIds(children, idMap)
         const updateFolder = (items: FileItem[]): FileItem[] => {
           return items.map(item => {
             if (item.path === folderPath) {
-              return { ...item, children, hasChildren: children.length > 0 }
+              return { ...item, children: stampedChildren, hasChildren: stampedChildren.length > 0 }
             }
             if (item.children) {
               return { ...item, children: updateFolder(item.children) }
@@ -703,6 +750,61 @@ export const useFileListStore = create<FileListState>()(
 
       set({ expandedFolders: newExpanded, selectedPath: targetPath })
       syncWatchedExpandedFolders(get().files, newExpanded)
+    },
+
+    renameInTree: (oldPath: string, newPath: string, newName: string) => {
+      const { files, expandedFolders } = get()
+
+      // Rewrite every path under a renamed directory, preserving each node's id.
+      const rewriteDescendantPaths = (items: FileItem[], oldPrefix: string, newPrefix: string): FileItem[] =>
+        items.map((item) => {
+          const updatedPath = newPrefix + item.path.slice(oldPrefix.length)
+          if (item.children) {
+            return {
+              ...item,
+              path: updatedPath,
+              children: rewriteDescendantPaths(item.children, oldPrefix, newPrefix)
+            }
+          }
+          return { ...item, path: updatedPath }
+        })
+
+      // Walk the tree and update the renamed node's path + name, preserving id.
+      // Returns null when the node was not found in this subtree (no-op branch).
+      const updateNode = (items: FileItem[]): FileItem[] | null => {
+        let changed = false
+        const next = items.map((item) => {
+          if (item.path === oldPath) {
+            changed = true
+            const updatedChildren = item.isDirectory && item.children
+              ? rewriteDescendantPaths(item.children, oldPath, newPath)
+              : item.children
+            return { ...item, id: item.id, path: newPath, name: newName, children: updatedChildren }
+          }
+          if (item.children) {
+            const updatedChildren = updateNode(item.children)
+            if (updatedChildren !== null) {
+              changed = true
+              return { ...item, children: updatedChildren }
+            }
+          }
+          return item
+        })
+        return changed ? next : null
+      }
+
+      const updated = updateNode(files)
+      if (!updated) return // Node not in the visible tree — nothing to do
+
+      // Keep expandedFolders consistent: the renamed folder's old key must move.
+      const newExpanded = new Set(expandedFolders)
+      if (newExpanded.has(oldPath)) {
+        newExpanded.delete(oldPath)
+        newExpanded.add(newPath)
+      }
+
+      set({ files: updated, expandedFolders: newExpanded })
+      syncWatchedExpandedFolders(updated, newExpanded)
     }
   }))
 )
