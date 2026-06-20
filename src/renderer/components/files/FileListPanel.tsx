@@ -219,7 +219,7 @@ export function FileListPanel() {
 
   // Delete confirmation state
   const [deleteTarget, setDeleteTarget] = useState<{
-    path: string
+    paths: string[]
     fileName: string
     linkedNotebookId: string | null
   } | null>(null)
@@ -255,15 +255,22 @@ export function FileListPanel() {
 
   // Handle file delete request (opens confirmation dialog) — must be before useExplorerActions
   const handleFileDeleteRequest = async (path: string) => {
-    const fileName = path.split('/').pop() || path
+    // If the target row is part of a multi-selection, act on the whole set;
+    // otherwise act on just that file. This makes both the context menu and the
+    // ⌘⌫ keyboard shortcut operate on the selected set (#723 — bulk file actions).
+    const selected = useFileListStore.getState().selectedPaths
+    const paths = selected.size > 1 && selected.has(path) ? Array.from(selected) : [path]
 
-    // Check if file is linked to a reMarkable notebook
+    const fileName = paths[0]?.split('/').pop() || paths[0] || path
+
+    // The reMarkable notebook link only drives the single-file dialog copy. For a
+    // bulk delete we show a generic count and clear any links per-file on confirm.
     let linkedNotebookId: string | null = null
-    if (syncDirectory && window.api?.remarkableFindNotebookByFilePath) {
+    if (paths.length === 1 && syncDirectory && window.api?.remarkableFindNotebookByFilePath) {
       linkedNotebookId = await window.api.remarkableFindNotebookByFilePath(path, syncDirectory)
     }
 
-    setDeleteTarget({ path, fileName, linkedNotebookId })
+    setDeleteTarget({ paths, fileName, linkedNotebookId })
   }
 
   // New file dialog state (context-aware: stores target directory)
@@ -313,36 +320,50 @@ export function FileListPanel() {
 
     setIsDeleting(true)
     try {
-      // If linked to a notebook, clear the markdown path first
-      if (deleteTarget.linkedNotebookId && syncDirectory) {
-        await window.api.remarkableClearNotebookMarkdownPath(
-          deleteTarget.linkedNotebookId,
-          syncDirectory
-        )
-      }
+      const single = deleteTarget.paths.length === 1
+      let googleChanged = false
 
-      // Move to trash (recoverable)
-      await window.api.trashFile(deleteTarget.path)
+      for (const p of deleteTarget.paths) {
+        // If linked to a notebook, clear the markdown path first. Single-file
+        // deletes reuse the link resolved for the dialog; bulk deletes look up
+        // each file's link individually.
+        if (syncDirectory && window.api.remarkableFindNotebookByFilePath) {
+          const linkedId = single
+            ? deleteTarget.linkedNotebookId
+            : await window.api.remarkableFindNotebookByFilePath(p, syncDirectory)
+          if (linkedId && window.api.remarkableClearNotebookMarkdownPath) {
+            await window.api.remarkableClearNotebookMarkdownPath(linkedId, syncDirectory)
+          }
+        }
 
-      // If this file is tracked in Google Docs metadata, remove its entry
-      if (googleDocsMetadata && window.api.googleRemoveSyncMetadataEntry) {
-        const trackedEntry = Object.values(googleDocsMetadata.documents).find(
-          (e) => e.localPath === deleteTarget.path
-        )
-        if (trackedEntry) {
-          await window.api.googleRemoveSyncMetadataEntry(trackedEntry.googleDocId)
-          await loadGoogleDocsMetadata()
+        // Move to trash (recoverable)
+        await window.api.trashFile(p)
+
+        // If this file is tracked in Google Docs metadata, remove its entry
+        if (googleDocsMetadata && window.api.googleRemoveSyncMetadataEntry) {
+          const trackedEntry = Object.values(googleDocsMetadata.documents).find(
+            (e) => e.localPath === p
+          )
+          if (trackedEntry) {
+            await window.api.googleRemoveSyncMetadataEntry(trackedEntry.googleDocId)
+            googleChanged = true
+          }
+        }
+
+        // Close the tab if the trashed file was open (full close flow)
+        const tab = useTabStore.getState().getTabByPath(p)
+        if (tab) {
+          await forceCloseTab(tab.id)
         }
       }
 
-      // Close the tab if the trashed file was open (full close flow)
-      const tab = useTabStore.getState().getTabByPath(deleteTarget.path)
-      if (tab) {
-        await forceCloseTab(tab.id)
+      if (googleChanged) {
+        await loadGoogleDocsMetadata()
       }
 
-      // Refresh file list
+      // Refresh file list and clear the now-stale selection
       await loadFiles()
+      selectFile(null)
 
       // Close dialog and return focus to the explorer panel
       setDeleteTarget(null)
@@ -1720,7 +1741,12 @@ export function FileListPanel() {
           <DialogHeader>
             <DialogTitle>Move to Trash?</DialogTitle>
             <DialogDescription>
-              {deleteTarget?.linkedNotebookId ? (
+              {deleteTarget && deleteTarget.paths.length > 1 ? (
+                <>
+                  Are you sure you want to move <strong>{deleteTarget.paths.length} files</strong> to the Trash?
+                  You can restore them from the Trash if needed.
+                </>
+              ) : deleteTarget?.linkedNotebookId ? (
                 <>
                   This will move <strong>{deleteTarget?.fileName}</strong> to the Trash and unlink it from its reMarkable notebook.
                   The original OCR content will be preserved and you can re-create an editable version later.
