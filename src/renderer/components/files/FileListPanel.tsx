@@ -291,10 +291,24 @@ export function FileListPanel() {
     setNewFileDialogOpen(true)
   }, [])
 
+  // New Folder dialog state (declared before useExplorerActions so the hook's
+  // Cmd+Shift+N handler can target handleNewFolderInDir without a TDZ error)
+  const [newFolderDialogOpen, setNewFolderDialogOpen] = useState(false)
+  const [newFolderTargetDir, setNewFolderTargetDir] = useState<string | null>(null)
+  const [newFolderName, setNewFolderName] = useState('')
+
+  const handleNewFolderInDir = useCallback((parentDir: string) => {
+    setNewFolderTargetDir(parentDir)
+    setNewFolderName('')
+    setOperationError(null)
+    setNewFolderDialogOpen(true)
+  }, [])
+
   // Explorer actions hook (keyboard shortcuts + operations)
   const { moveFile, pasteFile, clipboardPath, clipboardOperation } = useExplorerActions({
     containerRef,
     onNewFile: handleNewFileInDir,
+    onNewFolder: handleNewFolderInDir,
     onFileOpen: async (path) => {
       selectFile(path)
       const shouldDescribe = await openFileInPreviewTab(path)
@@ -314,9 +328,33 @@ export function FileListPanel() {
     closeTab: forceCloseTab
   })
 
+  // Flatten the currently-visible explorer rows (files and folders) in tree
+  // order. Used to pick the row that slides into a deleted slot so keyboard
+  // focus + arrow-key navigation land somewhere sensible afterwards (#723).
+  const visibleRowPaths = useCallback(() => {
+    const { files, expandedFolders } = useFileListStore.getState()
+    const out: string[] = []
+    const walk = (items: typeof files) => {
+      for (const item of items) {
+        out.push(item.path)
+        if (item.isDirectory && expandedFolders.has(item.path) && item.children) walk(item.children)
+      }
+    }
+    walk(files)
+    return out
+  }, [])
+
   // Confirm and execute file deletion
   const handleConfirmDelete = async () => {
     if (!deleteTarget || !window.api) return
+
+    // Snapshot the visible rows before deleting so we can select the row that
+    // takes the deleted item's place once the list refreshes (Finder-like).
+    const visibleBefore = visibleRowPaths()
+    const deletedIndices = deleteTarget.paths
+      .map((p) => visibleBefore.indexOf(p))
+      .filter((i) => i >= 0)
+    const firstDeletedIndex = deletedIndices.length ? Math.min(...deletedIndices) : 0
 
     setIsDeleting(true)
     try {
@@ -361,15 +399,19 @@ export function FileListPanel() {
         await loadGoogleDocsMetadata()
       }
 
-      // Refresh file list and clear the now-stale selection
+      // Refresh the list, then select the row that slid into the deleted slot
+      // (or the last row if we deleted the tail) so arrow-key nav continues from
+      // a sensible spot. Focus return to the panel is handled by the dialog's
+      // onCloseAutoFocus below.
       await loadFiles()
-      selectFile(null)
+      const visibleAfter = visibleRowPaths()
+      const neighbor = visibleAfter.length
+        ? visibleAfter[Math.min(firstDeletedIndex, visibleAfter.length - 1)]
+        : null
+      selectFile(neighbor)
 
-      // Close dialog and return focus to the explorer panel
+      // Close dialog (its onCloseAutoFocus returns focus to the explorer panel)
       setDeleteTarget(null)
-      requestAnimationFrame(() => {
-        containerRef.current?.focus()
-      })
     } catch (error) {
       console.error('Failed to delete file:', error)
       setOperationError('Failed to delete file. Please try again.')
@@ -385,18 +427,6 @@ export function FileListPanel() {
     setOperationError(null)
     setNewFileDialogOpen(true)
   }
-
-  // New Folder dialog state
-  const [newFolderDialogOpen, setNewFolderDialogOpen] = useState(false)
-  const [newFolderTargetDir, setNewFolderTargetDir] = useState<string | null>(null)
-  const [newFolderName, setNewFolderName] = useState('')
-
-  const handleNewFolderInDir = useCallback((parentDir: string) => {
-    setNewFolderTargetDir(parentDir)
-    setNewFolderName('')
-    setOperationError(null)
-    setNewFolderDialogOpen(true)
-  }, [])
 
   const handleNewFolder = () => {
     setNewFolderTargetDir(rootPath)
@@ -520,6 +550,9 @@ export function FileListPanel() {
   // Inline rename complete handler — works for both files and directories
   const handleRenameComplete = useCallback(async (oldPath: string, newName: string) => {
     setRenamingPath(null)
+    // Return focus to the explorer panel so arrow-key nav resumes immediately
+    // after the inline input unmounts (covers commit and every early-return).
+    requestAnimationFrame(() => containerRef.current?.focus())
     if (!newName.trim()) return
 
     try {
@@ -586,6 +619,7 @@ export function FileListPanel() {
 
   const handleRenameCancel = useCallback(() => {
     setRenamingPath(null)
+    requestAnimationFrame(() => containerRef.current?.focus())
   }, [setRenamingPath])
 
   // Range-select: resolves visible file paths and delegates to the store
@@ -1421,7 +1455,14 @@ export function FileListPanel() {
       )}
 
       {/* Content */}
-      <ScrollArea className="flex-1">
+      {/* Radix's internal viewport content wrapper is display:table + min-width:100%,
+          which shrink-wraps to content and breaks percentage-height resolution for
+          its children. Make it a full-height flex column so the file-list trigger
+          (flex:1 0 auto, below) fills the viewport and covers the empty space below
+          the rows — right-click in the blank area still offers New File / New Folder
+          / Paste (#703). Scoped to this ScrollArea; the panel truncates, so dropping
+          the table layout costs no horizontal-scroll behavior. */}
+      <ScrollArea className="flex-1 [&_[data-radix-scroll-area-viewport]>div]:!flex [&_[data-radix-scroll-area-viewport]>div]:!flex-col [&_[data-radix-scroll-area-viewport]>div]:h-full">
         {viewMode === 'projects' && !currentProject ? (
           <ProjectsPanel mode="projects" />
         ) : viewMode === 'favorites' ? (
@@ -1635,7 +1676,7 @@ export function FileListPanel() {
             <ContextMenu>
               <ContextMenuTrigger asChild>
                 <div
-                  className="p-2 min-h-full"
+                  className="p-2 grow shrink-0"
                   onDragOver={(e) => {
                     if (e.dataTransfer.types.includes('application/prose-file-path')) {
                       e.preventDefault()
@@ -1700,7 +1741,13 @@ export function FileListPanel() {
                       onFileToggleSelect={toggleSelectFile}
                       onFileRangeSelect={handleFileRangeSelect}
                       onFileDoubleClick={handleFileDoubleClick}
-                      onFolderToggle={toggleFolder}
+                      onFolderToggle={(path) => {
+                        // Select the folder as well as toggling it, so it becomes
+                        // the selected row — required for Enter-to-rename and the
+                        // Finder-like highlight on the clicked folder (#703).
+                        selectFile(path)
+                        toggleFolder(path)
+                      }}
                       onFolderDoubleClick={setRootPath}
                       onFileTrash={handleFileDeleteRequest}
                       onFileRename={handleFileRenameInline}
@@ -1732,26 +1779,12 @@ export function FileListPanel() {
                 <ContextMenuItem onClick={handleNewFolder}>
                   <FolderPlus className="h-4 w-4 mr-2" />
                   New Folder
+                  <ContextMenuShortcut>⇧⌘N</ContextMenuShortcut>
                 </ContextMenuItem>
                 <ContextMenuItem onClick={() => pasteFile()} disabled={!clipboardPath}>
                   <ClipboardPaste className="h-4 w-4 mr-2" />
                   Paste
                   <ContextMenuShortcut>⌘V</ContextMenuShortcut>
-                </ContextMenuItem>
-                <ContextMenuSeparator />
-                <ContextMenuItem
-                  onClick={() => rootPath && addPathAsProject(rootPath)}
-                  disabled={!rootPath}
-                >
-                  <Boxes className="h-4 w-4 mr-2" />
-                  Add as Project
-                </ContextMenuItem>
-                <ContextMenuItem
-                  onClick={() => rootPath && addPathAsFavorite(rootPath, true)}
-                  disabled={!rootPath}
-                >
-                  <Star className="h-4 w-4 mr-2" />
-                  Add to Favorites
                 </ContextMenuItem>
               </ContextMenuContent>
             </ContextMenu>
@@ -1761,7 +1794,14 @@ export function FileListPanel() {
 
       {/* Delete confirmation dialog */}
       <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
-        <DialogContent>
+        <DialogContent
+          onCloseAutoFocus={(e) => {
+            // Take over focus return: land it on the explorer panel (not the
+            // now-removed trigger) so arrow-key navigation works immediately.
+            e.preventDefault()
+            containerRef.current?.focus()
+          }}
+        >
           <DialogHeader>
             <DialogTitle>Move to Trash?</DialogTitle>
             <DialogDescription>

@@ -116,7 +116,7 @@ test.describe('Electron — explorer interactivity (#703)', () => {
     const folderName = 'qa-new-folder-703'
 
     // Right-click in an empty area of the panel
-    await panel.locator('div.p-2.min-h-full').click({ button: 'right', position: { x: 10, y: 10 } })
+    await panel.locator('div.p-2.grow.shrink-0').click({ button: 'right', position: { x: 10, y: 10 } })
     await page.waitForSelector(selectors.contextMenu, { timeout: 5_000 })
 
     // Click "New Folder"

@@ -247,6 +247,21 @@ const FileTreeItem = memo(function FileTreeItem({
   const inputRef = useRef<HTMLInputElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const wasRenamingRef = useRef(false)
+  // Set when Rename is chosen from the context menu, so the menu's close handler
+  // skips Radix's focus-restore to the row — otherwise it steals focus from the
+  // just-mounted rename input, whose onBlur then commits a no-op and exits the
+  // rename instantly (the right-click-rename-exits-immediately bug).
+  const renameFromMenuRef = useRef(false)
+  const handleRenameFromMenu = () => {
+    renameFromMenuRef.current = true
+    onFileRename?.(item.path)
+  }
+  const handleMenuCloseAutoFocus = (e: Event) => {
+    if (renameFromMenuRef.current) {
+      e.preventDefault()
+      renameFromMenuRef.current = false
+    }
+  }
 
   // Drag-and-drop state (for folder drop targets)
   const [isDragOver, setIsDragOver] = useState(false)
@@ -494,7 +509,7 @@ const FileTreeItem = memo(function FileTreeItem({
   )
 
   const fileContextMenu = (
-    <ContextMenuContent>
+    <ContextMenuContent onCloseAutoFocus={handleMenuCloseAutoFocus}>
       {onFileOpen && (
         <ContextMenuItem onClick={() => onFileOpen?.(item.path)}>
           <FileText className="h-4 w-4 mr-2" />
@@ -502,7 +517,7 @@ const FileTreeItem = memo(function FileTreeItem({
         </ContextMenuItem>
       )}
       {!isMultiSelected && onFileRename && (
-        <ContextMenuItem onClick={() => onFileRename?.(item.path)}>
+        <ContextMenuItem onClick={handleRenameFromMenu}>
           <Edit3 className="h-4 w-4 mr-2" />
           Rename
           <ContextMenuShortcut>↵</ContextMenuShortcut>
@@ -571,7 +586,7 @@ const FileTreeItem = memo(function FileTreeItem({
   )
 
   const folderContextMenu = (
-    <ContextMenuContent>
+    <ContextMenuContent onCloseAutoFocus={handleMenuCloseAutoFocus}>
       {onNewFile && (
         <ContextMenuItem onClick={() => onNewFile?.(item.path)}>
           <FilePlus className="h-4 w-4 mr-2" />
@@ -583,10 +598,11 @@ const FileTreeItem = memo(function FileTreeItem({
         <ContextMenuItem onClick={() => onNewFolder(item.path)}>
           <FolderPlus className="h-4 w-4 mr-2" />
           New Folder
+          <ContextMenuShortcut>⇧⌘N</ContextMenuShortcut>
         </ContextMenuItem>
       )}
       {onFileRename && (
-        <ContextMenuItem onClick={() => onFileRename(item.path)}>
+        <ContextMenuItem onClick={handleRenameFromMenu}>
           <Edit3 className="h-4 w-4 mr-2" />
           Rename
           <ContextMenuShortcut>↵</ContextMenuShortcut>

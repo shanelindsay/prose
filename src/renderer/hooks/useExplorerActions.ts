@@ -7,6 +7,7 @@ import type { FileItem } from '../types'
 interface UseExplorerActionsOptions {
   containerRef: RefObject<HTMLDivElement | null>
   onNewFile?: (targetDir: string) => void
+  onNewFolder?: (targetDir: string) => void
   onFileOpen?: (path: string) => void
   onFilePreview?: (path: string) => void
   onFileTrash?: (path: string) => void
@@ -40,6 +41,7 @@ function findParentPath(items: FileItem[], targetPath: string, parentPath: strin
 export function useExplorerActions({
   containerRef,
   onNewFile,
+  onNewFolder,
   onFileOpen,
   onFilePreview,
   onFileTrash,
@@ -203,37 +205,35 @@ export function useExplorerActions({
     setRenamingPath(selectedPath)
   }, [selectedPath, setRenamingPath])
 
-  const newFileInContext = useCallback(() => {
-    if (!selectedPath && !rootPath) return
-
-    // Determine target directory: if selected path is a directory use it,
-    // otherwise use the parent dir of the selected file, or rootPath
-    let targetDir = rootPath
-    if (selectedPath) {
-      // Check if selectedPath is a directory by looking in the file tree
-      const files = useFileListStore.getState().files
-      const findItem = (items: typeof files): typeof files[0] | null => {
-        for (const item of items) {
-          if (item.path === selectedPath) return item
-          if (item.children) {
-            const found = findItem(item.children)
-            if (found) return found
-          }
+  // Resolve where a new file/folder should be created: the selected folder, the
+  // parent dir of the selected file, or the root when nothing is selected.
+  const resolveTargetDir = useCallback((): string | null => {
+    if (!selectedPath) return rootPath
+    const files = useFileListStore.getState().files
+    const findItem = (items: typeof files): typeof files[0] | null => {
+      for (const item of items) {
+        if (item.path === selectedPath) return item
+        if (item.children) {
+          const found = findItem(item.children)
+          if (found) return found
         }
-        return null
       }
-      const selected = findItem(files)
-      if (selected?.isDirectory) {
-        targetDir = selected.path
-      } else if (selectedPath) {
-        targetDir = selectedPath.substring(0, selectedPath.lastIndexOf('/'))
-      }
+      return null
     }
+    const selected = findItem(files)
+    if (selected?.isDirectory) return selected.path
+    return selectedPath.substring(0, selectedPath.lastIndexOf('/'))
+  }, [selectedPath, rootPath])
 
-    if (targetDir) {
-      onNewFile?.(targetDir)
-    }
-  }, [selectedPath, rootPath, onNewFile])
+  const newFileInContext = useCallback(() => {
+    const targetDir = resolveTargetDir()
+    if (targetDir) onNewFile?.(targetDir)
+  }, [resolveTargetDir, onNewFile])
+
+  const newFolderInContext = useCallback(() => {
+    const targetDir = resolveTargetDir()
+    if (targetDir) onNewFolder?.(targetDir)
+  }, [resolveTargetDir, onNewFolder])
 
   // Keyboard shortcuts scoped to explorer panel
   useEffect(() => {
@@ -246,19 +246,14 @@ export function useExplorerActions({
 
       const isMeta = e.metaKey || e.ctrlKey
 
-      // Return → toggle folder or start rename for files
+      // Return → rename the selected item, files and folders alike, mirroring
+      // macOS Finder. Folder expand/collapse is the disclosure triangle, a click,
+      // or the arrow keys — not Return — so Enter on a folder renames it rather
+      // than toggling it open/closed.
       if (e.key === 'Enter' && !isMeta && selectedPath) {
         e.preventDefault()
         e.stopPropagation()
-        // Check if selected item is a folder
-        const { files: allFiles, expandedFolders: ef, toggleFolder: toggle } = useFileListStore.getState()
-        const visibleForEnter = getVisibleItems(allFiles, ef)
-        const selectedItem = visibleForEnter.find(item => item.path === selectedPath)
-        if (selectedItem?.isDirectory) {
-          toggle(selectedItem.path)
-        } else {
-          startRename()
-        }
+        startRename()
         return
       }
 
@@ -298,8 +293,16 @@ export function useExplorerActions({
         return
       }
 
+      // Cmd+Shift+N → new folder in context (mirrors macOS Finder)
+      if (e.key.toLowerCase() === 'n' && isMeta && e.shiftKey) {
+        e.preventDefault()
+        e.stopPropagation()
+        newFolderInContext()
+        return
+      }
+
       // Cmd+N → new file in context
-      if (e.key === 'n' && isMeta) {
+      if (e.key === 'n' && isMeta && !e.shiftKey) {
         e.preventDefault()
         e.stopPropagation()
         newFileInContext()
@@ -402,7 +405,7 @@ export function useExplorerActions({
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [containerRef, selectedPath, clipboardPath, renamingPath, startRename, trashSelected, copySelected, cutSelected, pasteFile, newFileInContext, selectAll, toggleShowDotfiles, onFilePreview, onFileTrash])
+  }, [containerRef, selectedPath, clipboardPath, renamingPath, startRename, trashSelected, copySelected, cutSelected, pasteFile, newFileInContext, newFolderInContext, selectAll, toggleShowDotfiles, onFilePreview, onFileTrash])
 
   return {
     trashSelected,
