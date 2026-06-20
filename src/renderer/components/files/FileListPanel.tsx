@@ -454,6 +454,18 @@ export function FileListPanel() {
     })
   }, [])
 
+  // Add to Favorites, multi-select aware: if the right-clicked row is part of a
+  // multi-selection, favorite every selected path; otherwise just that one.
+  // addPathAsFavorite already dedupes, so re-favoriting is a no-op. (#723)
+  const handleAddFavoriteRequest = useCallback(
+    (path: string, isDirectory: boolean) => {
+      const selected = useFileListStore.getState().selectedPaths
+      const paths = selected.size > 1 && selected.has(path) ? Array.from(selected) : [path]
+      for (const p of paths) addPathAsFavorite(p, isDirectory)
+    },
+    [addPathAsFavorite]
+  )
+
   // Inverse of the add helpers: look the pointer up by path and drop it. Go
   // through useProjectsStore.removeProject (not the bare settings mutator) so an
   // active project removal also reconciles the explorer view back to base root.
@@ -765,6 +777,18 @@ export function FileListPanel() {
     if (shouldDescribe) {
       const { document } = useEditorStore.getState()
       useSummaryStore.getState().generateSummary(document.documentId, document.content)
+    }
+  }
+
+  // "Open" from the context menu, multi-select aware: open every selected file
+  // as a permanent tab. Open sequentially (await each) to avoid racing tab
+  // creation and the summary read of the active document. Falls back to the
+  // single path when the row isn't part of a multi-selection. (#723)
+  const handleFileOpenRequest = async (path: string) => {
+    const selected = useFileListStore.getState().selectedPaths
+    const paths = selected.size > 1 && selected.has(path) ? Array.from(selected) : [path]
+    for (const p of paths) {
+      await handleFileDoubleClick(p)
     }
   }
 
@@ -1688,10 +1712,10 @@ export function FileListPanel() {
                       onRenameCancel={handleRenameCancel}
                       onNewFile={handleNewFileInDir}
                       onNewFolder={handleNewFolderInDir}
-                      onFileOpen={handleFileDoubleClick}
+                      onFileOpen={handleFileOpenRequest}
                       onOpenExternally={handleOpenExternally}
                       onAddProject={addPathAsProject}
-                      onAddFavorite={addPathAsFavorite}
+                      onAddFavorite={handleAddFavoriteRequest}
                       onRemoveProject={removePathAsProject}
                       onRemoveFavorite={removePathAsFavorite}
                       onFileDrop={handleFileDrop}

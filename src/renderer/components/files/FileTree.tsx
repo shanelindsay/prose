@@ -234,6 +234,14 @@ const FileTreeItem = memo(function FileTreeItem({
   const isFavoritePath = favoritePaths.has(item.path)
   const isProjectPath = projectPaths.has(item.path)
 
+  // When this row is part of a multi-selection, the file context menu switches
+  // to bulk mode: actions that work on a set (Open, Add to Favorites, Move to
+  // Trash) operate on every selected file via the panel handlers, while
+  // single-file-only actions (Rename, Copy, Cut, Paste, Show in Finder) are
+  // hidden. Copy/Cut on a set await a multi-path clipboard (tracked in #796).
+  const isMultiSelected = selectedPaths.size > 1 && selectedPaths.has(item.path)
+  const selectionCount = selectedPaths.size
+
   // Inline rename state
   const [renameValue, setRenameValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -490,38 +498,38 @@ const FileTreeItem = memo(function FileTreeItem({
       {onFileOpen && (
         <ContextMenuItem onClick={() => onFileOpen?.(item.path)}>
           <FileText className="h-4 w-4 mr-2" />
-          Open
+          {isMultiSelected ? `Open ${selectionCount} Files` : 'Open'}
         </ContextMenuItem>
       )}
-      {onFileRename && (
+      {!isMultiSelected && onFileRename && (
         <ContextMenuItem onClick={() => onFileRename?.(item.path)}>
           <Edit3 className="h-4 w-4 mr-2" />
           Rename
           <ContextMenuShortcut>↵</ContextMenuShortcut>
         </ContextMenuItem>
       )}
-      {onFileCopy && (
+      {!isMultiSelected && onFileCopy && (
         <ContextMenuItem onClick={() => onFileCopy?.(item.path)}>
           <Copy className="h-4 w-4 mr-2" />
           Copy
           <ContextMenuShortcut>⌘C</ContextMenuShortcut>
         </ContextMenuItem>
       )}
-      {onFileCut && (
+      {!isMultiSelected && onFileCut && (
         <ContextMenuItem onClick={() => onFileCut?.(item.path)}>
           <Scissors className="h-4 w-4 mr-2" />
           Cut
           <ContextMenuShortcut>⌘X</ContextMenuShortcut>
         </ContextMenuItem>
       )}
-      {onFilePaste && (
+      {!isMultiSelected && onFilePaste && (
         <ContextMenuItem onClick={() => onFilePaste?.()} disabled={!clipboardPath}>
           <ClipboardPaste className="h-4 w-4 mr-2" />
           Paste
           <ContextMenuShortcut>⌘V</ContextMenuShortcut>
         </ContextMenuItem>
       )}
-      {onFileShowInFolder && (
+      {!isMultiSelected && onFileShowInFolder && (
         <>
           <ContextMenuSeparator />
           <ContextMenuItem onClick={() => onFileShowInFolder?.(item.path)}>
@@ -533,7 +541,7 @@ const FileTreeItem = memo(function FileTreeItem({
       {onAddFavorite && (
         <>
           <ContextMenuSeparator />
-          {isFavoritePath && onRemoveFavorite ? (
+          {isFavoritePath && !isMultiSelected && onRemoveFavorite ? (
             <ContextMenuItem onClick={() => onRemoveFavorite?.(item.path)}>
               <Star className="h-4 w-4 mr-2 fill-current" />
               Remove from Favorites
@@ -541,7 +549,7 @@ const FileTreeItem = memo(function FileTreeItem({
           ) : (
             <ContextMenuItem onClick={() => onAddFavorite?.(item.path, false)}>
               <Star className="h-4 w-4 mr-2" />
-              Add to Favorites
+              {isMultiSelected ? `Add ${selectionCount} to Favorites` : 'Add to Favorites'}
             </ContextMenuItem>
           )}
         </>
@@ -554,7 +562,7 @@ const FileTreeItem = memo(function FileTreeItem({
             onClick={() => onFileTrash ? onFileTrash(item.path) : onFileDelete?.(item.path)}
           >
             <Trash2 className="h-4 w-4 mr-2" />
-            Move to Trash
+            {isMultiSelected ? `Move ${selectionCount} to Trash` : 'Move to Trash'}
             <ContextMenuShortcut>⌘⌫</ContextMenuShortcut>
           </ContextMenuItem>
         </>
