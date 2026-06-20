@@ -10,7 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from '../ui/dropdown-menu'
-import { MessageSquare, History, Plus, Trash2, Sparkles, Info, Loader2, Filter, Brain, SlidersHorizontal, Eye, EyeOff, Check, ChevronUp, ChevronDown } from 'lucide-react'
+import { MessageSquare, History, Plus, Trash2, Sparkles, Info, Loader2, Filter, SlidersHorizontal, Eye, EyeOff, Check, ChevronUp, ChevronDown } from 'lucide-react'
 import { useMenuCustomization } from '../../hooks/useMenuCustomization'
 import type { MenuItemDescriptor } from '../../hooks/useMenuCustomization'
 import { useChatStore } from '../../stores/chatStore'
@@ -27,15 +27,11 @@ import { useAnnotationStore } from '../../extensions/ai-annotations/store'
 import { useCommentStore } from '../../extensions/comments/store'
 import { MODE_SWITCH_RUN_EVENT } from './toolResultRenderers/RequestModeSwitchResult'
 import { cn } from '../../lib/utils'
-import { supportsAdaptiveThinking } from '../../../shared/llm/models'
 import { useSettingsStore } from '../../stores/settingsStore'
 
 export function ChatPanel() {
   const { messages, isLoading, isStreaming, sendMessage, stopGeneration, clearMessages } = useChat()
-  const { thinkingEnabled, setThinkingEnabled } = useChatStore()
   const { settings } = useSettingsStore()
-  // Only show the thinking toggle for models that support adaptive thinking
-  const showThinkingToggle = supportsAdaptiveThinking(settings.llm.model)
   const scrollRef = useRef<HTMLDivElement>(null)
   const chatTabRef = useRef<HTMLButtonElement>(null)
   const activityTabRef = useRef<HTMLButtonElement>(null)
@@ -339,31 +335,6 @@ export function ChatPanel() {
         {/* Chat actions — always visible (independent of the active tab).
             Actions whose effect lives in the chat view switch back to it. */}
         <div className="flex items-center gap-0.5">
-            {/* Extended thinking toggle — only shown for thinking-capable models */}
-            {showThinkingToggle && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className={cn(
-                      'h-7 w-7',
-                      thinkingEnabled
-                        ? 'bg-accent text-primary'
-                        : 'text-muted-foreground hover:text-foreground'
-                    )}
-                    onClick={() => setThinkingEnabled(!thinkingEnabled)}
-                    aria-pressed={thinkingEnabled}
-                    aria-label={thinkingEnabled ? 'Extended thinking on' : 'Extended thinking off'}
-                  >
-                    <Brain className="h-3.5 w-3.5" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {thinkingEnabled ? 'Extended thinking on · click to disable' : 'Extended thinking off · click to enable'}
-                </TooltipContent>
-              </Tooltip>
-            )}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button

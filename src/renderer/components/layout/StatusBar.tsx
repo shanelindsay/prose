@@ -16,8 +16,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuLabel
 } from '../ui/dropdown-menu'
-import type { ToolMode } from '../../stores/chatStore'
-import { getModelsForProvider, type LLMProvider } from '../../../shared/llm/models'
+import { Brain } from 'lucide-react'
+import { cn } from '../../lib/utils'
+import { useChatStore, type ToolMode } from '../../stores/chatStore'
+import { getModelsForProvider, supportsAdaptiveThinking, type LLMProvider } from '../../../shared/llm/models'
 
 // Detect Mac for keyboard-hint copy. Works in both Electron and web mode,
 // unlike browserApi's isMacOS() which gates on isElectron().
@@ -28,6 +30,7 @@ export function StatusBar() {
   const { document, cursorPosition } = useEditor()
   const { settings, isLoaded: settingsLoaded, autosaveActive, setLLMConfig, saveSettings } = useSettings()
   const { toolMode, setToolMode } = useChat()
+  const { thinkingEnabled, setThinkingEnabled } = useChatStore()
   const isRemarkableReadOnly = useEditorStore((state) => state.isRemarkableReadOnly)
 
   // Track whether the upcoming toolMode change was initiated by a user click on
@@ -124,6 +127,9 @@ export function StatusBar() {
   const currentModel = availableModels.find(m => m.id === settings.llm.model)
   // Compact display for the status bar — drop the "Claude " prefix (e.g. "Sonnet 4.6").
   const modelDisplayName = (currentModel?.name || settings.llm.model.split('/').pop() || settings.llm.model).replace(/^Claude\s+/, '')
+  // The extended-thinking toggle sits next to the model selector and only shows
+  // for models that support adaptive thinking (hidden for e.g. Haiku 4.5).
+  const showThinkingToggle = supportsAdaptiveThinking(settings.llm.model)
 
   const handleModelChange = async (modelId: string) => {
     setLLMConfig({ model: modelId })
@@ -234,6 +240,29 @@ export function StatusBar() {
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>
+
+            {/* Extended thinking toggle — sits right next to the model selector,
+                shown only for thinking-capable models (hidden for Haiku 4.5). */}
+            {showThinkingToggle && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => setThinkingEnabled(!thinkingEnabled)}
+                    aria-pressed={thinkingEnabled}
+                    aria-label={thinkingEnabled ? 'Extended thinking on' : 'Extended thinking off'}
+                    className={cn(
+                      'ml-1 flex items-center transition-colors cursor-pointer focus-visible:outline-none',
+                      thinkingEnabled ? 'text-primary' : 'hover:text-foreground'
+                    )}
+                  >
+                    <Brain className="h-3 w-3" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  {thinkingEnabled ? 'Extended thinking on · click to disable' : 'Extended thinking off · click to enable'}
+                </TooltipContent>
+              </Tooltip>
+            )}
 
             <span className="text-muted-foreground/40 mx-1">|</span>
           </>
