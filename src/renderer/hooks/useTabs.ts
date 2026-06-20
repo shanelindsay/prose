@@ -210,6 +210,12 @@ export function useTabs() {
     // Clear reMarkable read-only state
     useEditorStore.getState().setRemarkableReadOnly(false, null)
 
+    // Sync the global preview-read-only flag to the tab we're switching to.
+    // Without this, isPreviewTab stays stuck on the previously-active tab's
+    // value — leaving a permanent tab wrongly read-only (you can't type) after
+    // browsing a single-click preview. (QA — editor stuck read-only)
+    useEditorStore.getState().setPreviewTab(targetTab.isPreview ?? false)
+
     // Mark as editing
     setEditing(true)
 
@@ -301,6 +307,11 @@ export function useTabs() {
 
     // Clear reMarkable read-only state
     useEditorStore.getState().setRemarkableReadOnly(false, null)
+
+    // A brand-new tab is always a permanent, editable doc. Reset the global
+    // preview flag so a new tab opened while a preview was active isn't stuck
+    // read-only. (QA — editor stuck read-only)
+    useEditorStore.getState().setPreviewTab(false)
 
     // Mark as editing
     setEditing(true)
