@@ -22,7 +22,7 @@ import { useSummaryStore } from '../../stores/summaryStore'
 import { getAISuggestions } from '../../extensions/ai-suggestions/extension'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip'
 import { ReviewContainer } from '../review/ReviewContainer'
-import { AIEditsHistoryPanel } from '../editor/AIEditsHistoryPanel'
+import { AIEditsHistoryPanel, activityItemVisible, DEFAULT_ACTIVITY_FILTER, type ActivityFilter } from '../editor/AIEditsHistoryPanel'
 import { useAnnotationStore } from '../../extensions/ai-annotations/store'
 import { useCommentStore } from '../../extensions/comments/store'
 import { MODE_SWITCH_RUN_EVENT } from './toolResultRenderers/RequestModeSwitchResult'
@@ -38,12 +38,14 @@ export function ChatPanel() {
   const reviewMode = useReviewMode()
   const [infoOpen, setInfoOpen] = useState(false)
   const [sidebarMode, setSidebarMode] = useState<'chat' | 'activity'>('chat')
-  // Filter superseded (detached) entries out of the Activity list. Lifted here
-  // because the toggle lives in this header but the filtering happens in
-  // AIEditsHistoryPanel.
-  const [hideSuperseded, setHideSuperseded] = useState(false)
-  // Filter resolved comment threads in the Activity list.
-  const [hideResolved, setHideResolved] = useState(false)
+  // Multi-category Activity filter. Lifted here because the funnel lives in this
+  // header, but the filtering happens in AIEditsHistoryPanel. Each category
+  // (open/pending/resolved threads, current/superseded edits) toggles on/off.
+  const [activityFilter, setActivityFilter] = useState<ActivityFilter>(DEFAULT_ACTIVITY_FILTER)
+  const toggleFilter = useCallback(
+    (key: keyof ActivityFilter) => setActivityFilter((f) => ({ ...f, [key]: !f[key] })),
+    []
+  )
 
   const {
     conversations,
@@ -96,29 +98,21 @@ export function ChatPanel() {
     return () => window.removeEventListener(MODE_SWITCH_RUN_EVENT, handler)
   }, [sendMessage])
 
-  // Annotation counts for the Activity tab badge + filter affordance.
+  // Activity feed sources for the tab badge + filter affordance.
   const annotations = useAnnotationStore((s) => s.annotations)
-  const supersededCount = useMemo(
-    () => annotations.reduce((n, a) => (a.detached ? n + 1 : n), 0),
-    [annotations]
-  )
-
-  // Comment thread counts for the Activity tab badge.
   const pendingComments = useCommentStore((s) => s.pendingComments)
-  const commentActivityCount = useMemo(
-    () => pendingComments.reduce((n, c) => n + (c.replies?.length ?? 0), 0),
-    [pendingComments]
-  )
-  const resolvedCount = useMemo(
-    () => pendingComments.filter((c) => c.resolved).length,
-    [pendingComments]
-  )
 
-  // Badge reflects what's currently shown: total when including superseded,
-  // current-only when the filter is engaged.
-  const activityCount =
-    (hideSuperseded ? annotations.length - supersededCount : annotations.length) +
-    commentActivityCount
+  // There's something to filter whenever any annotation or comment exists.
+  const hasActivity = annotations.length > 0 || pendingComments.length > 0
+  // Any category turned off means the filter is engaged (tints the funnel).
+  const isFiltering = Object.values(activityFilter).some((v) => !v)
+
+  // Badge reflects what's currently shown under the active filter.
+  const activityCount = useMemo(() => {
+    const a = annotations.filter((an) => activityItemVisible({ kind: 'annotation', annotation: an }, activityFilter)).length
+    const c = pendingComments.filter((cm) => activityItemVisible({ kind: 'comment', comment: cm }, activityFilter)).length
+    return a + c
+  }, [annotations, pendingComments, activityFilter])
 
   // Track pending suggestion count
   const suggestionCount = useMemo(() => {
@@ -301,34 +295,50 @@ export function ChatPanel() {
             </button>
           </div>
 
-          {/* Filter: hide/show superseded + resolved — only when there's something to filter */}
-          {sidebarMode === 'activity' && (supersededCount > 0 || resolvedCount > 0) && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className={cn(
-                    'h-6 w-6',
-                    (hideSuperseded || hideResolved) ? 'bg-accent text-primary' : 'text-muted-foreground hover:text-foreground'
-                  )}
-                  onClick={() => {
-                    const filtering = hideSuperseded || hideResolved
-                    setHideSuperseded(!filtering)
-                    setHideResolved(!filtering)
-                  }}
-                  aria-pressed={hideSuperseded || hideResolved}
-                  aria-label={(hideSuperseded || hideResolved) ? 'Show all activity' : 'Hide superseded and resolved'}
+          {/* Filter: toggle any activity category on/off — only when there's
+              something to filter. */}
+          {sidebarMode === 'activity' && hasActivity && (
+            <DropdownMenu>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={cn(
+                        'h-6 w-6',
+                        isFiltering ? 'bg-accent text-primary' : 'text-muted-foreground hover:text-foreground'
+                      )}
+                      aria-label="Filter activity"
+                    >
+                      <Filter className="h-3.5 w-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent>Filter activity</TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent align="start" className="w-52">
+                <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                  Comment threads
+                </div>
+                <FilterRow label="Open" active={activityFilter.openThreads} onClick={() => toggleFilter('openThreads')} />
+                <FilterRow label="Pending" active={activityFilter.pendingThreads} onClick={() => toggleFilter('pendingThreads')} />
+                <FilterRow label="Resolved" active={activityFilter.resolvedThreads} onClick={() => toggleFilter('resolvedThreads')} />
+                <DropdownMenuSeparator />
+                <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                  AI edits
+                </div>
+                <FilterRow label="Current" active={activityFilter.edits} onClick={() => toggleFilter('edits')} />
+                <FilterRow label="Superseded" active={activityFilter.superseded} onClick={() => toggleFilter('superseded')} />
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="cursor-pointer text-xs"
+                  onClick={() => setActivityFilter(DEFAULT_ACTIVITY_FILTER)}
                 >
-                  <Filter className="h-3.5 w-3.5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                {(hideSuperseded || hideResolved)
-                  ? 'Showing current activity · click to include superseded and resolved'
-                  : 'Hide superseded edits and resolved comments'}
-              </TooltipContent>
-            </Tooltip>
+                  Show all
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
         </div>
 
@@ -536,9 +546,8 @@ export function ChatPanel() {
       >
         {sidebarMode === 'activity' ? (
           <AIEditsHistoryPanel
-            hideSuperseded={hideSuperseded}
-            hideResolved={hideResolved}
-            onShowAll={() => { setHideSuperseded(false); setHideResolved(false) }}
+            filter={activityFilter}
+            onShowAll={() => setActivityFilter(DEFAULT_ACTIVITY_FILTER)}
           />
         ) : (
           <>
@@ -640,5 +649,22 @@ export function ChatPanel() {
         )}
       </div>
     </div>
+  )
+}
+
+/** A toggle row in the Activity filter menu — label + check when active. The
+ *  menu stays open on click so several categories can be toggled in one go. */
+function FilterRow({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <DropdownMenuItem
+      onSelect={(e) => {
+        e.preventDefault()
+        onClick()
+      }}
+      className="flex cursor-pointer items-center justify-between text-xs"
+    >
+      <span className={cn(!active && 'text-muted-foreground')}>{label}</span>
+      {active && <Check className="h-3.5 w-3.5" />}
+    </DropdownMenuItem>
   )
 }

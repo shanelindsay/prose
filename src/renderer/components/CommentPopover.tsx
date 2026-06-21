@@ -28,6 +28,7 @@ import type { CommentData, CommentReply } from '../extensions/comments/types'
 import { formatAge } from '../types/annotations'
 import { generateId } from '../lib/persistence'
 import { renderMarkdown } from './chat/ChatMessage'
+import { OPEN_COMMENT_EVENT } from './editor/AIEditsHistoryPanel'
 import { PROSE_ICONS, IconThumb } from '../lib/prose-icons'
 import { useSettingsStore } from '../stores/settingsStore'
 import { cn } from '../lib/utils'
@@ -44,7 +45,7 @@ interface CommentPopoverProps {
 interface AnchorRect {
   top: number
   bottom: number
-  centerX: number
+  left: number
 }
 
 interface PopoverState {
@@ -59,7 +60,7 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
     isOpen: false,
     commentId: null,
     commentText: '',
-    anchor: { top: 0, bottom: 0, centerX: 0 },
+    anchor: { top: 0, bottom: 0, left: 0 },
   })
   const [replyText, setReplyText] = useState('')
   // Local: which comment we kicked off Process for, and whether the resolved
@@ -86,6 +87,36 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
     if (!isStreaming) setProcessingId(null)
   }, [isStreaming])
 
+  // Open the popover anchored to a comment mark. The card then follows the mark
+  // as the user scrolls (see the scroll effect below). `scrollIntoView` is used
+  // by the Activity "Open in document" path to bring an off-screen mark into the
+  // pane first; a direct click anchors in place (no jump).
+  const openForMark = useCallback(
+    (id: string, markEl: HTMLElement, opts?: { scrollIntoView?: boolean }) => {
+      if (opts?.scrollIntoView) {
+        const scroller = editor.view.dom.closest('.overflow-auto') as HTMLElement | null
+        if (scroller) {
+          const sr = scroller.getBoundingClientRect()
+          const mr = markEl.getBoundingClientRect()
+          const delta = mr.top - (sr.top + 96)
+          if (Math.abs(delta) > 4) scroller.scrollTop += delta
+        } else {
+          markEl.scrollIntoView({ block: 'center' })
+        }
+      }
+      const rect = markEl.getBoundingClientRect()
+      setPopover({
+        isOpen: true,
+        commentId: id,
+        commentText: markEl.getAttribute('data-comment') || '',
+        anchor: { top: rect.top, bottom: rect.bottom, left: rect.left },
+      })
+      setReplyText('')
+      setShowResolvedThread(false)
+    },
+    [editor]
+  )
+
   useEffect(() => {
     const handleClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement
@@ -102,16 +133,7 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
           console.warn('[CommentPopover] comment-mark clicked with no data-comment-id', mark)
           return
         }
-        const text = mark.getAttribute('data-comment') || ''
-        const rect = mark.getBoundingClientRect()
-        setPopover({
-          isOpen: true,
-          commentId: id,
-          commentText: text,
-          anchor: { top: rect.top, bottom: rect.bottom, centerX: rect.left + rect.width / 2 },
-        })
-        setReplyText('')
-        setShowResolvedThread(false)
+        openForMark(id, mark)
         return
       }
 
@@ -122,7 +144,7 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
 
     document.addEventListener('click', handleClick, true)
     return () => document.removeEventListener('click', handleClick, true)
-  }, [])
+  }, [openForMark])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -133,6 +155,69 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [popover.isOpen])
+
+  // "Open in document" from the Activity panel: scroll the thread's mark to
+  // center and open the popover anchored to it.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const id = (event as CustomEvent<{ id: string }>).detail?.id
+      if (!id) return
+      const mark = document.querySelector(`.comment-mark[data-comment-id="${id}"]`) as HTMLElement | null
+      if (!mark) return
+      openForMark(id, mark, { scrollIntoView: true })
+    }
+    window.addEventListener(OPEN_COMMENT_EVENT, handler)
+    return () => window.removeEventListener(OPEN_COMMENT_EVENT, handler)
+  }, [openForMark])
+
+  // Follow the marked text as the user scrolls or resizes: re-read the mark's
+  // live position and update the anchor so the card stays pinned to its text
+  // (and hides when the text scrolls out of view — see markVisible in render).
+  useEffect(() => {
+    if (!popover.isOpen || !popover.commentId) return
+    const id = popover.commentId
+    let raf = 0
+    const reposition = () => {
+      raf = 0
+      const mark = document.querySelector(`.comment-mark[data-comment-id="${id}"]`) as HTMLElement | null
+      if (!mark) return // resolved threads have no mark — leave the card put
+      const mr = mark.getBoundingClientRect()
+      // Project where the card will sit for the mark's new position (mirrors the
+      // render placement), then close it for good once it's fully off either
+      // edge — so it rides off naturally and doesn't pop back in on scroll-back.
+      const vh = window.innerHeight
+      const scroller = editor.view.dom.closest('.overflow-auto') as HTMLElement | null
+      const minTop = scroller ? scroller.getBoundingClientRect().top : NAV_BAR_HEIGHT + VIEWPORT_PADDING
+      const popH = popoverRef.current?.offsetHeight ?? 0
+      const spaceBelow = vh - mr.bottom - GAP - VIEWPORT_PADDING
+      const spaceAbove = mr.top - GAP - minTop
+      const below = spaceBelow >= 240 || spaceBelow >= spaceAbove
+      const projTop = below ? mr.bottom + GAP : mr.top - GAP - popH
+      // Close for good once the card is fully above the pane top (clipped under
+      // the chrome) or below the viewport — it rides off, then stays gone.
+      if (projTop + popH <= minTop || projTop >= vh) {
+        setPopover((prev) => (prev.commentId === id ? { ...prev, isOpen: false } : prev))
+        return
+      }
+      setPopover((prev) =>
+        prev.isOpen && prev.commentId === id
+          ? { ...prev, anchor: { top: mr.top, bottom: mr.bottom, left: mr.left } }
+          : prev
+      )
+    }
+    const onChange = () => {
+      if (!raf) raf = requestAnimationFrame(reposition)
+    }
+    // Capture phase catches scroll from the inner editor scroller (scroll events
+    // don't bubble, but they do propagate in capture from window down).
+    window.addEventListener('scroll', onChange, true)
+    window.addEventListener('resize', onChange)
+    return () => {
+      window.removeEventListener('scroll', onChange, true)
+      window.removeEventListener('resize', onChange)
+      if (raf) cancelAnimationFrame(raf)
+    }
+  }, [popover.isOpen, popover.commentId])
 
   const handleRemove = useCallback(() => {
     if (!popover.commentId) return
@@ -229,31 +314,48 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
   // maxHeight is clamped to the space available at the chosen side, so the card
   // never runs off-screen — the body scrolls inside it instead.
   const a = popover.anchor
-  const minTop = NAV_BAR_HEIGHT + VIEWPORT_PADDING
+  // Clip boundary = the real top of the editor scroll pane (right below the
+  // toolbar/tabs), so the card tucks under the chrome with no gap. Falls back to
+  // a nav-bar estimate if the scroller isn't found.
+  const paneScroller = editor.view.dom.closest('.overflow-auto') as HTMLElement | null
+  const minTop = paneScroller
+    ? Math.round(paneScroller.getBoundingClientRect().top)
+    : NAV_BAR_HEIGHT + VIEWPORT_PADDING
   const vw = window.innerWidth
   const vh = window.innerHeight
   const spaceBelow = vh - a.bottom - GAP - VIEWPORT_PADDING
   const spaceAbove = a.top - GAP - minTop
   const placeBelow = spaceBelow >= 240 || spaceBelow >= spaceAbove
-  const maxHeight = Math.max(190, Math.round(placeBelow ? spaceBelow : spaceAbove))
-  const centerX = Math.min(
-    Math.max(a.centerX, VIEWPORT_PADDING + POPOVER_WIDTH / 2),
-    vw - VIEWPORT_PADDING - POPOVER_WIDTH / 2
-  )
+  // Cap to a focused card (~58% of the viewport) so the popover reads as pinned
+  // to the text rather than a panel covering the page; long threads scroll the
+  // body. openForMark scrolls the mark near the top, so there's room either way.
+  const sideSpace = Math.round(placeBelow ? spaceBelow : spaceAbove)
+  const maxHeight = Math.max(190, Math.min(sideSpace, Math.round(vh * 0.58)))
+  // Left-anchor to the start of the marked text (clamped on-screen) so the card
+  // visibly connects to where the highlight begins, like a margin note.
+  const left = Math.min(Math.max(a.left, VIEWPORT_PADDING), vw - VIEWPORT_PADDING - POPOVER_WIDTH)
+  // Positions are relative to a clipping wrapper that starts at the editor pane
+  // top (minTop, below the toolbar/tabs): top is offset by minTop; bottom is
+  // measured from the viewport bottom (the wrapper's bottom). The wrapper's
+  // overflow:hidden clips the card at the pane top so it slides *under* the
+  // chrome instead of floating over the tabs.
   const vertical: React.CSSProperties = placeBelow
-    ? { top: Math.round(a.bottom + GAP) }
+    ? { top: Math.round(a.bottom + GAP - minTop) }
     : { bottom: Math.round(vh - a.top + GAP) }
 
   return createPortal(
     <div
+      className="pointer-events-none fixed inset-x-0 bottom-0 z-50 overflow-hidden"
+      style={{ top: minTop }}
+    >
+    <div
       ref={popoverRef}
       data-comment-popover
-      className="fixed z-50 flex flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-xl"
+      className="pointer-events-auto absolute flex flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-xl"
       style={{
-        left: centerX,
+        left,
         width: POPOVER_WIDTH,
         maxHeight,
-        transform: 'translateX(-50%)',
         ...vertical,
       }}
     >
@@ -287,20 +389,21 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
         </button>
       </div>
 
-      {/* Anchor quote (pinned) */}
-      {quote && (
-        <div className="shrink-0 border-b border-border bg-muted/40 px-4 py-2.5">
-          <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-            Commenting on
-          </div>
-          <div className="border-l-2 border-amber-500 pl-2.5 text-[12.5px] italic leading-relaxed text-foreground/70 line-clamp-3">
-            {quote}
-          </div>
-        </div>
-      )}
-
-      {/* Body — scrollable */}
+      {/* Body — scrollable. Includes the anchor quote so a long thread (or a long
+          quote) scrolls as one, instead of the quote pinning fixed space and
+          squeezing the comment. Only the header + composer + footer stay pinned. */}
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {/* Anchor quote */}
+        {quote && (
+          <div className="border-b border-border bg-muted/40 px-4 py-2.5">
+            <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+              Commenting on
+            </div>
+            <div className="border-l-2 border-amber-500 pl-2.5 text-[12.5px] italic leading-relaxed text-foreground/70">
+              {quote}
+            </div>
+          </div>
+        )}
         {/* Original comment (topic) */}
         <div className="px-4 pt-3.5 pb-1.5">
           <div className="flex items-start gap-2.5 rounded-lg border border-amber-500/20 border-l-[3px] border-l-amber-500 bg-amber-500/[0.07] px-3 py-2.5">
@@ -448,6 +551,7 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
           {aiUnavailableMessage(ai.reason)}
         </div>
       )}
+    </div>
     </div>,
     document.body
   )
