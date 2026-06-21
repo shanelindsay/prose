@@ -1,35 +1,57 @@
 /**
  * Comment Popover — thread view for an existing comment.
  *
- * Shows the original comment, any replies (user + AI), a reply input, a
- * resolve control, and a remove button. Mirrors the visual language of
- * AISuggestionPopover.
+ * Redesigned per the Claude Design "Comment Threads" project: an anchored card
+ * with a state-aware header (open / pending / resolved), the quoted text it's
+ * anchored to, the original comment, a reply thread with avatars, an inline
+ * composer, a "thinking" indicator while the AI processes the thread, and a
+ * footer of actions (Process / Resolve / Reopen / Delete).
+ *
+ * Colors map to Prose's theme tokens (works in dark + light): amber = comment
+ * accent, violet = AI, emerald = resolved, pink = pending.
+ *
+ * Positioning constrains the card's height to the space available at the chosen
+ * placement (below the mark, or above when there's more room), so a long thread
+ * scrolls inside the body while the header/anchor pin to the top and the
+ * composer/footer pin to the bottom — the whole card always fits the viewport.
  */
 
-import { useEffect, useRef, useState, useCallback, useLayoutEffect } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import type { Editor } from '@tiptap/core'
-import { Trash2, X, Sparkles, CheckCheck, Send, Bot, User } from 'lucide-react'
+import { Trash2, X, Sparkles, CheckCheck, Send, User, MessageSquare, RotateCcw } from 'lucide-react'
 import { useChat } from '../hooks/useChat'
 import { useAIConfigured } from '../hooks/useAIConfigured'
 import { aiUnavailableMessage } from '../lib/llm'
 import { useCommentStore } from '../extensions/comments/store'
 import type { CommentData, CommentReply } from '../extensions/comments/types'
+import { formatAge } from '../types/annotations'
 import { generateId } from '../lib/persistence'
+import { renderMarkdown } from './chat/ChatMessage'
+import { PROSE_ICONS, IconThumb } from '../lib/prose-icons'
+import { useSettingsStore } from '../stores/settingsStore'
 import { cn } from '../lib/utils'
 
 const NAV_BAR_HEIGHT = 48
 const VIEWPORT_PADDING = 16
+const POPOVER_WIDTH = 384
+const GAP = 8
 
 interface CommentPopoverProps {
   editor: Editor
+}
+
+interface AnchorRect {
+  top: number
+  bottom: number
+  centerX: number
 }
 
 interface PopoverState {
   isOpen: boolean
   commentId: string | null
   commentText: string
-  position: { x: number; y: number }
+  anchor: AnchorRect
 }
 
 export function CommentPopover({ editor }: CommentPopoverProps) {
@@ -37,13 +59,16 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
     isOpen: false,
     commentId: null,
     commentText: '',
-    position: { x: 0, y: 0 },
+    anchor: { top: 0, bottom: 0, centerX: 0 },
   })
-  const [adjustedPosition, setAdjustedPosition] = useState<{ x: number; y: number } | null>(null)
   const [replyText, setReplyText] = useState('')
+  // Local: which comment we kicked off Process for, and whether the resolved
+  // thread is expanded. Both reset when the popover opens on a new comment.
+  const [processingId, setProcessingId] = useState<string | null>(null)
+  const [showResolvedThread, setShowResolvedThread] = useState(false)
   const popoverRef = useRef<HTMLDivElement>(null)
   const replyInputRef = useRef<HTMLTextAreaElement>(null)
-  const { processComment } = useChat()
+  const { processComment, isStreaming } = useChat()
   const ai = useAIConfigured()
 
   // Get persisted comment data (replies + resolved state)
@@ -54,6 +79,12 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
   const currentComment: CommentData | undefined = popover.commentId
     ? pendingComments.find((c) => c.id === popover.commentId)
     : undefined
+
+  // Clear the "thinking" indicator once the AI stream finishes; the reply it
+  // produced lands in the store and renders in the thread above the composer.
+  useEffect(() => {
+    if (!isStreaming) setProcessingId(null)
+  }, [isStreaming])
 
   useEffect(() => {
     const handleClick = (event: MouseEvent) => {
@@ -77,9 +108,10 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
           isOpen: true,
           commentId: id,
           commentText: text,
-          position: { x: rect.left + rect.width / 2, y: rect.bottom + 8 },
+          anchor: { top: rect.top, bottom: rect.bottom, centerX: rect.left + rect.width / 2 },
         })
         setReplyText('')
+        setShowResolvedThread(false)
         return
       }
 
@@ -101,37 +133,6 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [popover.isOpen])
-
-  useEffect(() => {
-    setAdjustedPosition(null)
-  }, [popover.position.x, popover.position.y])
-
-  useLayoutEffect(() => {
-    if (!popover.isOpen || !popoverRef.current || adjustedPosition) return
-    const rect = popoverRef.current.getBoundingClientRect()
-    const viewportWidth = window.innerWidth
-    const viewportHeight = window.innerHeight
-    const minY = NAV_BAR_HEIGHT + VIEWPORT_PADDING
-    const newPosition = { ...popover.position }
-    if (newPosition.x + rect.width / 2 > viewportWidth - VIEWPORT_PADDING) {
-      newPosition.x = viewportWidth - rect.width / 2 - VIEWPORT_PADDING
-    }
-    if (newPosition.x - rect.width / 2 < VIEWPORT_PADDING) {
-      newPosition.x = rect.width / 2 + VIEWPORT_PADDING
-    }
-    if (newPosition.y + rect.height > viewportHeight - VIEWPORT_PADDING) {
-      const aboveY = popover.position.y - rect.height - 40
-      newPosition.y = aboveY >= minY ? aboveY : popover.position.y
-    }
-    if (newPosition.y < minY) {
-      newPosition.y = minY
-    }
-    if (newPosition.x !== popover.position.x || newPosition.y !== popover.position.y) {
-      setAdjustedPosition(newPosition)
-    } else {
-      setAdjustedPosition(popover.position)
-    }
-  }, [popover.isOpen, popover.position, adjustedPosition])
 
   const handleRemove = useCallback(() => {
     if (!popover.commentId) return
@@ -155,16 +156,27 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
     useCommentStore.setState({ pendingComments: updated })
     if (documentId) saveComments(documentId, updated)
     editor.commands.unsetComment(id)
-    setPopover((prev) => ({ ...prev, isOpen: false }))
+    setShowResolvedThread(false)
+  }, [editor, popover.commentId, documentId, saveComments])
+
+  const handleReopen = useCallback(() => {
+    if (!popover.commentId) return
+    const id = popover.commentId
+    const { pendingComments: current } = useCommentStore.getState()
+    const updated = current.map((c) => c.id === id ? { ...c, resolved: false } : c)
+    useCommentStore.setState({ pendingComments: updated })
+    if (documentId) saveComments(documentId, updated)
+    // Re-anchor the editor mark that resolving removed, so the highlight returns.
+    const thread = updated.find((c) => c.id === id)
+    if (thread) editor.commands.restoreComments([thread])
   }, [editor, popover.commentId, documentId, saveComments])
 
   const handleProcess = useCallback(() => {
-    if (popover.commentId) {
-      const id = popover.commentId
-      setPopover((prev) => ({ ...prev, isOpen: false }))
-      processComment(id)
-    }
-  }, [popover.commentId, processComment])
+    if (!popover.commentId || !ai.available) return
+    // Keep the popover open and show the thinking indicator while the AI works.
+    setProcessingId(popover.commentId)
+    processComment(popover.commentId)
+  }, [popover.commentId, ai.available, processComment])
 
   const handleClose = useCallback(() => {
     setPopover((prev) => ({ ...prev, isOpen: false }))
@@ -203,86 +215,238 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
 
   if (!popover.isOpen) return null
 
-  const displayPosition = adjustedPosition || popover.position
   const replies = currentComment?.replies ?? []
   const isResolved = currentComment?.resolved === true
+  const isPending = !isResolved && replies.length === 0
+  const quote = currentComment?.markedText?.trim()
+  const commentText = currentComment?.comment || popover.commentText
+  const commentAge = currentComment?.createdAt ? formatAge(currentComment.createdAt) : ''
+  const isThinking = processingId !== null && processingId === popover.commentId && isStreaming
+  // Resolved threads collapse their reply list until the user expands it.
+  const repliesVisible = !isResolved || showResolvedThread
+
+  // Placement: prefer below the mark; flip above when there's more room there.
+  // maxHeight is clamped to the space available at the chosen side, so the card
+  // never runs off-screen — the body scrolls inside it instead.
+  const a = popover.anchor
+  const minTop = NAV_BAR_HEIGHT + VIEWPORT_PADDING
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  const spaceBelow = vh - a.bottom - GAP - VIEWPORT_PADDING
+  const spaceAbove = a.top - GAP - minTop
+  const placeBelow = spaceBelow >= 240 || spaceBelow >= spaceAbove
+  const maxHeight = Math.max(190, Math.round(placeBelow ? spaceBelow : spaceAbove))
+  const centerX = Math.min(
+    Math.max(a.centerX, VIEWPORT_PADDING + POPOVER_WIDTH / 2),
+    vw - VIEWPORT_PADDING - POPOVER_WIDTH / 2
+  )
+  const vertical: React.CSSProperties = placeBelow
+    ? { top: Math.round(a.bottom + GAP) }
+    : { bottom: Math.round(vh - a.top + GAP) }
 
   return createPortal(
     <div
       ref={popoverRef}
-      className="comment-popover"
+      data-comment-popover
+      className="fixed z-50 flex flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-xl"
       style={{
-        position: 'fixed',
-        left: displayPosition.x,
-        top: displayPosition.y,
+        left: centerX,
+        width: POPOVER_WIDTH,
+        maxHeight,
         transform: 'translateX(-50%)',
-        visibility: adjustedPosition ? 'visible' : 'hidden',
+        ...vertical,
       }}
     >
-      {/* Original comment */}
-      <div className="comment-label">Comment:</div>
-      <div className="comment-text">{popover.commentText}</div>
-
-      {/* Thread replies */}
-      {replies.length > 0 && (
-        <div className="comment-replies">
-          {replies.map((reply) => (
-            <ReplyRow key={reply.id} reply={reply} />
-          ))}
-        </div>
-      )}
-
-      {/* Reply input (hidden for resolved threads) */}
-      {!isResolved && (
-        <div className="comment-reply-input">
-          <textarea
-            ref={replyInputRef}
-            className="reply-textarea"
-            value={replyText}
-            onChange={(e) => setReplyText(e.target.value)}
-            onKeyDown={handleReplyKeyDown}
-            placeholder="Reply… (Enter to send)"
-            rows={2}
-          />
-          <button
-            className="reply-send-btn"
-            onClick={handleAddReply}
-            disabled={!replyText.trim()}
-            aria-label="Send reply"
-          >
-            <Send size={14} />
-          </button>
-        </div>
-      )}
-
-      {/* Actions */}
-      <div className="actions">
-        <button
-          className="process-btn"
-          onClick={handleProcess}
-          disabled={!ai.available || isResolved}
-          title={isResolved ? 'Thread is resolved' : undefined}
-        >
-          <Sparkles size={16} />
-          Process
-        </button>
-        {!isResolved && (
-          <button className="resolve-btn" onClick={handleResolve}>
-            <CheckCheck size={16} />
-            Resolve
-          </button>
+      {/* Header — state-aware (pinned) */}
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-2.5">
+        {isResolved ? (
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+            <CheckCheck className="h-3.5 w-3.5" />
+            Resolved
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground/80">
+              <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
+              Comment thread
+            </div>
+            {isPending && (
+              <span className="inline-flex items-center gap-1 rounded-md bg-pink-500/12 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-pink-600 dark:text-pink-400">
+                <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                Awaiting reply
+              </span>
+            )}
+          </div>
         )}
-        <button className="remove-btn" onClick={handleRemove}>
-          <Trash2 size={16} />
-          Remove
-        </button>
-        <button className="close-btn" onClick={handleClose}>
-          <X size={16} />
-          Close
+        <button
+          onClick={handleClose}
+          aria-label="Close"
+          className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent"
+        >
+          <X className="h-3.5 w-3.5" />
         </button>
       </div>
-      {!ai.available && ai.reason && (
-        <div className="ai-hint">{aiUnavailableMessage(ai.reason)}</div>
+
+      {/* Anchor quote (pinned) */}
+      {quote && (
+        <div className="shrink-0 border-b border-border bg-muted/40 px-4 py-2.5">
+          <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+            Commenting on
+          </div>
+          <div className="border-l-2 border-amber-500 pl-2.5 text-[12.5px] italic leading-relaxed text-foreground/70 line-clamp-3">
+            {quote}
+          </div>
+        </div>
+      )}
+
+      {/* Body — scrollable */}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {/* Original comment (topic) */}
+        <div className="px-4 pt-3.5 pb-1.5">
+          <div className="flex items-start gap-2.5 rounded-lg border border-amber-500/20 border-l-[3px] border-l-amber-500 bg-amber-500/[0.07] px-3 py-2.5">
+            <Avatar kind="user" />
+            <div className="min-w-0 flex-1">
+              <div className="mb-0.5 flex items-baseline gap-2">
+                <span className="text-xs font-semibold text-foreground">You</span>
+                {commentAge && <span className="text-[11px] text-muted-foreground">{commentAge}</span>}
+              </div>
+              <div className="text-[13px] leading-relaxed text-foreground/90 break-words whitespace-pre-wrap">{commentText}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Replies */}
+        {repliesVisible && replies.length > 0 && (
+          <div className="px-4 pb-1.5 pt-0.5">
+            {replies.map((reply) => (
+              <ReplyRow key={reply.id} reply={reply} editor={editor} />
+            ))}
+            {isResolved && (
+              <button
+                onClick={() => setShowResolvedThread(false)}
+                className="mt-1 py-1 text-[11.5px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              >
+                Hide thread
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Collapsed resolved summary */}
+        {isResolved && !showResolvedThread && replies.length > 0 && (
+          <div className="flex items-center gap-2.5 px-4 pb-3.5 pt-1">
+            <span className="text-[11.5px] text-muted-foreground">
+              {replies.length} {replies.length === 1 ? 'reply' : 'replies'} in this thread
+            </span>
+            <button
+              onClick={() => setShowResolvedThread(true)}
+              className="text-[11.5px] font-medium text-foreground underline underline-offset-2"
+            >
+              Show thread
+            </button>
+          </div>
+        )}
+
+        {/* Thinking indicator */}
+        {isThinking && (
+          <div className="flex items-center gap-2.5 px-4 pb-3.5 pt-1.5">
+            <Avatar kind="ai" />
+            <span className="inline-flex items-center gap-1">
+              <Dot delay="0s" />
+              <Dot delay="0.18s" />
+              <Dot delay="0.36s" />
+            </span>
+            <span className="text-[12.5px] text-muted-foreground">Reading the thread…</span>
+          </div>
+        )}
+      </div>
+
+      {/* Composer — open threads only (pinned) */}
+      {!isResolved && (
+        <div className="shrink-0 border-t border-border px-4 py-3">
+          <div className="flex items-end gap-2 rounded-lg border border-input bg-background px-3 py-1.5 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20">
+            <textarea
+              ref={replyInputRef}
+              value={replyText}
+              onChange={(e) => setReplyText(e.target.value)}
+              onKeyDown={handleReplyKeyDown}
+              rows={1}
+              placeholder="Reply to the thread…"
+              className="max-h-[120px] flex-1 resize-none bg-transparent py-1 text-[13px] leading-relaxed text-foreground outline-none placeholder:text-muted-foreground"
+            />
+            <button
+              onClick={handleAddReply}
+              disabled={!replyText.trim()}
+              aria-label="Send reply"
+              className={cn(
+                'flex h-8 w-8 items-center justify-center rounded-lg transition-colors',
+                replyText.trim()
+                  ? 'bg-foreground text-background hover:bg-foreground/85'
+                  : 'cursor-default text-muted-foreground/50'
+              )}
+            >
+              <Send className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="mt-1.5 pl-0.5 text-[11px] text-muted-foreground">
+            Enter to send · Shift+Enter for a new line
+          </div>
+        </div>
+      )}
+
+      {/* Footer actions (pinned) */}
+      {!isResolved ? (
+        <div className="flex shrink-0 items-center gap-2 border-t border-border bg-muted/40 px-4 py-2.5">
+          <button
+            onClick={handleProcess}
+            disabled={!ai.available}
+            title={!ai.available && ai.reason ? aiUnavailableMessage(ai.reason) : undefined}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-[12.5px] font-semibold text-white transition-colors hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            Process
+          </button>
+          <button
+            onClick={handleResolve}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-2 text-[12.5px] font-medium text-foreground transition-colors hover:bg-accent"
+          >
+            <CheckCheck className="h-3.5 w-3.5" />
+            Resolve
+          </button>
+          <button
+            onClick={handleRemove}
+            title="Delete thread"
+            aria-label="Delete thread"
+            className="ml-auto flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ) : (
+        <div className="flex shrink-0 items-center gap-2 border-t border-border bg-emerald-500/[0.06] px-4 py-2.5">
+          <button
+            onClick={handleReopen}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-2 text-[12.5px] font-medium text-foreground transition-colors hover:bg-accent"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Reopen
+          </button>
+          <span className="text-[11.5px] text-emerald-700 dark:text-emerald-400/80">Thread kept, collapsed.</span>
+          <button
+            onClick={handleRemove}
+            title="Delete thread"
+            aria-label="Delete thread"
+            className="ml-auto flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
+      {!ai.available && ai.reason && !isResolved && (
+        <div className="shrink-0 border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
+          {aiUnavailableMessage(ai.reason)}
+        </div>
       )}
     </div>,
     document.body
@@ -291,14 +455,58 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
 
-function ReplyRow({ reply }: { reply: CommentReply }) {
+function Avatar({ kind }: { kind: 'ai' | 'user' }) {
+  // AI avatar mirrors the chat agent: the selected Prose app icon (the pilcrow
+  // by default), updating live when the user changes it.
+  const iconId = useSettingsStore((s) => s.settings.appearance.icon)
+  if (kind === 'ai') {
+    const selected = PROSE_ICONS.find((i) => i.id === iconId) ?? PROSE_ICONS[0]
+    return (
+      <span aria-label="Prose" className="shrink-0">
+        <IconThumb Component={selected.Component} size={24} />
+      </span>
+    )
+  }
+  return (
+    <span
+      aria-label="You"
+      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
+    >
+      <User className="h-3 w-3" />
+    </span>
+  )
+}
+
+function ReplyRow({ reply, editor }: { reply: CommentReply; editor: Editor }) {
   const isAI = reply.author === 'ai'
   return (
-    <div className={cn('comment-reply', isAI ? 'reply-ai' : 'reply-user')}>
-      <span className="reply-author-icon" aria-label={isAI ? 'AI' : 'You'}>
-        {isAI ? <Bot size={12} /> : <User size={12} />}
-      </span>
-      <span className="reply-text">{reply.text}</span>
+    <div className="flex items-start gap-2.5 border-t border-border/50 py-2.5">
+      <Avatar kind={isAI ? 'ai' : 'user'} />
+      <div className="min-w-0 flex-1">
+        <div className="mb-0.5 flex items-baseline gap-2">
+          <span className="text-xs font-semibold text-foreground">{isAI ? 'Prose' : 'You'}</span>
+          <span className="text-[11px] text-muted-foreground">{formatAge(reply.createdAt)}</span>
+        </div>
+        {/* AI replies are markdown (rendered like chat); user replies stay literal. */}
+        {isAI ? (
+          <div className="prose-chat break-words text-[13px] leading-relaxed text-foreground/85">
+            {renderMarkdown(reply.text, editor)}
+          </div>
+        ) : (
+          <div className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-foreground/85">
+            {reply.text}
+          </div>
+        )}
+      </div>
     </div>
+  )
+}
+
+function Dot({ delay }: { delay: string }) {
+  return (
+    <span
+      className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-500"
+      style={{ animationDelay: delay }}
+    />
   )
 }

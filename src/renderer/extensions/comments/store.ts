@@ -17,8 +17,21 @@ interface CommentPersistenceState {
   /** Current document ID being tracked */
   documentId: string | null
 
-  /** Pending comments for the current document (loaded from IndexedDB) */
+  /**
+   * Comments for the current document — the single source of truth for rich
+   * comment data (replies + resolved state) that the editor marks don't carry.
+   * Loaded from IndexedDB and kept live; the editor marks are just anchors.
+   */
   pendingComments: CommentData[]
+
+  /**
+   * One-shot signal that the marks for the current document still need to be
+   * restored into the editor. Set true by loadComments, cleared by markRestored
+   * once the Editor has re-applied the marks. This is the restore loop-breaker —
+   * it lets pendingComments stay populated (so replies/resolved survive) instead
+   * of clearing it after restore.
+   */
+  needsRestore: boolean
 
   /** Set the current document ID and clear pending comments */
   setDocumentId: (documentId: string) => void
@@ -28,6 +41,9 @@ interface CommentPersistenceState {
 
   /** Load comments from IndexedDB for a document */
   loadComments: (documentId: string) => Promise<void>
+
+  /** Mark the current document's comment marks as restored into the editor. */
+  markRestored: () => void
 
   /** Clear pending comments from memory (not from IndexedDB) */
   clearComments: () => void
@@ -39,9 +55,10 @@ interface CommentPersistenceState {
 export const useCommentStore = create<CommentPersistenceState>((set, get) => ({
   documentId: null,
   pendingComments: [],
+  needsRestore: false,
 
   setDocumentId: (documentId: string) => {
-    set({ documentId, pendingComments: [] })
+    set({ documentId, pendingComments: [], needsRestore: false })
   },
 
   saveComments: async (documentId: string, comments: CommentData[]) => {
@@ -65,7 +82,10 @@ export const useCommentStore = create<CommentPersistenceState>((set, get) => ({
 
     set({
       documentId,
-      pendingComments: comments
+      pendingComments: comments,
+      // Marks aren't serialized into the document, so the Editor must re-apply
+      // them after each load. Flag it; the Editor restore effect consumes this.
+      needsRestore: true
     })
 
     console.log('[CommentStore] Loaded comments:', {
@@ -74,8 +94,12 @@ export const useCommentStore = create<CommentPersistenceState>((set, get) => ({
     })
   },
 
+  markRestored: () => {
+    set({ needsRestore: false })
+  },
+
   clearComments: () => {
-    set({ pendingComments: [] })
+    set({ pendingComments: [], needsRestore: false })
   },
 
   deleteComments: async (documentId: string) => {

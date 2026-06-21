@@ -250,7 +250,23 @@ export function Editor() {
         transformCopiedText: true
       }),
       FocusMode,
-      Comment,
+      Comment.configure({
+        // Mirror every newly-created comment mark into the persistence store so
+        // replies/resolve can find it by ID immediately — without waiting for a
+        // tab-switch save. Catches both the UI (AddCommentDialog) and tool
+        // (add_comment) paths, since both go through setComment. Restoration
+        // uses tr.addMark directly and does NOT fire this, so no double-add.
+        onCommentAdded: (commentData) => {
+          const store = useCommentStore.getState()
+          if (store.pendingComments.some((c) => c.id === commentData.id)) return
+          const updated = [
+            ...store.pendingComments,
+            { ...commentData, replies: [], resolved: false },
+          ]
+          useCommentStore.setState({ pendingComments: updated })
+          if (store.documentId) store.saveComments(store.documentId, updated)
+        },
+      }),
       AISuggestion,
       AIAnnotations.configure({
         showTooltip: true,
@@ -577,31 +593,49 @@ export function Editor() {
     }
   }, [editor, document.documentId, pendingSuggestions, suggestionStoreDocumentId])
 
-  // Subscribe to pending comment marks reactively for restoration
-  const pendingComments = useCommentStore((state) => state.pendingComments)
+  // Subscribe to comment store state. pendingComments stays populated (it's the
+  // live source of truth for replies/resolved); needsRestore is the one-shot
+  // signal that the marks must be re-applied to the editor after a load.
+  const needsRestore = useCommentStore((state) => state.needsRestore)
   const commentStoreDocumentId = useCommentStore((state) => state.documentId)
 
-  // Restore comment marks when document changes or pending comments are loaded
+  // Load comments when the document changes (mirrors the annotation recovery
+  // effect above). Session restore and file-open hydrate the editor without
+  // going through useTabs' explicit loadComments calls, so without this the
+  // comment store stays empty and a document's threads are lost on reload.
+  // loadComments sets needsRestore; the restore effect below re-applies marks.
   useEffect(() => {
     if (!editor || !document.documentId) return
-
-    // Only restore if there are pending comments and they match current document
-    if (pendingComments.length > 0 && commentStoreDocumentId === document.documentId) {
-      console.log(`[Editor:${SESSION_ID}] Restoring comments:`, {
-        documentId: document.documentId,
-        count: pendingComments.length
-      })
-
-      // Small delay to ensure editor content is fully loaded (same pattern as suggestions)
-      const timer = setTimeout(() => {
-        editor.commands.restoreComments(pendingComments)
-        // Clear pending comments from memory after restoring
-        useCommentStore.getState().clearComments()
-      }, 100)
-
-      return () => clearTimeout(timer)
+    if (commentStoreDocumentId !== document.documentId) {
+      useCommentStore.getState().loadComments(document.documentId)
     }
-  }, [editor, document.documentId, pendingComments, commentStoreDocumentId])
+  }, [editor, document.documentId, commentStoreDocumentId])
+
+  // Re-apply comment marks once after each load. Marks aren't serialized into
+  // the document, so they must be restored when content (re)loads — but NOT on
+  // every pendingComments change (a reply/resolve must not re-mark the doc).
+  // needsRestore gates this; we consume it whether or not there are comments.
+  useEffect(() => {
+    if (!editor || !document.documentId) return
+    if (!needsRestore || commentStoreDocumentId !== document.documentId) return
+
+    // Small delay to ensure editor content is fully loaded (same pattern as suggestions)
+    const timer = setTimeout(() => {
+      const fresh = useCommentStore.getState().pendingComments
+      if (fresh.length > 0) {
+        console.log(`[Editor:${SESSION_ID}] Restoring comments:`, {
+          documentId: document.documentId,
+          count: fresh.length
+        })
+        editor.commands.restoreComments(fresh)
+      }
+      // Consume the one-shot flag — but keep pendingComments populated so the
+      // CommentPopover thread + Activity timeline keep reading replies/resolved.
+      useCommentStore.getState().markRestored()
+    }, 100)
+
+    return () => clearTimeout(timer)
+  }, [editor, document.documentId, needsRestore, commentStoreDocumentId])
 
   // Auto-focus editor once when document loads (not on every content change)
   const hasFocusedRef = useRef(false)

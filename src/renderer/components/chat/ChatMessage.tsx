@@ -384,7 +384,7 @@ function processInlineFormatting(text: string, keyPrefix: string, editor: any): 
 }
 
 // Simple markdown renderer for assistant messages
-function renderMarkdown(content: string, editor: any): React.ReactNode {
+export function renderMarkdown(content: string, editor: any): React.ReactNode {
   // Split into lines and process
   const lines = content.split('\n')
   const elements: React.ReactNode[] = []

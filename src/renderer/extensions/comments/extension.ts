@@ -6,8 +6,13 @@
  */
 
 import { Mark, mergeAttributes } from '@tiptap/core'
+import { Plugin, PluginKey } from '@tiptap/pm/state'
+import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import type { MarkSerializerSpec } from 'prosemirror-markdown'
 import type { CommentOptions, CommentData } from './types'
+import { useCommentStore } from './store'
+
+const commentStatePluginKey = new PluginKey('commentState')
 
 /**
  * Markdown serializer for comment marks - outputs just the text content
@@ -344,6 +349,52 @@ export const Comment = Mark.create<CommentOptions>({
         },
     }
   },
+
+  // Style inline comment marks by thread state (read from the comment store):
+  // pending (no replies) → pink dashed underline; open thread (has replies) →
+  // the default amber. Resolved threads remove their mark, so only these two
+  // render in the document.
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: commentStatePluginKey,
+        view: (view) => {
+          // A reply lands in the store without a ProseMirror transaction, so
+          // nudge the view to recompute decorations when the store changes.
+          // queueMicrotask defers past the current dispatch (onCommentAdded
+          // fires mid-transaction) to avoid reentrant dispatches.
+          const unsubscribe = useCommentStore.subscribe(() => {
+            queueMicrotask(() => {
+              if (view.isDestroyed) return
+              view.dispatch(view.state.tr.setMeta(commentStatePluginKey, true))
+            })
+          })
+          return { destroy: unsubscribe }
+        },
+        props: {
+          decorations: (state) => {
+            const byId = new Map(
+              useCommentStore.getState().pendingComments.map((c) => [c.id, c])
+            )
+            const decos: Decoration[] = []
+            state.doc.descendants((node, pos) => {
+              const mark = node.marks.find((m) => m.type.name === 'comment')
+              if (!mark || !mark.attrs.id) return
+              const data = byId.get(mark.attrs.id)
+              // Unknown ids (not yet mirrored into the store) read as pending.
+              const pending = data ? !data.resolved && (data.replies?.length ?? 0) === 0 : true
+              if (pending) {
+                decos.push(
+                  Decoration.inline(pos, pos + node.nodeSize, { class: 'comment-mark--pending' })
+                )
+              }
+            })
+            return DecorationSet.create(state.doc, decos)
+          },
+        },
+      }),
+    ]
+  },
 })
 
 /**
@@ -418,6 +469,39 @@ export function getComments(editor: { state: { doc: { descendants: (fn: (node: {
   })
 
   return comments
+}
+
+/**
+ * Merge live comment marks (current positions, from `getComments`) with the
+ * persisted store entries (replies + resolved state, which the marks don't
+ * carry) into the canonical shape to persist.
+ *
+ * - Live marks win for position/markedText/occurrenceIndex.
+ * - Stored entries contribute replies + resolved.
+ * - Resolved threads have no mark (restoreComments skips them), so they're
+ *   appended from the store as history-only entries.
+ *
+ * This is the persistence-shaped sibling of executeListComments' tool-facing
+ * merge — keep the two in step. Saving raw getComments() instead of this is the
+ * bug that drops replies/resolved on every tab-switch save.
+ */
+export function mergeCommentsForPersistence(
+  editor: Parameters<typeof getComments>[0],
+  stored: CommentData[]
+): CommentData[] {
+  const liveMarks = getComments(editor)
+  const storedById = new Map(stored.map((c) => [c.id, c]))
+  const liveIds = new Set(liveMarks.map((m) => m.id))
+
+  const merged = liveMarks.map((m) => {
+    const s = storedById.get(m.id)
+    return s ? { ...m, replies: s.replies ?? [], resolved: s.resolved ?? false } : m
+  })
+
+  // Resolved (markless) threads survive only in the store — keep them.
+  const resolvedOnly = stored.filter((c) => c.resolved && !liveIds.has(c.id))
+
+  return [...merged, ...resolvedOnly]
 }
 
 /**

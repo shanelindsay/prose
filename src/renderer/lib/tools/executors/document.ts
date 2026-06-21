@@ -502,26 +502,9 @@ export function executeAddComment(args: {
     return toolError('Failed to apply comment mark — the range may not contain markable content', 'COMMENT_FAILED')
   }
 
-  // Immediately mirror the new comment into the store so reply_to_comment /
-  // resolve_comment can find it by ID in the same session without waiting for
-  // a tab-switch save (which is normally where the store gets populated).
-  const storeState = useCommentStore.getState()
-  const newEntry = {
-    id,
-    markedText: rangeText,
-    comment,
-    createdAt: Date.now(),
-    occurrenceIndex: 0,
-    from,
-    to,
-    replies: [] as CommentReply[],
-    resolved: false,
-  }
-  const updatedComments = [...storeState.pendingComments, newEntry]
-  useCommentStore.setState({ pendingComments: updatedComments })
-  if (storeState.documentId) {
-    storeState.saveComments(storeState.documentId, updatedComments)
-  }
+  // The Comment extension's onCommentAdded hook mirrors the new comment into the
+  // store (with correct occurrenceIndex) and persists it, so reply_to_comment /
+  // resolve_comment can find it by ID in the same session. No manual mirror here.
 
   return toolSuccess({ id })
 }

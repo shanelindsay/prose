@@ -854,6 +854,27 @@
   background: hsl(var(--comment-mark-bg) / 0.5);
 }
 
+/* Pending comment marks (a thread awaiting its first reply) read pink with a
+   dashed underline, distinct from the amber solid underline of an active
+   thread. Applied as an inline decoration class by the comment-state plugin,
+   which reads reply state from the comment store. */
+.prose-editor .comment-mark--pending {
+  background: hsl(var(--pending) / 0.1);
+  border-bottom: 2px dashed hsl(var(--pending) / 0.85);
+}
+
+.prose-editor .comment-mark--pending:hover {
+  background: hsl(var(--pending) / 0.18);
+}
+
+/* If ProseMirror renders the pending decoration as a nested span rather than
+   merging the class onto the comment-mark span, suppress the parent's amber so
+   only the pink dashed treatment shows (no doubled underline). */
+.prose-editor .comment-mark:has(.comment-mark--pending) {
+  background: transparent;
+  border-bottom-color: transparent;
+}
+
 /* Comment Popover (click to open) */
 .comment-popover {
   background: hsl(var(--popover));

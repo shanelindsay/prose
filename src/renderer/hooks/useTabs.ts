@@ -7,7 +7,7 @@ import { useAnnotationStore } from '../extensions/ai-annotations'
 import { useSuggestionStore } from '../extensions/ai-suggestions/store'
 import { getAISuggestions } from '../extensions/ai-suggestions'
 import { useCommentStore } from '../extensions/comments/store'
-import { getComments } from '../extensions/comments'
+import { mergeCommentsForPersistence } from '../extensions/comments'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useFileListStore } from '../stores/fileListStore'
 import { parseMarkdown, serializeMarkdown, prepareTextContent } from '../lib/markdown'
@@ -120,7 +120,9 @@ export function useTabs() {
         await useSuggestionStore.getState().saveSuggestions(docId, suggestions)
       }
 
-      const comments = getComments(editor)
+      // Merge live mark positions with the store's rich data (replies + resolved)
+      // so a tab-switch save doesn't clobber threads with marks-only data (#699).
+      const comments = mergeCommentsForPersistence(editor, useCommentStore.getState().pendingComments)
       console.log(`[useTabs:${SESSION_ID}] Saving comments:`, { documentId: docId, count: comments.length })
       if (docId) {
         await useCommentStore.getState().saveComments(docId, comments)
