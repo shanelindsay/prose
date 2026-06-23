@@ -114,27 +114,27 @@ export function QuickReviewPanel() {
     }
   }, [handleAccept, handleReject])
 
+  // Navigation wraps around the ends (last → first, first → last) so cycling
+  // never dead-ends. (A single suggestion is a no-op.)
   const goNext = useCallback(() => {
-    if (currentSuggestionIndex < total - 1) {
-      setDirection('next')
-      setAnimating(true)
-      setTimeout(() => {
-        setCurrentSuggestionIndex(currentSuggestionIndex + 1)
-        setAnimating(false)
-      }, 150)
-    }
+    if (total <= 1) return
+    setDirection('next')
+    setAnimating(true)
+    setTimeout(() => {
+      setCurrentSuggestionIndex((currentSuggestionIndex + 1) % total)
+      setAnimating(false)
+    }, 150)
   }, [currentSuggestionIndex, total, setCurrentSuggestionIndex])
 
   const goPrev = useCallback(() => {
-    if (currentSuggestionIndex > 0) {
-      setDirection('prev')
-      setAnimating(true)
-      setTimeout(() => {
-        setCurrentSuggestionIndex(currentSuggestionIndex - 1)
-        setAnimating(false)
-      }, 150)
-    }
-  }, [currentSuggestionIndex, setCurrentSuggestionIndex])
+    if (total <= 1) return
+    setDirection('prev')
+    setAnimating(true)
+    setTimeout(() => {
+      setCurrentSuggestionIndex((currentSuggestionIndex - 1 + total) % total)
+      setAnimating(false)
+    }, 150)
+  }, [currentSuggestionIndex, total, setCurrentSuggestionIndex])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -163,14 +163,10 @@ export function QuickReviewPanel() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [goNext, goPrev, handleAccept, handleReject])
 
-  // Auto-close when all suggestions are handled
-  useEffect(() => {
-    if (total === 0) return
-    const allHaveFeedback = suggestions.every((s) => s.userReply && s.userReply.trim() !== '')
-    if (allHaveFeedback) {
-      setReviewMode(null)
-    }
-  }, [suggestions, total, setReviewMode])
+  // NOTE: Quick Review no longer auto-closes when every suggestion has feedback.
+  // That made opening Review on an already-fed-back suggestion close instantly
+  // (a flash). It still closes on accept/reject-all (handleAccept/handleReject)
+  // or via the explicit close button.
 
   // Reset feedback state when navigating
   useEffect(() => {
@@ -249,7 +245,7 @@ export function QuickReviewPanel() {
           </span>
           <button
             onClick={goPrev}
-            disabled={currentSuggestionIndex === 0}
+            disabled={total <= 1}
             className="p-1.5 rounded hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             aria-label="Previous suggestion"
           >
@@ -257,7 +253,7 @@ export function QuickReviewPanel() {
           </button>
           <button
             onClick={goNext}
-            disabled={currentSuggestionIndex === total - 1}
+            disabled={total <= 1}
             className="p-1.5 rounded hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             aria-label="Next suggestion"
           >

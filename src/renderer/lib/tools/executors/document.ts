@@ -495,7 +495,7 @@ export function executeAddComment(args: {
     .chain()
     .focus()
     .setTextSelection({ from, to })
-    .setComment({ id, comment })
+    .setComment({ id, comment, author: 'ai' })
     .run()
 
   if (!success) {

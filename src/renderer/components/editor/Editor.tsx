@@ -149,6 +149,11 @@ export function Editor() {
   // Preserve AI suggestions across source mode round-trips
   const savedSuggestionsRef = useRef<AISuggestionData[]>([])
   const sourceEditorRef = useRef<SourceEditorHandle>(null)
+  // The documentId whose text is currently held in the source editor. On exit,
+  // the Source→WYSIWYG writeback only fires when this still matches the active
+  // document — otherwise a tab switch happened and the new tab's content is
+  // already loaded, so writing the (stale) source back would clobber it.
+  const sourceDocIdRef = useRef<string | null>(null)
 
   // Track if current file is linked to a reMarkable notebook (for showing "View Original" button)
   const [linkedNotebookId, setLinkedNotebookId] = useState<string | null>(null)
@@ -571,12 +576,30 @@ export function Editor() {
   const pendingSuggestions = useSuggestionStore((state) => state.pendingSuggestions)
   const suggestionStoreDocumentId = useSuggestionStore((state) => state.documentId)
 
+  // Load suggestions when the document changes (mirrors the annotation + comment
+  // recovery effects). Session restore / file open hydrate the editor without
+  // going through useTabs' explicit loadSuggestions, so without this a document's
+  // AI suggestions are lost on reload. loadSuggestions populates pendingSuggestions;
+  // the restore effect below re-applies them to the editor.
+  useEffect(() => {
+    if (!editor || !document.documentId) return
+    if (suggestionStoreDocumentId !== document.documentId) {
+      useSuggestionStore.getState().loadSuggestions(document.documentId)
+    }
+  }, [editor, document.documentId, suggestionStoreDocumentId])
+
   // Restore AI suggestions when document changes or pending suggestions are loaded
   useEffect(() => {
     if (!editor || !document.documentId) return
 
     // Only restore if there are pending suggestions and they match current document
     if (pendingSuggestions.length > 0 && suggestionStoreDocumentId === document.documentId) {
+      // Wait for the document content to be present (see the comment-restore
+      // effect): on reload the file loads asynchronously, and restoring against
+      // an empty doc would drop the suggestions, then clearSuggestions() consumes
+      // them. document.content is in the deps so this re-fires once text arrives.
+      if (!editor.state.doc.textContent.trim()) return
+
       console.log(`[Editor:${SESSION_ID}] Restoring suggestions:`, {
         documentId: document.documentId,
         count: pendingSuggestions.length
@@ -591,7 +614,42 @@ export function Editor() {
 
       return () => clearTimeout(timer)
     }
-  }, [editor, document.documentId, pendingSuggestions, suggestionStoreDocumentId])
+  }, [editor, document.documentId, pendingSuggestions, suggestionStoreDocumentId, document.content])
+
+  // Persist suggestions to IndexedDB when they change, so they survive a reload.
+  // snapshotSuggestions only buffers in-memory (HMR), and tab-switch saves are
+  // too infrequent — creating a suggestion then refreshing would lose it. Saving
+  // on a debounced transaction also keeps stored positions in sync as the doc
+  // edits. Skip while a restore is pending (pendingSuggestions not yet replayed)
+  // so the document-load transaction can't clobber IndexedDB with an empty set.
+  useEffect(() => {
+    if (!editor || !document.documentId) return
+    const docId = document.documentId
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const persist = () => {
+      timer = null
+      const store = useSuggestionStore.getState()
+      if (store.pendingSuggestions.length > 0) return // restore pending — don't clobber
+      const live = getAISuggestions(editor)
+      // NEVER overwrite the stored set with an empty one from a routine
+      // transaction. An empty editor here is almost always transient — a
+      // document load or a source-mode toggle strips the decorations and fires a
+      // transaction — NOT a real "user cleared all". Persisting that empty wiped
+      // suggestions from IndexedDB (data loss). Mirrors useTabs' deliberate
+      // `length > 0 ? save : skip`; genuine empties persist via tab-switch/delete.
+      if (live.length === 0) return
+      store.saveSuggestions(docId, live)
+    }
+    const onTx = () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(persist, 500)
+    }
+    editor.on('transaction', onTx)
+    return () => {
+      editor.off('transaction', onTx)
+      if (timer) clearTimeout(timer)
+    }
+  }, [editor, document.documentId])
 
   // Subscribe to comment store state. pendingComments stays populated (it's the
   // live source of truth for replies/resolved); needsRestore is the one-shot
@@ -619,6 +677,16 @@ export function Editor() {
     if (!editor || !document.documentId) return
     if (!needsRestore || commentStoreDocumentId !== document.documentId) return
 
+    // Wait for the document content to actually be present before restoring. On
+    // reload, file content loads asynchronously from disk; restoring against an
+    // empty doc finds no text to mark and would then consume the one-shot flag,
+    // losing the marks until the next load. document.content is in the deps, so
+    // this re-fires once the real text arrives. (If there are no pending comments
+    // there's nothing to lose, so don't block on content.)
+    const hasPending = useCommentStore.getState().pendingComments.length > 0
+    const contentReady = !!editor.state.doc.textContent.trim()
+    if (hasPending && !contentReady) return
+
     // Small delay to ensure editor content is fully loaded (same pattern as suggestions)
     const timer = setTimeout(() => {
       const fresh = useCommentStore.getState().pendingComments
@@ -635,7 +703,7 @@ export function Editor() {
     }, 100)
 
     return () => clearTimeout(timer)
-  }, [editor, document.documentId, needsRestore, commentStoreDocumentId])
+  }, [editor, document.documentId, needsRestore, commentStoreDocumentId, document.content])
 
   // Auto-focus editor once when document loads (not on every content change)
   const hasFocusedRef = useRef(false)
@@ -681,26 +749,48 @@ export function Editor() {
     if (sourceMode && !prev) {
       // WYSIWYG → Source: save suggestions then serialize with frontmatter
       savedSuggestionsRef.current = getAISuggestions(editor)
+      sourceDocIdRef.current = useEditorStore.getState().document.documentId
       const md = editor.storage.markdown?.getMarkdown?.() ?? ''
       const fm = useEditorStore.getState().document.frontmatter ?? {}
       setSourceContent(serializeMarkdown(md, fm))
     } else if (!sourceMode && prev) {
+      // A document switch (not a user toggle) also flips sourceMode → false. In
+      // that case the new tab's content is already loaded by the content-sync
+      // effect, while the source editor still holds the PREVIOUS document's text.
+      // Writing that stale source back here would clobber the new tab — so when
+      // the active document no longer matches the source's document, skip the
+      // writeback and drop the previous doc's saved suggestions.
+      // (#bug: source persists across tabs)
+      const activeDocId = useEditorStore.getState().document.documentId
+      if (sourceDocIdRef.current !== activeDocId) {
+        savedSuggestionsRef.current = []
+        return
+      }
       // Source → WYSIWYG: parse frontmatter back out from raw source
       const liveContent = sourceEditorRef.current?.getContent() ?? sourceContent
       const { content: bodyOnly, frontmatter: parsedFm } = parseMarkdown(liveContent)
       useEditorStore.getState().setFrontmatter(parsedFm)
       editor.commands.setContent(bodyOnly)
-      if (savedSuggestionsRef.current.length > 0) {
-        // Small delay to ensure content is fully parsed before restoring marks
-        setTimeout(() => {
+      // setContent stripped both suggestion decorations AND comment marks. The
+      // document didn't change, so neither the suggestion- nor comment-restore
+      // effects will re-run — we must re-apply both here, or a source round-trip
+      // silently drops them from the body (while the stores keep the data).
+      const comments = useCommentStore.getState().pendingComments
+      setTimeout(() => {
+        if (savedSuggestionsRef.current.length > 0) {
           editor.commands.restoreAISuggestions(savedSuggestionsRef.current)
           savedSuggestionsRef.current = []
-        }, 50)
-      }
+        }
+        if (comments.length > 0) {
+          editor.commands.restoreComments(comments)
+        }
+      }, 50)
     }
   }, [sourceMode, editor])
 
-  // Reset source mode when switching documents
+  // Reset source mode when switching documents. The toggle effect's
+  // Source→WYSIWYG branch guards against clobbering the new tab by comparing
+  // sourceDocIdRef to the active document (see above).
   useEffect(() => {
     setSourceMode(false)
   }, [document.documentId, setSourceMode])

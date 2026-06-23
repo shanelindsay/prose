@@ -116,7 +116,13 @@ export function useTabs() {
 
       const suggestions = getAISuggestions(editor)
       console.log(`[useTabs:${SESSION_ID}] Saving suggestions:`, { documentId: docId, count: suggestions.length })
-      if (docId) {
+      // Never overwrite the stored set with an empty one: an empty editor here is
+      // almost always a transient strip (a tab switch landing inside a document
+      // load or source-mode toggle), not a real "user cleared all" — persisting
+      // it would wipe the suggestions. Mirrors the Editor debounced save and the
+      // rename path's `length > 0 ? save : skip`. Genuine empties clear on tab
+      // close (deleteSuggestions).
+      if (docId && suggestions.length > 0) {
         await useSuggestionStore.getState().saveSuggestions(docId, suggestions)
       }
 

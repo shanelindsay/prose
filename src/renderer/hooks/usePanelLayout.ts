@@ -13,6 +13,7 @@ import {
 import type { ImperativePanelHandle } from 'react-resizable-panels'
 import { useChatStore } from '../stores/chatStore'
 import { useFileListStore } from '../stores/fileListStore'
+import { getActiveReviewMode, type ReviewMode } from '../stores/reviewStore'
 
 // --- Constants ---
 
@@ -78,6 +79,47 @@ export function chatOpenDefaultPct(opts: { fileListPct: number; chatMin: number;
   return Math.min(Math.max(pct, opts.chatMin), opts.chatMax)
 }
 
+// Default width for Comment Review on open. Wider than Quick Review's fixed
+// strip: half of the space after the file explorer when the explorer is open, a
+// third of it when closed. (Closed → fileListPct is 0, so this is a third of the
+// window.) Clamped to the chat panel's min/max.
+export function commentReviewPct(opts: {
+  fileListPct: number
+  isFileListOpen: boolean
+  chatMin: number
+  chatMax: number
+}): number {
+  const pct = (100 - opts.fileListPct) / (opts.isFileListOpen ? 2 : 3)
+  return Math.min(Math.max(pct, opts.chatMin), opts.chatMax)
+}
+
+// The chat panel's target width % when it opens, accounting for the active
+// review mode. Single owner so the open-from-closed resize (usePanelLayout) and
+// the enter/switch-review resize (App) agree — otherwise the generic chat
+// default would override the review-specific sizing as the panel opens.
+export function reviewChatWidthPct(opts: {
+  reviewMode: ReviewMode | null
+  fileListPct: number
+  isFileListOpen: boolean
+  windowWidth: number
+  chatMin: number
+  chatMax: number
+}): number {
+  if (opts.reviewMode === 'side-by-side') return 60
+  if (opts.reviewMode === 'comments') {
+    return commentReviewPct({
+      fileListPct: opts.fileListPct,
+      isFileListOpen: opts.isFileListOpen,
+      chatMin: opts.chatMin,
+      chatMax: opts.chatMax
+    })
+  }
+  if (opts.reviewMode === 'quick') {
+    return (QUICK_REVIEW_DEFAULT_PX / opts.windowWidth) * 100
+  }
+  return chatOpenDefaultPct({ fileListPct: opts.fileListPct, chatMin: opts.chatMin, chatMax: opts.chatMax })
+}
+
 // --- Hook ---
 
 interface UsePanelLayoutOpts {
@@ -138,8 +180,18 @@ export function usePanelLayout({ fileListPanelRef, chatPanelRef }: UsePanelLayou
     if (isChatOpen !== prevChatOpen.current) {
       if (isChatOpen) {
         const fileListPct = isFileListOpen ? (fileListPanelRef.current?.getSize() ?? 0) : 0
+        // Review-aware: when the panel opens while a review mode is active, size
+        // it for that review (Comment Review = 50%/33%, Quick = ~370px, etc.)
+        // instead of the generic chat default that would otherwise override it.
         chatPanelRef.current?.resize(
-          chatOpenDefaultPct({ fileListPct, chatMin: panelSizes.chatMin, chatMax: panelSizes.chatMax })
+          reviewChatWidthPct({
+            reviewMode: getActiveReviewMode(),
+            fileListPct,
+            isFileListOpen,
+            windowWidth: window.innerWidth,
+            chatMin: panelSizes.chatMin,
+            chatMax: panelSizes.chatMax
+          })
         )
       } else {
         chatPanelRef.current?.resize(0)

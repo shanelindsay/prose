@@ -7,6 +7,8 @@ import { useEditorInstanceStore } from '../../stores/editorInstanceStore'
 import { useLinkHoverStore } from '../../stores/linkHoverStore'
 import { useReviewStore } from '../../stores/reviewStore'
 import { getAISuggestions } from '../../extensions/ai-suggestions/extension'
+import { getComments } from '../../extensions/comments/extension'
+import { requestCommentReview } from '../editor/AIEditsHistoryPanel'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip'
 import {
   DropdownMenu,
@@ -83,6 +85,22 @@ export function StatusBar() {
     return getAISuggestions(editor).length
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, editor?.state.doc])
+
+  // Open (unresolved) comment threads currently marked in the doc — resolved
+  // threads remove their mark, so live marks == open threads (parallels the
+  // suggestion count above).
+  const commentCount = useMemo(() => {
+    if (!editor) return 0
+    return getComments(editor).length
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor, editor?.state.doc])
+
+  // Clicking the count enters Comment Review (a top-level reviewMode takeover,
+  // the peer of Quick Review). The App-level effect keyed on reviewMode opens
+  // and sizes the chat panel — same path as clicking the suggestion count.
+  const reviewComments = useCallback(() => {
+    requestCommentReview()
+  }, [])
 
   // Live word/char count from editor state, not debounced store (#563).
   // Subscribe to the editor 'update' event so counts refresh on every doc
@@ -194,6 +212,26 @@ export function StatusBar() {
               </TooltipTrigger>
               <TooltipContent side="top">
                 <p>Review pending suggestions</p>
+              </TooltipContent>
+            </Tooltip>
+            <span className="text-muted-foreground/40 mx-1">|</span>
+          </>
+        )}
+
+        {/* Open comment threads */}
+        {commentCount > 0 && (
+          <>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={reviewComments}
+                  className="text-amber-600 dark:text-amber-400 hover:text-amber-500 focus-visible:text-amber-500 focus-visible:outline-none transition-colors cursor-pointer"
+                >
+                  {commentCount} comment{commentCount !== 1 ? 's' : ''}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <p>Review open comment threads</p>
               </TooltipContent>
             </Tooltip>
             <span className="text-muted-foreground/40 mx-1">|</span>

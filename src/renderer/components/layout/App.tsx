@@ -63,7 +63,7 @@ import { handleMissingPath } from '../../lib/stalePath'
 import type { DraftState, SessionState } from '../../lib/persistence'
 import { executeTool } from '../../lib/tools'
 import { useReviewMode, useWasChatOpenBeforeReview, usePreviousChatWidth, useReviewStore, type ReviewMode } from '../../stores/reviewStore'
-import { QUICK_REVIEW_DEFAULT_PX, chatOpenDefaultPct } from '../../hooks/usePanelLayout'
+import { chatOpenDefaultPct, reviewChatWidthPct } from '../../hooks/usePanelLayout'
 
 export function App() {
   useChat() // Initialize stream listeners
@@ -113,10 +113,6 @@ export function App() {
   const prevReviewMode = useRef<ReviewMode | null>(null)
   const prevTabId = useRef(activeTabId)
 
-  // Quick review target: ~370px as a percentage of window width.
-  // Above CHAT_MIN_PX (280) so cards have breathing room; user can still drag smaller.
-  const quickReviewPct = (QUICK_REVIEW_DEFAULT_PX / window.innerWidth) * 100
-
   useEffect(() => {
     const tabChanged = activeTabId !== prevTabId.current
     const prev = prevReviewMode.current
@@ -136,12 +132,20 @@ export function App() {
         }
       }
       setChatOpen(true)
-      if (reviewMode === 'side-by-side') {
-        chatPanelRef.current?.resize(60)
-      } else {
-        // Quick mode: compact sidebar at ~370px
-        chatPanelRef.current?.resize(quickReviewPct)
-      }
+      // Size for the active review mode (side-by-side 60%, Comment Review
+      // 50%/33%, Quick ~370px). Shared with usePanelLayout's open-resize so the
+      // two don't fight when the chat opens from closed.
+      const fileListPct = isFileListOpen ? (fileListPanelRef.current?.getSize() ?? 0) : 0
+      chatPanelRef.current?.resize(
+        reviewChatWidthPct({
+          reviewMode,
+          fileListPct,
+          isFileListOpen,
+          windowWidth: window.innerWidth,
+          chatMin: panelSizes.chatMin,
+          chatMax: panelSizes.chatMax
+        })
+      )
     } else if (!reviewMode && prev) {
       // Exiting review: restore previous state
       if (!wasChatOpenBeforeReview) {
@@ -155,7 +159,7 @@ export function App() {
         )
       }
     }
-  }, [reviewMode, activeTabId, wasChatOpenBeforeReview, previousChatWidth, setChatOpen, chatPanelRef, setPreviousChatWidth, quickReviewPct])
+  }, [reviewMode, activeTabId, wasChatOpenBeforeReview, previousChatWidth, setChatOpen, chatPanelRef, setPreviousChatWidth])
 
   // Update window title based on document state
   const isAutoSaving = settings.autosave?.mode === 'auto' && autosaveActive && !!documentPath

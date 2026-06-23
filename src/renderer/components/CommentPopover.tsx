@@ -19,7 +19,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import type { Editor } from '@tiptap/core'
-import { Trash2, X, Sparkles, CheckCheck, Send, User, MessageSquare, RotateCcw } from 'lucide-react'
+import { Trash2, X, Sparkles, CheckCheck, Send, User, MessageSquare, RotateCcw, Maximize2 } from 'lucide-react'
 import { useChat } from '../hooks/useChat'
 import { useAIConfigured } from '../hooks/useAIConfigured'
 import { aiUnavailableMessage } from '../lib/llm'
@@ -28,9 +28,10 @@ import type { CommentData, CommentReply } from '../extensions/comments/types'
 import { formatAge } from '../types/annotations'
 import { generateId } from '../lib/persistence'
 import { renderMarkdown } from './chat/ChatMessage'
-import { OPEN_COMMENT_EVENT } from './editor/AIEditsHistoryPanel'
+import { OPEN_COMMENT_EVENT, requestCommentReview } from './editor/AIEditsHistoryPanel'
 import { PROSE_ICONS, IconThumb } from '../lib/prose-icons'
 import { useSettingsStore } from '../stores/settingsStore'
+import { useReviewMode } from '../stores/reviewStore'
 import { cn } from '../lib/utils'
 
 const NAV_BAR_HEIGHT = 48
@@ -71,6 +72,9 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
   const replyInputRef = useRef<HTMLTextAreaElement>(null)
   const { processComment, isStreaming } = useChat()
   const ai = useAIConfigured()
+  // When Comment Review is already open, the popover's "Open in Review" expand
+  // is a no-op — grey it out.
+  const inCommentReview = useReviewMode() === 'comments'
 
   // Get persisted comment data (replies + resolved state)
   const pendingComments = useCommentStore((s) => s.pendingComments)
@@ -267,6 +271,14 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
     setPopover((prev) => ({ ...prev, isOpen: false }))
   }, [])
 
+  // Open this thread in Review mode (ChatPanel listens for the event), and
+  // close the popover so the two surfaces don't overlap.
+  const handleReview = useCallback(() => {
+    if (!popover.commentId) return
+    requestCommentReview(popover.commentId)
+    setPopover((prev) => ({ ...prev, isOpen: false }))
+  }, [popover.commentId])
+
   // Add a user reply to the thread
   const handleAddReply = useCallback(() => {
     const text = replyText.trim()
@@ -306,6 +318,9 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
   const quote = currentComment?.markedText?.trim()
   const commentText = currentComment?.comment || popover.commentText
   const commentAge = currentComment?.createdAt ? formatAge(currentComment.createdAt) : ''
+  // The top-level comment can be AI-authored (left via add_comment) — render it
+  // under the Prose identity, like a reply, instead of "You".
+  const commentIsAI = currentComment?.author === 'ai'
   const isThinking = processingId !== null && processingId === popover.commentId && isStreaming
   // Resolved threads collapse their reply list until the user expands it.
   const repliesVisible = !isResolved || showResolvedThread
@@ -380,13 +395,26 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
             )}
           </div>
         )}
-        <button
-          onClick={handleClose}
-          aria-label="Close"
-          className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+        <div className="flex items-center gap-0.5">
+          {!isResolved && (
+            <button
+              onClick={handleReview}
+              disabled={inCommentReview}
+              aria-label="Open in Review"
+              title={inCommentReview ? 'Already in Review' : 'Open in Review'}
+              className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-violet-600 disabled:pointer-events-none disabled:opacity-40 dark:hover:text-violet-400"
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+            </button>
+          )}
+          <button
+            onClick={handleClose}
+            aria-label="Close"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* Body — scrollable. Includes the anchor quote so a long thread (or a long
@@ -407,13 +435,19 @@ export function CommentPopover({ editor }: CommentPopoverProps) {
         {/* Original comment (topic) */}
         <div className="px-4 pt-3.5 pb-1.5">
           <div className="flex items-start gap-2.5 rounded-lg border border-amber-500/20 border-l-[3px] border-l-amber-500 bg-amber-500/[0.07] px-3 py-2.5">
-            <Avatar kind="user" />
+            <Avatar kind={commentIsAI ? 'ai' : 'user'} />
             <div className="min-w-0 flex-1">
               <div className="mb-0.5 flex items-baseline gap-2">
-                <span className="text-xs font-semibold text-foreground">You</span>
+                <span className="text-xs font-semibold text-foreground">{commentIsAI ? 'Prose' : 'You'}</span>
                 {commentAge && <span className="text-[11px] text-muted-foreground">{commentAge}</span>}
               </div>
-              <div className="text-[13px] leading-relaxed text-foreground/90 break-words whitespace-pre-wrap">{commentText}</div>
+              {commentIsAI ? (
+                <div className="prose-chat break-words text-[13px] leading-relaxed text-foreground/90">
+                  {renderMarkdown(commentText, editor)}
+                </div>
+              ) : (
+                <div className="text-[13px] leading-relaxed text-foreground/90 break-words whitespace-pre-wrap">{commentText}</div>
+              )}
             </div>
           </div>
         </div>

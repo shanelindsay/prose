@@ -22,6 +22,12 @@ export interface CommentData {
   markedText: string
   comment: string
   createdAt: number
+  /**
+   * Who authored the top-level comment. 'user' for human-created comments (the
+   * UI path), 'ai' for comments the model leaves via `add_comment`. Missing in
+   * older data → treated as 'user'.
+   */
+  author?: 'user' | 'ai'
   /** 0-based index of which occurrence of markedText this comment anchors to. Missing in older data → treated as 0. */
   occurrenceIndex?: number
   from: number

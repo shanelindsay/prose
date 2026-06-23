@@ -31,7 +31,7 @@ declare module '@tiptap/core' {
       /**
        * Add a comment to the current selection
        */
-      setComment: (attrs: { id: string; comment: string }) => ReturnType
+      setComment: (attrs: { id: string; comment: string; author?: 'user' | 'ai' }) => ReturnType
       /**
        * Remove a comment by ID
        */
@@ -162,6 +162,9 @@ export const Comment = Mark.create<CommentOptions>({
             markedText,
             comment: attrs.comment,
             createdAt: Date.now(),
+            // Default to a human author; `add_comment` passes 'ai' so the thread
+            // renders under the Prose identity instead of "You".
+            author: attrs.author ?? 'user',
             occurrenceIndex,
             from,
             to,
@@ -477,7 +480,8 @@ export function getComments(editor: { state: { doc: { descendants: (fn: (node: {
  * carry) into the canonical shape to persist.
  *
  * - Live marks win for position/markedText/occurrenceIndex.
- * - Stored entries contribute replies + resolved.
+ * - Stored entries contribute replies + resolved + author (the mark doesn't
+ *   carry author, so it must be re-grafted from the store or it resets to user).
  * - Resolved threads have no mark (restoreComments skips them), so they're
  *   appended from the store as history-only entries.
  *
@@ -490,12 +494,25 @@ export function mergeCommentsForPersistence(
   stored: CommentData[]
 ): CommentData[] {
   const liveMarks = getComments(editor)
+
+  // Safety net against transient data loss: if the document currently has NO
+  // live comment marks but the store still holds unresolved threads, the marks
+  // were stripped transiently (a document load or source-mode toggle fires
+  // setContent before the restore re-applies them) — NOT deleted. A tab-switch
+  // save landing in that window would otherwise drop every unresolved thread
+  // (they'd survive the merge only as live marks). Return the stored set
+  // unchanged so the threads can't be lost; the next save with marks present
+  // re-syncs positions. (Mirrors the suggestion save's "never persist empty".)
+  if (liveMarks.length === 0 && stored.some((c) => !c.resolved)) {
+    return stored
+  }
+
   const storedById = new Map(stored.map((c) => [c.id, c]))
   const liveIds = new Set(liveMarks.map((m) => m.id))
 
   const merged = liveMarks.map((m) => {
     const s = storedById.get(m.id)
-    return s ? { ...m, replies: s.replies ?? [], resolved: s.resolved ?? false } : m
+    return s ? { ...m, replies: s.replies ?? [], resolved: s.resolved ?? false, author: s.author ?? 'user' } : m
   })
 
   // Resolved (markless) threads survive only in the store — keep them.

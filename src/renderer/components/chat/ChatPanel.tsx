@@ -10,7 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from '../ui/dropdown-menu'
-import { MessageSquare, History, Plus, Trash2, Sparkles, Info, Loader2, Filter, SlidersHorizontal, Eye, EyeOff, Check, ChevronUp, ChevronDown } from 'lucide-react'
+import { MessageSquare, History, Plus, Trash2, Sparkles, Info, Loader2, Filter, SlidersHorizontal, Eye, EyeOff, Check, ChevronUp, ChevronDown, Maximize2 } from 'lucide-react'
 import { useMenuCustomization } from '../../hooks/useMenuCustomization'
 import type { MenuItemDescriptor } from '../../hooks/useMenuCustomization'
 import { useChatStore } from '../../stores/chatStore'
@@ -22,7 +22,7 @@ import { useSummaryStore } from '../../stores/summaryStore'
 import { getAISuggestions } from '../../extensions/ai-suggestions/extension'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip'
 import { ReviewContainer } from '../review/ReviewContainer'
-import { AIEditsHistoryPanel, activityItemVisible, DEFAULT_ACTIVITY_FILTER, type ActivityFilter } from '../editor/AIEditsHistoryPanel'
+import { AIEditsHistoryPanel, activityItemVisible, DEFAULT_ACTIVITY_FILTER, requestCommentReview, type ActivityFilter } from '../editor/AIEditsHistoryPanel'
 import { useAnnotationStore } from '../../extensions/ai-annotations/store'
 import { useCommentStore } from '../../extensions/comments/store'
 import { MODE_SWITCH_RUN_EVENT } from './toolResultRenderers/RequestModeSwitchResult'
@@ -30,7 +30,7 @@ import { cn } from '../../lib/utils'
 import { useSettingsStore } from '../../stores/settingsStore'
 
 export function ChatPanel() {
-  const { messages, isLoading, isStreaming, sendMessage, stopGeneration, clearMessages } = useChat()
+  const { messages, isLoading, isStreaming, sendMessage, stopGeneration, clearMessages, processComments, processSuggestionReplies, getSuggestionFeedbackCount } = useChat()
   const { settings } = useSettingsStore()
   const scrollRef = useRef<HTMLDivElement>(null)
   const chatTabRef = useRef<HTMLButtonElement>(null)
@@ -46,6 +46,10 @@ export function ChatPanel() {
     (key: keyof ActivityFilter) => setActivityFilter((f) => ({ ...f, [key]: !f[key] })),
     []
   )
+  // Comment Review is now a top-level takeover (reviewMode === 'comments',
+  // rendered by ReviewContainer via the early return below), not a child of this
+  // Activity tab — so it and Quick Review toggle through one mode slot.
+  // requestCommentReview() is the single entry point.
 
   const {
     conversations,
@@ -104,6 +108,8 @@ export function ChatPanel() {
 
   // There's something to filter whenever any annotation or comment exists.
   const hasActivity = annotations.length > 0 || pendingComments.length > 0
+  // Open (unresolved) threads are the Review set.
+  const openThreadCount = useMemo(() => pendingComments.filter((c) => !c.resolved).length, [pendingComments])
   // Any category turned off means the filter is engaged (tints the funnel).
   const isFiltering = Object.values(activityFilter).some((v) => !v)
 
@@ -120,6 +126,13 @@ export function ChatPanel() {
     return getAISuggestions(editor).length
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, editor?.state.doc])
+
+  // Suggestions that have user feedback awaiting a Process pass.
+  const suggestionFeedbackCount = useMemo(() => {
+    if (!editor) return 0
+    return getSuggestionFeedbackCount()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor, editor?.state.doc, getSuggestionFeedbackCount])
 
   // Filter out hidden messages for display
   const visibleMessages = messages.filter((m) => !m.hidden)
@@ -548,6 +561,7 @@ export function ChatPanel() {
           <AIEditsHistoryPanel
             filter={activityFilter}
             onShowAll={() => setActivityFilter(DEFAULT_ACTIVITY_FILTER)}
+            onReviewThread={requestCommentReview}
           />
         ) : (
           <>
@@ -625,16 +639,54 @@ export function ChatPanel() {
               )}
             </div>
 
-            {/* Suggestion review chip */}
-            {suggestionCount > 0 && (
-              <div className="px-4 py-3">
-                <button
-                  onClick={() => useReviewStore.getState().setReviewMode('quick')}
-                  className="w-full flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium bg-violet-500/10 hover:bg-violet-500/20 border border-violet-500/30 text-violet-600 dark:text-violet-400 transition-colors"
-                >
-                  <Sparkles className="h-3 w-3" />
-                  Review {suggestionCount} suggestion{suggestionCount !== 1 ? 's' : ''}
-                </button>
+            {/* Action chips — share one row, expand/shrink to fit. Each shows
+                only when it has work to offer. */}
+            {(openThreadCount > 0 || suggestionCount > 0 || suggestionFeedbackCount > 0) && (
+              <div className="flex flex-wrap items-stretch gap-2 px-4 py-3">
+                {openThreadCount > 0 && (
+                  <ActionChip
+                    icon={<Sparkles className="h-3.5 w-3.5 shrink-0" />}
+                    verb="Process"
+                    noun={openThreadCount === 1 ? 'comment' : 'comments'}
+                    count={openThreadCount}
+                    variant="violet"
+                    title={`Run the AI over all ${openThreadCount} open comment threads`}
+                    onClick={() => processComments()}
+                  />
+                )}
+                {openThreadCount > 0 && (
+                  <ActionChip
+                    icon={<MessageSquare className="h-3.5 w-3.5 shrink-0" />}
+                    verb="Review"
+                    noun={openThreadCount === 1 ? 'comment' : 'comments'}
+                    count={openThreadCount}
+                    variant="neutral"
+                    title={`Review ${openThreadCount} open comment ${openThreadCount === 1 ? 'thread' : 'threads'} one at a time`}
+                    onClick={() => requestCommentReview()}
+                  />
+                )}
+                {suggestionCount > 0 && (
+                  <ActionChip
+                    icon={<Maximize2 className="h-3.5 w-3.5 shrink-0" />}
+                    verb="Review"
+                    noun={suggestionCount === 1 ? 'suggestion' : 'suggestions'}
+                    count={suggestionCount}
+                    variant="neutral"
+                    title={`Review ${suggestionCount} AI suggestion${suggestionCount === 1 ? '' : 's'}`}
+                    onClick={() => useReviewStore.getState().setReviewMode('quick')}
+                  />
+                )}
+                {suggestionFeedbackCount > 0 && (
+                  <ActionChip
+                    icon={<Sparkles className="h-3.5 w-3.5 shrink-0" />}
+                    verb="Process"
+                    noun="feedback"
+                    count={suggestionFeedbackCount}
+                    variant="violet"
+                    title={`Send your feedback on ${suggestionFeedbackCount} suggestion${suggestionFeedbackCount === 1 ? '' : 's'} to the AI`}
+                    onClick={() => processSuggestionReplies()}
+                  />
+                )}
               </div>
             )}
 
@@ -649,6 +701,46 @@ export function ChatPanel() {
         )}
       </div>
     </div>
+  )
+}
+
+/** A shared-width action chip above the input (Process Comments / Review
+ *  Comments / Review Suggestions). flex-1 so several share the row; the label
+ *  truncates when space is tight, the icon + count stay. */
+function ActionChip({
+  icon,
+  verb,
+  noun,
+  count,
+  variant,
+  title,
+  onClick,
+}: {
+  icon: React.ReactNode
+  verb: string
+  /** Final noun, already pluralized by the caller (e.g. "comments", "feedback"). */
+  noun: string
+  count: number
+  variant: 'neutral' | 'violet'
+  title?: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className={cn(
+        'flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[11px] font-medium transition-colors',
+        variant === 'violet'
+          ? 'border-violet-500/30 bg-violet-500/10 text-violet-600 hover:bg-violet-500/20 dark:text-violet-400'
+          : 'border-border bg-muted/40 text-foreground/80 hover:bg-muted'
+      )}
+    >
+      {icon}
+      <span className="truncate">
+        {verb} {count} {noun}
+      </span>
+    </button>
   )
 }
 

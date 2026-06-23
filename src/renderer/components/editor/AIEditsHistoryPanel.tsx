@@ -16,9 +16,11 @@
  */
 
 import { useCallback, useMemo, useState } from 'react'
-import { Wand2, Crosshair, X, MessageSquare, CheckCheck, Clock, ArrowUpRight, User, Eye, EyeOff } from 'lucide-react'
+import { Wand2, Crosshair, X, MessageSquare, CheckCheck, Clock, ArrowUpRight, User, Eye, EyeOff, Maximize2 } from 'lucide-react'
 import { useAnnotationStore } from '../../extensions/ai-annotations/store'
 import { useCommentStore } from '../../extensions/comments/store'
+import { OPEN_COMMENT_EVENT } from '../../extensions/comments'
+import { useReviewStore } from '../../stores/reviewStore'
 import { useEditorStore } from '../../stores/editorStore'
 import { useEditorInstanceStore } from '../../stores/editorInstanceStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -47,8 +49,21 @@ export const DEFAULT_ACTIVITY_FILTER: ActivityFilter = {
   superseded: true,
 }
 
-/** Event the Activity panel fires to open a thread's popover on its mark. */
-export const OPEN_COMMENT_EVENT = 'prose:open-comment'
+// Re-exported for existing importers (e.g. CommentPopover). Source of truth is
+// the comments extension module, so chat tool-results can import it without a cycle.
+export { OPEN_COMMENT_EVENT }
+
+/**
+ * Enter Comment Review (a top-level reviewMode takeover), optionally focused on
+ * a thread. The single entry point used by the status-bar comment count, the
+ * "Review comments" chip, and the card/popover expand icons. Routing through the
+ * review store (rather than a DOM event) makes Comment Review a peer of Quick
+ * Review: they share one mode slot, so they toggle cleanly and the App-level
+ * panel-open/resize effect treats them identically.
+ */
+export function requestCommentReview(id?: string): void {
+  useReviewStore.getState().enterCommentReview(id)
+}
 
 // Unified activity item for the mixed feed
 type ActivityItem =
@@ -84,9 +99,11 @@ interface AIEditsHistoryPanelProps {
   filter: ActivityFilter
   /** Reset the filter to show everything (wired to the filtered-empty CTA). */
   onShowAll: () => void
+  /** Enter comment Review mode focused on a specific thread (the expand icon). */
+  onReviewThread: (id: string) => void
 }
 
-export function AIEditsHistoryPanel({ filter, onShowAll }: AIEditsHistoryPanelProps) {
+export function AIEditsHistoryPanel({ filter, onShowAll, onReviewThread }: AIEditsHistoryPanelProps) {
   const annotations = useAnnotationStore((s) => s.annotations)
   const removeAnnotation = useAnnotationStore((s) => s.removeAnnotation)
   const pendingComments = useCommentStore((s) => s.pendingComments)
@@ -160,6 +177,7 @@ export function AIEditsHistoryPanel({ filter, onShowAll }: AIEditsHistoryPanelPr
                 onJumpAnnotation={handleJump}
                 onRemoveAnnotation={handleRemoveAnnotation}
                 onRemoveComment={handleRemoveComment}
+                onReviewThread={onReviewThread}
               />
             ))}
           </div>
@@ -207,6 +225,7 @@ interface ActivityDateGroupProps {
   onJumpAnnotation: (annotation: AIAnnotation) => void
   onRemoveAnnotation: (id: string) => void
   onRemoveComment: (id: string) => void
+  onReviewThread: (id: string) => void
 }
 
 function ActivityDateGroupView({
@@ -215,13 +234,16 @@ function ActivityDateGroupView({
   onJumpAnnotation,
   onRemoveAnnotation,
   onRemoveComment,
+  onReviewThread,
 }: ActivityDateGroupProps) {
   return (
     <div>
       <div className="sticky top-0 z-10 border-b border-border/40 bg-background px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
         {label}
       </div>
-      <div className="divide-y divide-border/30">
+      {/* Contained cards with inter-card gaps (the panel bg shows through) —
+          hairline separators disappeared on the dark surface. 12px side gutter. */}
+      <div className="flex flex-col gap-[9px] px-3 pb-2 pt-1.5">
         {items.map((item) =>
           item.kind === 'annotation' ? (
             <HistoryEntryRow
@@ -235,6 +257,7 @@ function ActivityDateGroupView({
               key={item.comment.id}
               comment={item.comment}
               onRemove={onRemoveComment}
+              onReview={onReviewThread}
             />
           )
         )}
@@ -269,8 +292,8 @@ function HistoryEntryRow({ annotation, onJump, onRemove }: HistoryEntryRowProps)
       }}
       title={detached ? 'This edit was later replaced — history record only' : 'Jump to in document'}
       className={cn(
-        'group px-4 py-3 transition-colors focus:bg-muted/40 focus:outline-none',
-        detached ? 'cursor-default opacity-60 hover:opacity-100' : 'cursor-pointer hover:bg-muted/40'
+        'group rounded-[10px] border border-border bg-muted/50 px-3 py-3 transition-colors hover:border-muted-foreground/30 hover:bg-muted/[0.85] focus:border-muted-foreground/40 focus:outline-none',
+        detached ? 'cursor-default opacity-60 hover:opacity-100' : 'cursor-pointer'
       )}
     >
       <div className="mb-2 flex items-center gap-2">
@@ -342,15 +365,18 @@ function TypeBadge({ type }: { type: AnnotationType }) {
 interface CommentActivityRowProps {
   comment: CommentData
   onRemove: (id: string) => void
+  onReview: (id: string) => void
 }
 
-function CommentActivityRow({ comment, onRemove }: CommentActivityRowProps) {
+function CommentActivityRow({ comment, onRemove, onReview }: CommentActivityRowProps) {
   const [expanded, setExpanded] = useState(false)
   const replies = comment.replies ?? []
   const category = commentCategory(comment)
   const isResolved = category === 'resolved'
   const last = replies.length > 0 ? replies[replies.length - 1] : null
   const hasMark = !isResolved // resolved threads remove their mark from the doc
+  // The top-level comment may be AI-authored (left via add_comment).
+  const commentIsAI = comment.author === 'ai'
 
   const openInDocument = (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -361,15 +387,32 @@ function CommentActivityRow({ comment, onRemove }: CommentActivityRowProps) {
     <div
       onClick={() => setExpanded((v) => !v)}
       className={cn(
-        'group cursor-pointer px-4 py-3 transition-all hover:bg-muted/40',
+        'group cursor-pointer rounded-[10px] border border-border bg-muted/50 px-3 py-3 transition-all hover:border-muted-foreground/30 hover:bg-muted/[0.85]',
         // Resolved threads read quiet until clicked open (then full brightness).
         isResolved && !expanded && 'opacity-60 hover:opacity-100'
       )}
     >
-      {/* Badge + time + remove */}
+      {/* Badge + time + review + remove */}
       <div className="mb-2 flex items-center gap-2">
         <ThreadBadge category={category} />
         <span className="ml-auto shrink-0 text-xs text-muted-foreground/60">{formatAge(comment.createdAt)}</span>
+        {!isResolved && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onReview(comment.id)
+                }}
+                className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-all hover:bg-muted hover:text-violet-600 group-hover:opacity-100 dark:hover:text-violet-400"
+                aria-label="Review this thread"
+              >
+                <Maximize2 className="h-3.5 w-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="left">Open in Review</TooltipContent>
+          </Tooltip>
+        )}
         <Tooltip>
           <TooltipTrigger asChild>
             <button
@@ -397,17 +440,23 @@ function CommentActivityRow({ comment, onRemove }: CommentActivityRowProps) {
       {!expanded ? (
         // Collapsed: comment (1 line) + last reply / awaiting (2 lines)
         <div className="flex flex-col gap-1.5">
-          <PreviewRow kind="user" text={comment.comment} clamp={1} />
+          <PreviewRow kind={commentIsAI ? 'ai' : 'user'} text={comment.comment} clamp={1} markdown={commentIsAI} />
           {last ? (
             <PreviewRow kind={last.author === 'ai' ? 'ai' : 'user'} text={last.text} clamp={2} markdown={last.author === 'ai'} />
           ) : !isResolved ? (
-            <PreviewRow kind="pending" text="Awaiting AI reply…" clamp={1} />
+            <PreviewRow kind="pending" text="Awaiting reply…" clamp={1} />
           ) : null}
         </div>
       ) : (
         // Expanded: full thread + open-in-document
         <div className="flex flex-col gap-2.5">
-          <FullRow kind="user" name="you" time={formatAge(comment.createdAt)} text={comment.comment} />
+          <FullRow
+            kind={commentIsAI ? 'ai' : 'user'}
+            name={commentIsAI ? 'Prose' : 'you'}
+            time={formatAge(comment.createdAt)}
+            text={comment.comment}
+            markdown={commentIsAI}
+          />
           {replies.map((r) => (
             <FullRow
               key={r.id}

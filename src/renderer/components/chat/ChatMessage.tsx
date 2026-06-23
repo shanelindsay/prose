@@ -7,6 +7,7 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import { CopyButton } from '../ui/copy-button'
 import { jumpToLine } from '../../lib/lineNavigation'
 import { getAISuggestions } from '../../extensions/ai-suggestions/extension'
+import { OPEN_COMMENT_EVENT } from '../../extensions/comments'
 import { renderToolResult } from './toolResultRenderers'
 import { PROSE_ICONS, IconThumb } from '../../lib/prose-icons'
 
@@ -552,13 +553,27 @@ export function ChatMessage({ message, isStreaming, onRetry }: ChatMessageProps)
                       )
                     }
                     if (part.type === 'tool-result' || part.type === 'tool-inline') {
-                      // For suggest_edit results, parse suggestionId and make clickable
+                      // Make the result card a link to what it produced: a
+                      // suggest_edit jumps to its suggestion, an add_comment opens
+                      // its comment thread on the marked text. (Clicking the body;
+                      // the expand chevron stops propagation — see ToolCallIndicator.)
                       let onClickHandler: (() => void) | undefined
                       if (part.name === 'suggest_edit' && part.success && part.content) {
                         try {
                           const parsed = JSON.parse(part.content.replace(/```json\n?|\n?```/g, '').trim())
                           if (parsed.suggestionId) {
                             onClickHandler = () => scrollToSuggestion(parsed.suggestionId)
+                          }
+                        } catch {
+                          // Not JSON, ignore
+                        }
+                      } else if (part.name === 'add_comment' && part.success && part.content) {
+                        try {
+                          const parsed = JSON.parse(part.content.replace(/```json\n?|\n?```/g, '').trim())
+                          if (parsed.id) {
+                            const commentId = parsed.id as string
+                            onClickHandler = () =>
+                              window.dispatchEvent(new CustomEvent(OPEN_COMMENT_EVENT, { detail: { id: commentId } }))
                           }
                         } catch {
                           // Not JSON, ignore
