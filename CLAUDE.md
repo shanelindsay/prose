@@ -227,7 +227,7 @@ Zustand stores in `src/renderer/stores/`:
 - `chatStore` - Chat messages, conversations, streaming state, panel visibility
 - `settingsStore` - App settings (theme, LLM config, editor preferences)
 - `fileListStore` - File explorer state and directory listing
-- `reviewStore` - AI review mode (quick/side-by-side), suggestion navigation
+- `reviewStore` - Review mode (`quick`/`side-by-side` for AI edits, `comments` for comment threads), suggestion navigation
 - `summaryStore` - AI-generated document summaries, staleness tracking
 - `commandHistoryStore` - Per-tool argument history, persisted to IndexedDB
 - `linkHoverStore` - Currently hovered link URL for tooltip
@@ -255,6 +255,20 @@ Client-side persistence uses IndexedDB (`src/renderer/lib/persistence.ts`). When
 - **Always bump `DB_VERSION`** when adding/removing object stores. The `onupgradeneeded` callback only runs when the version increases—reopening at the same version won't create missing stores.
 - **Upgrades can be blocked** if the database is open in another tab. The upgrade waits until all connections close, but users may not notice. New stores may silently fail to create.
 - **Test fresh installs and upgrades** separately. A fresh install always gets the latest schema, but existing users need the migration path.
+
+**Annotation persistence invariant (comments / AI suggestions):** marks and
+decorations are NOT serialized into the `.md`; they live in IndexedDB keyed by
+`documentId` and are re-applied on load by matching the marked text. Two rules
+keep them safe (a violation of either caused real data loss):
+1. **Never persist an empty/stripped set from a routine save.** A document load
+   or source-mode toggle strips the marks for a moment and fires a transaction —
+   saving in that window writes `[]` and wipes the store. Routine saves (the
+   debounced transaction save, `useTabs` tab-switch save, `mergeCommentsForPersistence`)
+   skip empty/markless writes; genuine empties persist only via tab-close/delete.
+2. **Restore must wait for content.** On reload the file loads asynchronously, so
+   restore is gated on `editor.state.doc.textContent` being present (with
+   `document.content` in the effect deps) — restoring against an empty doc would
+   find no anchor text and consume the one-shot restore flag, losing the marks.
 
 ### LLM Integration
 
@@ -291,6 +305,11 @@ The editor uses TipTap (ProseMirror-based) with markdown support via `tiptap-mar
 AI-generated edits can be reviewed before accepting. Two modes:
 - **Quick review** — inline diff with per-change accept/reject controls
 - **Side-by-side** — full diff view with navigation
+
+Comment threads have their own top-level review surface, **Comment Review**
+(`CommentReviewPanel`) — a peer of Quick Review managed through the same
+`reviewStore` mode slot (`reviewMode === 'comments'`), so the two are mutually
+exclusive and toggle cleanly. Prev/next navigation wraps in all review panels.
 
 Managed by `reviewStore` and components in `src/renderer/components/review/`.
 
