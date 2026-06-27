@@ -72,7 +72,7 @@ async function openProjectsView(): Promise<void> {
   if (await btn.isVisible({ timeout: 1_000 }).catch(() => false)) {
     await btn.click()
   } else {
-    await page.locator('[aria-label="More views"]').click()
+    await page.locator('[data-testid="file-list-panel"] [aria-label="More options"]').click()
     await page.getByRole('menuitem', { name: 'Projects' }).click()
   }
   await page.waitForTimeout(400)

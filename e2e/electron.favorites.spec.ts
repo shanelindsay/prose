@@ -33,6 +33,19 @@ let qaDocDir: string
 const DOC_NAME = 'qa-favorites-test.md'
 const DOC_DISPLAY = 'qa-favorites-test'
 
+// View toggles live on the header bar OR overflow into the ⋯ menu depending on
+// panel width (CustomizableToolbar, #701). Click the bar button when present,
+// otherwise open ⋯ and pick the menu item.
+async function selectFileView(label: string): Promise<void> {
+  const direct = page.locator(`[data-testid="file-list-panel"] [aria-label="${label}"]`)
+  if (await direct.isVisible({ timeout: 1_000 }).catch(() => false)) {
+    await direct.click()
+  } else {
+    await page.locator('[data-testid="file-list-panel"] [aria-label="More options"]').click()
+    await page.getByRole('menuitem', { name: label }).click()
+  }
+}
+
 test.beforeAll(async () => {
   test.setTimeout(90_000)
 
@@ -79,7 +92,7 @@ test.describe('Electron — Favorites context menu (PROSE-J regression)', () => 
     const panel = page.locator(selectors.fileListPanel)
 
     // Switch to the Files tab (folder view) so the FileTree is rendered
-    await page.click(selectors.filesButton)
+    await selectFileView('Files')
 
     // Wait for the test document to appear in the file tree
     await expect(panel.getByText(DOC_DISPLAY)).toBeVisible({ timeout: 10_000 })
@@ -107,7 +120,7 @@ test.describe('Electron — Favorites context menu (PROSE-J regression)', () => 
 
   test('Favorited file appears in the Favorites view', async () => {
     // Switch to the Favorites tab
-    await page.click('[aria-label="Favorites"]')
+    await selectFileView('Favorites')
 
     const panel = page.locator(selectors.fileListPanel)
 
@@ -123,7 +136,7 @@ test.describe('Electron — Favorites context menu (PROSE-J regression)', () => 
     page.on('pageerror', (err) => pageErrors.push(err))
 
     // Go back to Files view
-    await page.click(selectors.filesButton)
+    await selectFileView('Files')
 
     const panel = page.locator(selectors.fileListPanel)
     await expect(panel.getByText(DOC_DISPLAY)).toBeVisible({ timeout: 10_000 })
@@ -143,7 +156,7 @@ test.describe('Electron — Favorites context menu (PROSE-J regression)', () => 
   })
 
   test('Favorites view is empty after removal', async () => {
-    await page.click('[aria-label="Favorites"]')
+    await selectFileView('Favorites')
     const panel = page.locator(selectors.fileListPanel)
     await expect(panel.getByText('No favorites yet.')).toBeVisible({ timeout: 5_000 })
     await expect(panel.getByText(DOC_DISPLAY)).not.toBeVisible()

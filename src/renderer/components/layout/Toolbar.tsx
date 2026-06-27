@@ -631,7 +631,7 @@ export function Toolbar() {
 
   return (
     <>
-      <div className={`flex h-12 items-center justify-between border-b border-border bg-background pr-4 ${leftPadding} app-region-drag`}>
+      <div data-testid="main-toolbar" className={`flex h-12 items-center justify-between border-b border-border bg-background pr-4 ${leftPadding} app-region-drag`}>
         {/* Left: File explorer toggle */}
         <div className="flex items-center gap-2 app-region-no-drag">
           <Tooltip>

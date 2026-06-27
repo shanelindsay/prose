@@ -95,7 +95,7 @@ async function selectView(view: 'projects' | 'favorites'): Promise<void> {
   if (await btn.isVisible({ timeout: 1_000 }).catch(() => false)) {
     await btn.click()
   } else {
-    const more = page.locator('[aria-label="More views"]')
+    const more = page.locator('[data-testid="file-list-panel"] [aria-label="More options"]')
     if (await more.isVisible({ timeout: 1_000 }).catch(() => false)) {
       await more.click()
       await page.getByRole('menuitem', { name: label }).click()

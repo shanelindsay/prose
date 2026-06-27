@@ -104,7 +104,7 @@ async function openRecentView(): Promise<void> {
     return
   }
 
-  await page.getByRole('button', { name: 'More views' }).click()
+  await page.locator('[data-testid="file-list-panel"] [aria-label="More options"]').click()
   await page.getByRole('menuitem', { name: 'Recent files' }).click()
 }
 
