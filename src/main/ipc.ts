@@ -998,11 +998,13 @@ export function setupIpcHandlers(): void {
 
         console.log('[LLM:stream] Creating Anthropic stream with tools:', anthropicTools.map(t => t.name))
 
-        // Extended thinking — adaptive mode, capability-gated per model.
-        // Only Opus 4.7+, Opus 4.8, and Fable 5 support it; Sonnet/Haiku return
-        // HTTP 400 if *any* thinking param is sent. `display: "summarized"` is
-        // mandatory — the default "omitted" yields an empty thinking string.
-        // Depth is controlled by output_config.effort, not a token budget.
+        // Extended thinking — adaptive mode, capability-gated by
+        // supportsAdaptiveThinking() (THINKING_CAPABLE_PREFIXES in models.ts:
+        // Sonnet 4.6, Opus 4.6+, and Fable 5). Models outside that list (e.g.
+        // Haiku) return HTTP 400 if *any* thinking param is sent. `display:
+        // "summarized"` is mandatory — the default "omitted" yields an empty
+        // thinking string. Depth is controlled by output_config.effort, not a
+        // token budget.
         //
         // Disabling must be EXPLICIT: on adaptive-thinking models the param
         // defaults to on, so simply omitting `thinking` leaves the model
