@@ -30,7 +30,7 @@
 
 import { useState, useCallback, Fragment } from 'react'
 import type { ReactNode } from 'react'
-import { Eye, EyeOff, ChevronUp, ChevronDown, SlidersHorizontal, Check } from 'lucide-react'
+import { Eye, EyeOff, ChevronUp, ChevronDown, SlidersHorizontal, Check, GripVertical } from 'lucide-react'
 import {
   DropdownMenuContent,
   DropdownMenuItem,
@@ -79,7 +79,7 @@ export function CustomizableMenu({ menuId, items, align = 'end', className }: Pr
     label: i.label ?? i.id,
   }))
 
-  const { visibleIds, hiddenIds, orderedAllIds, toggleHidden, moveUp, moveDown } =
+  const { visibleIds, hiddenIds, orderedAllIds, toggleHidden, moveUp, moveDown, save } =
     useMenuCustomization(menuId, descriptors)
 
   const itemById = new Map(customizableItems.map((i) => [i.id, i]))
@@ -89,6 +89,28 @@ export function CustomizableMenu({ menuId, items, align = 'end', className }: Pr
     e.preventDefault()
     setIsEditing(true)
   }, [])
+
+  // --- Drag-to-reorder (edit mode) ---
+  // Native HTML5 DnD over the wiggle rows; the up/down chevrons remain as the
+  // keyboard-accessible reorder path. Dropping a row onto another moves it to
+  // that row's slot, pushing the rest down.
+  const [draggingId, setDraggingId] = useState<string | null>(null)
+  const [dragOverId, setDragOverId] = useState<string | null>(null)
+
+  const handleDrop = useCallback(
+    (targetId: string) => {
+      setDragOverId(null)
+      const sourceId = draggingId
+      setDraggingId(null)
+      if (!sourceId || sourceId === targetId) return
+      const next = orderedAllIds.filter((x) => x !== sourceId)
+      const targetIdx = next.indexOf(targetId)
+      if (targetIdx === -1) return
+      next.splice(targetIdx, 0, sourceId)
+      save(next, hiddenIds)
+    },
+    [draggingId, orderedAllIds, hiddenIds, save]
+  )
 
   // --- Edit mode ---
   if (isEditing) {
@@ -112,12 +134,31 @@ export function CustomizableMenu({ menuId, items, align = 'end', className }: Pr
           return (
             <div
               key={id}
+              draggable
+              onDragStart={(e) => {
+                setDraggingId(id)
+                e.dataTransfer.effectAllowed = 'move'
+                // Firefox requires data to be set for a drag to initiate.
+                e.dataTransfer.setData('text/plain', id)
+              }}
+              onDragOver={(e) => {
+                e.preventDefault()
+                e.dataTransfer.dropEffect = 'move'
+                if (dragOverId !== id) setDragOverId(id)
+              }}
+              onDrop={(e) => { e.preventDefault(); handleDrop(id) }}
+              onDragEnd={() => { setDraggingId(null); setDragOverId(null) }}
               className={cn(
-                'flex items-center gap-1 px-1 py-0.5 rounded-sm',
-                isHidden && 'opacity-40'
+                'flex items-center gap-1 px-1 py-0.5 rounded-sm cursor-grab active:cursor-grabbing',
+                isHidden && 'opacity-40',
+                draggingId === id && 'opacity-30',
+                dragOverId === id && draggingId !== id && 'ring-1 ring-primary/50 bg-accent/60'
               )}
             >
-              {/* Up / down reorder buttons */}
+              {/* Drag handle cue — the whole row is draggable */}
+              <GripVertical className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+
+              {/* Up / down reorder buttons (keyboard-accessible reorder) */}
               <div className="flex flex-col shrink-0 gap-0">
                 <button
                   type="button"

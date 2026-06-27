@@ -47,10 +47,12 @@ export function useMenuCustomization(menuId: string, allItems: MenuItemDescripto
   }, [allItems, saved])
 
   const save = useCallback(
-    (order: string[], hidden: string[]) => {
-      setMenuCustomization(menuId, { order, hidden })
+    (order: string[], hidden: string[], barCount?: number) => {
+      // barCount is the user-positioned bar/menu boundary (toolbar only). When a
+      // caller doesn't pass it (e.g. a plain hide/reorder), preserve the saved value.
+      setMenuCustomization(menuId, { order, hidden, barCount: barCount ?? saved?.barCount })
     },
-    [menuId, setMenuCustomization]
+    [menuId, setMenuCustomization, saved]
   )
 
   /** Toggle a single item's hidden state. */
@@ -88,5 +90,5 @@ export function useMenuCustomization(menuId: string, allItems: MenuItemDescripto
     [orderedAllIds, hiddenIds, save]
   )
 
-  return { visibleIds, hiddenIds, orderedAllIds, toggleHidden, moveUp, moveDown, save }
+  return { visibleIds, hiddenIds, orderedAllIds, toggleHidden, moveUp, moveDown, save, barCount: saved?.barCount }
 }

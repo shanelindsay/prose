@@ -145,7 +145,7 @@ interface SettingsBase {
    * Keys are stable menu IDs (e.g. 'toolbar-more', 'files-overflow', 'chat-history').
    * Unknown/new item IDs append visible so upgrades never hide new menu items.
    */
-  menuCustomization?: Record<string, { order: string[]; hidden: string[] }>
+  menuCustomization?: Record<string, { order: string[]; hidden: string[]; barCount?: number }>
 }
 
 /**

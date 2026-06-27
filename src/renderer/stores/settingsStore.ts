@@ -143,7 +143,7 @@ interface SettingsState {
   removeFavorite: (id: string) => void
   updateFavorite: (id: string, patch: Partial<Omit<Favorite, 'id'>>) => void
   // Menu customization
-  setMenuCustomization: (menuId: string, config: { order: string[]; hidden: string[] }) => void
+  setMenuCustomization: (menuId: string, config: { order: string[]; hidden: string[]; barCount?: number }) => void
 }
 
 const defaultSettings: Settings = {
