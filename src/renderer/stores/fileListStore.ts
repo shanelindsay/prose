@@ -609,14 +609,22 @@ export const useFileListStore = create<FileListState>()(
 
     toggleSelectFile: (path) => set((state) => {
       const next = new Set(state.selectedPaths)
-      if (next.has(path)) {
+      const wasSelected = next.has(path)
+      if (wasSelected) {
         next.delete(path)
       } else {
         next.add(path)
       }
-      // Last toggled path becomes anchor and primary selection
-      const primary = next.size > 0 ? path : null
-      return { selectedPaths: next, selectedPath: primary, anchorPath: path }
+      if (!wasSelected) {
+        // Adding: the newly selected path becomes primary + range anchor.
+        return { selectedPaths: next, selectedPath: path, anchorPath: path }
+      }
+      // Deselecting: the removed path must NOT linger as primary/anchor, or the
+      // `selectedPath === item.path` highlight keeps the row lit after it leaves
+      // the set (the Cmd+Click toggle-off bug). Fall back to the most-recently
+      // added remaining selection, or nothing when the set is now empty.
+      const remaining = next.size > 0 ? Array.from(next)[next.size - 1] : null
+      return { selectedPaths: next, selectedPath: remaining, anchorPath: remaining }
     }),
 
     rangeSelectTo: (path, visiblePaths) => set((state) => {
