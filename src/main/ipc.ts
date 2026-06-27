@@ -1000,13 +1000,22 @@ export function setupIpcHandlers(): void {
 
         // Extended thinking — adaptive mode, capability-gated per model.
         // Only Opus 4.7+, Opus 4.8, and Fable 5 support it; Sonnet/Haiku return
-        // HTTP 400 if the param is sent. `display: "summarized"` is mandatory —
-        // the default "omitted" yields an empty thinking string. Depth is
-        // controlled by output_config.effort, not a token budget.
-        const thinkingEnabled = request.thinking !== false && supportsAdaptiveThinking(request.model)
-        const thinkingParam = thinkingEnabled
-          ? { type: 'adaptive' as const, display: 'summarized' as const }
-          : undefined
+        // HTTP 400 if *any* thinking param is sent. `display: "summarized"` is
+        // mandatory — the default "omitted" yields an empty thinking string.
+        // Depth is controlled by output_config.effort, not a token budget.
+        //
+        // Disabling must be EXPLICIT: on adaptive-thinking models the param
+        // defaults to on, so simply omitting `thinking` leaves the model
+        // thinking anyway (the user toggling it off had no effect). We send
+        // { type: 'disabled' } to actually suppress it — but only for models
+        // that accept the param at all; non-capable models must omit it.
+        const modelSupportsThinking = supportsAdaptiveThinking(request.model)
+        const thinkingEnabled = request.thinking !== false && modelSupportsThinking
+        const thinkingParam = !modelSupportsThinking
+          ? undefined
+          : thinkingEnabled
+            ? { type: 'adaptive' as const, display: 'summarized' as const }
+            : { type: 'disabled' as const }
 
         const maxTokens = request.maxTokens || 16000
 

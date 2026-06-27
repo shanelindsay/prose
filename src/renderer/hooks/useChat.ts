@@ -688,7 +688,12 @@ export function useChat() {
           tools,
           maxToolRoundtrips: 5,
           maxTokens: 16000,
-          thinking: thinkingEnabled
+          // Read fresh at send time, not from the destructured render value:
+          // sendMessage is a useCallback whose deps omit thinkingEnabled, so the
+          // closed-over copy goes stale the moment the user toggles thinking and
+          // sends without an intervening recreate (same getState() pattern as
+          // toolMode above and the tool-loop continuation). (#700)
+          thinking: useChatStore.getState().thinkingEnabled
         })
       } catch (error) {
         console.error('[Chat] Error:', error)
