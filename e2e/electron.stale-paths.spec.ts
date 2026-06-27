@@ -170,7 +170,7 @@ test.describe('Electron - stale file path recovery', () => {
     // Wait for the dirty indicator to confirm the edit registered before opening the save menu.
     // Autosave is off in this test profile, so "unsaved" appears in the status bar once isDirty=true.
     await expect(page.getByText('unsaved')).toBeVisible({ timeout: 5_000 })
-    await page.getByRole('button', { name: 'More options' }).click()
+    await page.locator('[data-testid="main-toolbar"] [aria-label="More options"]').click()
     await page.getByRole('menuitem', { name: 'Save', exact: true }).click()
 
     await expect.poll(() => existsSync(relocatedPath), { timeout: 5_000 }).toBe(true)

@@ -32,7 +32,10 @@ export const selectors = {
   sourceMode: '[aria-label="Source mode"], [aria-label="WYSIWYG mode"]',
   hideAnnotations:
     '[aria-label="Hide AI annotations"], [aria-label="Show AI annotations"]',
-  moreOptions: '[aria-label="More options"]',
+  // Scoped to the main toolbar: the file-explorer header now renders its own
+  // "More options" (⋯) trigger too (CustomizableToolbar, #701), so an unscoped
+  // selector is ambiguous whenever the file panel is open.
+  moreOptions: '[data-testid="main-toolbar"] [aria-label="More options"]',
   toggleChat: '[aria-label="Show chat"], [aria-label="Hide chat"]',
 
   // Editor modes
