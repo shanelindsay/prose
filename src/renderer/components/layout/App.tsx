@@ -59,10 +59,11 @@ import {
   deleteConversations
 } from '../../lib/persistence'
 import { extractFirstH1 } from '../../lib/markdown'
+import { handleMissingPath } from '../../lib/stalePath'
 import type { DraftState, SessionState } from '../../lib/persistence'
 import { executeTool } from '../../lib/tools'
 import { useReviewMode, useWasChatOpenBeforeReview, usePreviousChatWidth, useReviewStore, type ReviewMode } from '../../stores/reviewStore'
-import { QUICK_REVIEW_DEFAULT_PX, chatOpenDefaultPct } from '../../hooks/usePanelLayout'
+import { chatOpenDefaultPct, reviewChatWidthPct } from '../../hooks/usePanelLayout'
 
 export function App() {
   useChat() // Initialize stream listeners
@@ -77,7 +78,7 @@ export function App() {
   const googleDocsEnabled = useGoogleDocsEnabled()
   const { openFile, openFileFromPath, saveFile, saveFileAs, newFile } = useEditor()
   const { createNewTab, openFileInTab, reopenLastClosedTab } = useTabs()
-  const { setDialogOpen, isShortcutsDialogOpen, setShortcutsDialogOpen, isAboutDialogOpen, setAboutDialogOpen, isModelPickerOpen, setModelPickerOpen, settings, effectiveTheme, autosaveActive, isLoaded: settingsLoaded } = useSettings()
+  const { setDialogOpen, isShortcutsDialogOpen, setShortcutsDialogOpen, isAboutDialogOpen, setAboutDialogOpen, isModelPickerOpen, setModelPickerOpen, settings, effectiveTheme, effectiveColor, autosaveActive, isLoaded: settingsLoaded } = useSettings()
   const [recoveryDialogOpen, setRecoveryDialogOpen] = useState(false)
   const [pendingDraft, setPendingDraft] = useState<DraftState | null>(null)
   const [pendingSession, setPendingSession] = useState<SessionState | null>(null)
@@ -112,10 +113,6 @@ export function App() {
   const prevReviewMode = useRef<ReviewMode | null>(null)
   const prevTabId = useRef(activeTabId)
 
-  // Quick review target: ~370px as a percentage of window width.
-  // Above CHAT_MIN_PX (280) so cards have breathing room; user can still drag smaller.
-  const quickReviewPct = (QUICK_REVIEW_DEFAULT_PX / window.innerWidth) * 100
-
   useEffect(() => {
     const tabChanged = activeTabId !== prevTabId.current
     const prev = prevReviewMode.current
@@ -135,12 +132,20 @@ export function App() {
         }
       }
       setChatOpen(true)
-      if (reviewMode === 'side-by-side') {
-        chatPanelRef.current?.resize(60)
-      } else {
-        // Quick mode: compact sidebar at ~370px
-        chatPanelRef.current?.resize(quickReviewPct)
-      }
+      // Size for the active review mode (side-by-side 60%, Comment Review
+      // 50%/33%, Quick ~370px). Shared with usePanelLayout's open-resize so the
+      // two don't fight when the chat opens from closed.
+      const fileListPct = isFileListOpen ? (fileListPanelRef.current?.getSize() ?? 0) : 0
+      chatPanelRef.current?.resize(
+        reviewChatWidthPct({
+          reviewMode,
+          fileListPct,
+          isFileListOpen,
+          windowWidth: window.innerWidth,
+          chatMin: panelSizes.chatMin,
+          chatMax: panelSizes.chatMax
+        })
+      )
     } else if (!reviewMode && prev) {
       // Exiting review: restore previous state
       if (!wasChatOpenBeforeReview) {
@@ -154,7 +159,7 @@ export function App() {
         )
       }
     }
-  }, [reviewMode, activeTabId, wasChatOpenBeforeReview, previousChatWidth, setChatOpen, chatPanelRef, setPreviousChatWidth, quickReviewPct])
+  }, [reviewMode, activeTabId, wasChatOpenBeforeReview, previousChatWidth, setChatOpen, chatPanelRef, setPreviousChatWidth])
 
   // Update window title based on document state
   const isAutoSaving = settings.autosave?.mode === 'auto' && autosaveActive && !!documentPath
@@ -242,14 +247,25 @@ export function App() {
       for (let i = 0; i < session.tabs.length; i++) {
         const tabDraft = session.tabs[i]
         const isActiveTab = tabDraft.tabId === session.activeTabId
+        let restoredPath = tabDraft.path
+        let restoredIsDirty = tabDraft.isDirty
+
+        if (tabDraft.path && window.api) {
+          const exists = await window.api.fileExists(tabDraft.path).catch(() => false)
+          if (!exists) {
+            handleMissingPath(tabDraft.path, 'restore')
+            restoredPath = null
+            restoredIsDirty = true
+          }
+        }
 
         addTab({
           id: tabDraft.tabId,
           documentId: tabDraft.documentId,
-          path: tabDraft.path,
+          path: restoredPath,
           title: tabDraft.title,
           baseTitle: tabDraft.baseTitle,
-          isDirty: tabDraft.isDirty,
+          isDirty: restoredIsDirty,
           content: tabDraft.content,
           frontmatter: tabDraft.frontmatter,
           cursorPosition: tabDraft.cursorPosition
@@ -261,10 +277,10 @@ export function App() {
           useEditorStore.setState({
             document: {
               documentId: tabDraft.documentId,
-              path: tabDraft.path,
+              path: restoredPath,
               content: documentContent,
               frontmatter: tabDraft.frontmatter ?? {},
-              isDirty: tabDraft.isDirty
+              isDirty: restoredIsDirty
             }
           })
           setCurrentDocumentId(tabDraft.documentId)
@@ -699,14 +715,20 @@ export function App() {
               if (result) {
                 await openFileInTab(result.path)
               }
+            }).catch((error) => {
+              console.error('[App] Failed to open file from menu:', error)
             })
           }
           break
         case 'save':
-          saveFile()
+          saveFile().catch((error) => {
+            console.error('[App] Failed to save from menu:', error)
+          })
           break
         case 'saveAs':
-          saveFileAs()
+          saveFileAs().catch((error) => {
+            console.error('[App] Failed to save as from menu:', error)
+          })
           break
         case 'exportHtml':
           // Delegate to Toolbar, which owns the export handler
@@ -852,7 +874,9 @@ export function App() {
           // Handle openRecentFile:${path} actions
           if (action.startsWith('openRecentFile:')) {
             const filePath = action.slice('openRecentFile:'.length)
-            openFileInTab(filePath)
+            openFileInTab(filePath).catch((error) => {
+              console.error('[App] Failed to open recent file from menu:', error)
+            })
           }
           break
       }
@@ -949,9 +973,9 @@ export function App() {
       <div
         className={[
           'flex h-screen flex-col bg-background text-foreground',
-          settings.appearance?.color === 'termy' && effectiveTheme === 'dark' ? 'termy-scanline-scope' : '',
+          effectiveColor === 'termy' && effectiveTheme === 'dark' ? 'termy-scanline-scope' : '',
         ].filter(Boolean).join(' ')}
-        data-color={settings.appearance?.color}
+        data-color={effectiveColor}
       >
         <Toolbar />
         <UpdateBanner />

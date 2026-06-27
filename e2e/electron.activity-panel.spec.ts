@@ -113,7 +113,7 @@ async function ensureChatPanelOpen(testPage: Page): Promise<void> {
 }
 
 test.describe('Electron — Activity panel', () => {
-  test('Activity tab + badge + superseded filter', async () => {
+  test('Activity tab + badge + category filter', async () => {
     // Ensure the chat panel is open (open it if not, don't toggle if already open).
     await ensureChatPanelOpen(page)
     const activityTab = page.getByRole('tab', { name: /Activity/ })
@@ -123,20 +123,24 @@ test.describe('Electron — Activity panel', () => {
     // Badge shows the total (2) while superseded are included.
     const badge = page.getByTestId('activity-count-badge')
     await expect(badge).toHaveText('2')
-
-    // The superseded row + the filter funnel are present.
     await expect(page.getByTestId('annotation-detached-badge')).toBeVisible()
-    const filterBtn = page.getByRole('button', { name: 'Hide superseded edits' })
-    await expect(filterBtn).toBeVisible()
 
-    // Engage the filter → superseded hidden, badge drops to current-only (1).
-    await filterBtn.click()
+    // The filter is a funnel dropdown of per-category toggles (#685/#699).
+    // Open it and turn OFF the "Superseded" AI-edits category. The category
+    // rows keep the menu open (onSelect preventDefault), so assert with it open
+    // — do NOT press Escape, which a global handler routes to close the chat
+    // panel and takes the badge with it.
+    await page.click('[aria-label="Filter activity"]')
+    await page.waitForSelector('[role="menu"]')
+    await page.getByRole('menuitem', { name: 'Superseded' }).click()
+
+    // Superseded hidden → badge drops to current-only (1), detached row gone.
     await expect(badge).toHaveText('1')
     await expect(page.getByTestId('annotation-detached-badge')).toHaveCount(0)
-    await expect(page.getByRole('button', { name: 'Show superseded edits' })).toBeVisible()
 
-    // Toggle back → superseded reappears, badge back to 2.
-    await page.getByRole('button', { name: 'Show superseded edits' }).click()
+    // "Show all" resets every category and closes the menu.
+    await page.getByRole('menuitem', { name: 'Show all' }).click()
+    await expect(page.locator('[role="menu"]')).not.toBeVisible()
     await expect(badge).toHaveText('2')
     await expect(page.getByTestId('annotation-detached-badge')).toBeVisible()
   })

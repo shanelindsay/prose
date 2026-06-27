@@ -2,6 +2,39 @@ import { create } from 'zustand'
 import { subscribeWithSelector } from 'zustand/middleware'
 import type { FileItem, RemarkableSyncMetadata, RemarkableCloudNotebook, RemarkableSyncState, RemarkableSyncPhase, GoogleSyncMetadata } from '../types'
 
+/**
+ * Build a flat path→id map from the current tree so freshly-loaded nodes can
+ * reuse their existing id rather than getting a new one on every reload.
+ * This is the key to React not unmounting unchanged rows on a reload.
+ */
+function buildIdMap(items: FileItem[]): Map<string, string> {
+  const map = new Map<string, string>()
+  const walk = (nodes: FileItem[]): void => {
+    for (const node of nodes) {
+      if (node.id) map.set(node.path, node.id)
+      if (node.children) walk(node.children)
+    }
+  }
+  walk(items)
+  return map
+}
+
+/**
+ * Stamp each incoming FileItem (from IPC, which has no id) with a stable id:
+ * reuse the existing id when the path matches something already in the tree,
+ * otherwise mint a new UUID. Operates recursively so nested children are also
+ * stamped in one pass.
+ */
+function stampIds(items: FileItem[], idMap: Map<string, string>): FileItem[] {
+  return items.map((item) => {
+    const id = idMap.get(item.path) ?? crypto.randomUUID()
+    if (item.children) {
+      return { ...item, id, children: stampIds(item.children, idMap) }
+    }
+    return { ...item, id }
+  })
+}
+
 export interface SyncProgress {
   message: string
   notebookId?: string
@@ -138,6 +171,15 @@ interface FileListState {
   clipboardOperation: 'copy' | 'cut' | null
   renamingPath: string | null
 
+  // Multi-select — contains all currently selected paths (files only for now).
+  // selectedPath remains the "anchor" for single-file operations; selectedPaths
+  // is the full set for bulk actions (delete, copy, cut).
+  selectedPaths: Set<string>
+  anchorPath: string | null // Shift+click range anchor
+
+  // Dotfile visibility — toggled by ⌘⇧. (session-only, not persisted)
+  showDotfiles: boolean
+
   // Google Docs sync state
   isGoogleSyncing: boolean
 
@@ -171,6 +213,13 @@ interface FileListState {
   navigateToParent: () => void
   loadFiles: () => Promise<void>
   loadFolderChildren: (folderPath: string) => Promise<void>
+  /**
+   * Surgically update the tree after a rename — no IPC round-trip.
+   * Finds the node at `oldPath`, updates its `path` and `name` while
+   * preserving its `id`, and rewrites descendant paths for directories.
+   * Only the changed branch gets new array references (structural sharing).
+   */
+  renameInTree: (oldPath: string, newPath: string, newName: string) => void
   loadNotebooks: (syncDirectory: string) => Promise<void>
   loadCloudNotebooks: (deviceToken: string, syncDirectory: string) => Promise<void>
   toggleNotebookSync: (notebookId: string, syncDirectory: string) => Promise<void>
@@ -183,6 +232,13 @@ interface FileListState {
   setExpanded: (path: string, expanded: boolean) => void
   toggleNotebookFolderExpanded: (folderId: string) => void
   revealAndSelectPath: (path: string) => void
+  // Multi-select actions
+  toggleSelectFile: (path: string) => void
+  rangeSelectTo: (path: string, visiblePaths: string[]) => void
+  selectAll: (paths: string[]) => void
+  clearMultiSelect: () => void
+  // Dotfile toggle
+  toggleShowDotfiles: () => void
 }
 
 export const useFileListStore = create<FileListState>()(
@@ -199,6 +255,9 @@ export const useFileListStore = create<FileListState>()(
     clipboardPath: null,
     clipboardOperation: null,
     renamingPath: null,
+    selectedPaths: new Set<string>(),
+    anchorPath: null,
+    showDotfiles: false,
     isGoogleSyncing: false,
     remarkableSyncActive: false,
     remarkableSyncProgress: null,
@@ -400,13 +459,13 @@ export const useFileListStore = create<FileListState>()(
     },
 
     loadFiles: async () => {
-      const { rootPath, expandedFolders, files: oldFiles } = get()
+      const { rootPath, expandedFolders, files: oldFiles, showDotfiles } = get()
       if (!rootPath || !window.api) return
 
       set({ isLoading: true })
       try {
         // Use depth 1 for fast initial load - children loaded on demand
-        const fresh = await window.api.listDirectory(rootPath, 1)
+        const fresh = await window.api.listDirectory(rootPath, 1, showDotfiles)
         // The fresh listing only includes direct children. If the user had
         // any subfolders expanded (and their children fetched via
         // loadFolderChildren), those `children` arrays would be wiped on
@@ -416,8 +475,13 @@ export const useFileListStore = create<FileListState>()(
         // This trades a small risk of stale deep state (until the user
         // collapses/reopens) for not bursting IPC reads on every event.
         const merged = mergeExpandedChildren(fresh, oldFiles, expandedFolders)
-        set({ files: merged, isLoading: false })
-        syncWatchedExpandedFolders(merged, expandedFolders)
+        // Stamp ids last so mergeExpandedChildren can first re-attach old
+        // subtrees (which already carry their ids), and we only need to
+        // stamp the shallow fresh nodes that weren't pulled from oldFiles.
+        const idMap = buildIdMap(oldFiles)
+        const stamped = stampIds(merged, idMap)
+        set({ files: stamped, isLoading: false })
+        syncWatchedExpandedFolders(stamped, expandedFolders)
       } catch (error) {
         console.error('Failed to load files:', error)
         set({ files: [], isLoading: false })
@@ -438,14 +502,17 @@ export const useFileListStore = create<FileListState>()(
 
       try {
         // Load just this folder's children (depth 1)
-        const children = await window.api.listDirectory(folderPath, 1)
+        const { showDotfiles } = get()
+        const children = await window.api.listDirectory(folderPath, 1, showDotfiles)
 
         // Update the tree by finding and updating the folder
         const { files } = get()
+        const idMap = buildIdMap(files)
+        const stampedChildren = stampIds(children, idMap)
         const updateFolder = (items: FileItem[]): FileItem[] => {
           return items.map(item => {
             if (item.path === folderPath) {
-              return { ...item, children, hasChildren: children.length > 0 }
+              return { ...item, children: stampedChildren, hasChildren: stampedChildren.length > 0 }
             }
             if (item.children) {
               return { ...item, children: updateFolder(item.children) }
@@ -538,7 +605,60 @@ export const useFileListStore = create<FileListState>()(
       }
     },
 
-    selectFile: (path) => set({ selectedPath: path }),
+    selectFile: (path) => set({ selectedPath: path, selectedPaths: path ? new Set([path]) : new Set(), anchorPath: path }),
+
+    toggleSelectFile: (path) => set((state) => {
+      const next = new Set(state.selectedPaths)
+      const wasSelected = next.has(path)
+      if (wasSelected) {
+        next.delete(path)
+      } else {
+        next.add(path)
+      }
+      if (!wasSelected) {
+        // Adding: the newly selected path becomes primary + range anchor.
+        return { selectedPaths: next, selectedPath: path, anchorPath: path }
+      }
+      // Deselecting: the removed path must NOT linger as primary/anchor, or the
+      // `selectedPath === item.path` highlight keeps the row lit after it leaves
+      // the set (the Cmd+Click toggle-off bug). Fall back to the most-recently
+      // added remaining selection, or nothing when the set is now empty.
+      const remaining = next.size > 0 ? Array.from(next)[next.size - 1] : null
+      return { selectedPaths: next, selectedPath: remaining, anchorPath: remaining }
+    }),
+
+    rangeSelectTo: (path, visiblePaths) => set((state) => {
+      const anchor = state.anchorPath ?? state.selectedPath
+      if (!anchor) {
+        // No anchor — treat as plain select
+        return { selectedPaths: new Set([path]), selectedPath: path, anchorPath: path }
+      }
+      const anchorIdx = visiblePaths.indexOf(anchor)
+      const targetIdx = visiblePaths.indexOf(path)
+      if (anchorIdx === -1 || targetIdx === -1) {
+        return { selectedPaths: new Set([path]), selectedPath: path }
+      }
+      const lo = Math.min(anchorIdx, targetIdx)
+      const hi = Math.max(anchorIdx, targetIdx)
+      const rangeSet = new Set(visiblePaths.slice(lo, hi + 1))
+      return { selectedPaths: rangeSet, selectedPath: path }
+    }),
+
+    selectAll: (paths) => set((state) => {
+      const all = new Set(paths)
+      return { selectedPaths: all, selectedPath: state.selectedPath ?? paths[0] ?? null }
+    }),
+
+    clearMultiSelect: () => set((state) => ({
+      selectedPaths: state.selectedPath ? new Set([state.selectedPath]) : new Set(),
+      anchorPath: state.selectedPath,
+    })),
+
+    toggleShowDotfiles: () => {
+      set((state) => ({ showDotfiles: !state.showDotfiles }))
+      // Reload the current directory with updated dotfile visibility
+      get().loadFiles()
+    },
 
     toggleFolder: (path) => {
       const { expandedFolders, files, loadFolderChildren } = get()
@@ -638,6 +758,61 @@ export const useFileListStore = create<FileListState>()(
 
       set({ expandedFolders: newExpanded, selectedPath: targetPath })
       syncWatchedExpandedFolders(get().files, newExpanded)
+    },
+
+    renameInTree: (oldPath: string, newPath: string, newName: string) => {
+      const { files, expandedFolders } = get()
+
+      // Rewrite every path under a renamed directory, preserving each node's id.
+      const rewriteDescendantPaths = (items: FileItem[], oldPrefix: string, newPrefix: string): FileItem[] =>
+        items.map((item) => {
+          const updatedPath = newPrefix + item.path.slice(oldPrefix.length)
+          if (item.children) {
+            return {
+              ...item,
+              path: updatedPath,
+              children: rewriteDescendantPaths(item.children, oldPrefix, newPrefix)
+            }
+          }
+          return { ...item, path: updatedPath }
+        })
+
+      // Walk the tree and update the renamed node's path + name, preserving id.
+      // Returns null when the node was not found in this subtree (no-op branch).
+      const updateNode = (items: FileItem[]): FileItem[] | null => {
+        let changed = false
+        const next = items.map((item) => {
+          if (item.path === oldPath) {
+            changed = true
+            const updatedChildren = item.isDirectory && item.children
+              ? rewriteDescendantPaths(item.children, oldPath, newPath)
+              : item.children
+            return { ...item, id: item.id, path: newPath, name: newName, children: updatedChildren }
+          }
+          if (item.children) {
+            const updatedChildren = updateNode(item.children)
+            if (updatedChildren !== null) {
+              changed = true
+              return { ...item, children: updatedChildren }
+            }
+          }
+          return item
+        })
+        return changed ? next : null
+      }
+
+      const updated = updateNode(files)
+      if (!updated) return // Node not in the visible tree — nothing to do
+
+      // Keep expandedFolders consistent: the renamed folder's old key must move.
+      const newExpanded = new Set(expandedFolders)
+      if (newExpanded.has(oldPath)) {
+        newExpanded.delete(oldPath)
+        newExpanded.add(newPath)
+      }
+
+      set({ files: updated, expandedFolders: newExpanded })
+      syncWatchedExpandedFolders(updated, newExpanded)
     }
   }))
 )

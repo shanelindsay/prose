@@ -54,6 +54,15 @@ import { promoteCurrentPreview } from '../../hooks/useTabs'
 import { FindBar } from './FindBar'
 import { SelectionPopover } from './SelectionPopover'
 import { AddCommentDialog } from './AddCommentDialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../ui/dialog'
+import { Button } from '../ui/button'
 import { EmptyState } from '../layout/EmptyState'
 import { FrontmatterDisplay, hasFrontmatter, getContentWithoutFrontmatter, getFrontmatterRaw } from './FrontmatterDisplay'
 import { FrontmatterEditor, serializeFrontmatter } from './FrontmatterEditor'
@@ -67,6 +76,21 @@ import { useCommentStore } from '../../extensions/comments/store'
 import { LinkPopover } from './LinkPopover'
 import { SourceEditor, SourceEditorHandle } from './SourceEditor'
 import { getApi } from '../../lib/browserApi'
+
+const AI_PASTE_PROMPT_MIN_CHARS = 200
+
+interface PendingPasteAnnotation {
+  documentId: string
+  from: number
+  to: number
+  text: string
+}
+
+function shouldPromptForAIPaste(text: string): boolean {
+  const trimmed = text.trim()
+  if (!trimmed) return false
+  return trimmed.length >= AI_PASTE_PROMPT_MIN_CHARS || trimmed.includes('\n')
+}
 
 // Lowlight instance with a curated set of common languages.
 // Using individual imports (not the full `common` preset) keeps the bundle
@@ -117,6 +141,7 @@ export function Editor() {
     to: number
     text: string
   } | null>(null)
+  const [pendingPasteAnnotation, setPendingPasteAnnotation] = useState<PendingPasteAnnotation | null>(null)
   const { isTransforming, startTransform, completeTransform } = useTransformAnimation()
 
   // Source mode: holds markdown content while CodeMirror is mounted
@@ -124,6 +149,11 @@ export function Editor() {
   // Preserve AI suggestions across source mode round-trips
   const savedSuggestionsRef = useRef<AISuggestionData[]>([])
   const sourceEditorRef = useRef<SourceEditorHandle>(null)
+  // The documentId whose text is currently held in the source editor. On exit,
+  // the Source→WYSIWYG writeback only fires when this still matches the active
+  // document — otherwise a tab switch happened and the new tab's content is
+  // already loaded, so writing the (stale) source back would clobber it.
+  const sourceDocIdRef = useRef<string | null>(null)
 
   // Track if current file is linked to a reMarkable notebook (for showing "View Original" button)
   const [linkedNotebookId, setLinkedNotebookId] = useState<string | null>(null)
@@ -225,7 +255,23 @@ export function Editor() {
         transformCopiedText: true
       }),
       FocusMode,
-      Comment,
+      Comment.configure({
+        // Mirror every newly-created comment mark into the persistence store so
+        // replies/resolve can find it by ID immediately — without waiting for a
+        // tab-switch save. Catches both the UI (AddCommentDialog) and tool
+        // (add_comment) paths, since both go through setComment. Restoration
+        // uses tr.addMark directly and does NOT fire this, so no double-add.
+        onCommentAdded: (commentData) => {
+          const store = useCommentStore.getState()
+          if (store.pendingComments.some((c) => c.id === commentData.id)) return
+          const updated = [
+            ...store.pendingComments,
+            { ...commentData, replies: [], resolved: false },
+          ]
+          useCommentStore.setState({ pendingComments: updated })
+          if (store.documentId) store.saveComments(store.documentId, updated)
+        },
+      }),
       AISuggestion,
       AIAnnotations.configure({
         showTooltip: true,
@@ -246,6 +292,52 @@ export function Editor() {
     editorProps: {
       attributes: {
         class: 'outline-none min-h-full'
+      },
+      handlePaste: (view, event) => {
+        const pastedText = event.clipboardData?.getData('text/plain') ?? ''
+        if (!shouldPromptForAIPaste(pastedText)) return false
+
+        const editorState = useEditorStore.getState()
+        if (
+          editorState.sourceMode ||
+          editorState.isRemarkableReadOnly ||
+          editorState.isPreviewTab ||
+          !editorState.document.documentId
+        ) {
+          return false
+        }
+
+        const documentId = editorState.document.documentId
+        const selectionFrom = view.state.selection.from
+        const selectionTo = view.state.selection.to
+        const replacedSize = selectionTo - selectionFrom
+        const sizeBefore = view.state.doc.content.size
+
+        setTimeout(() => {
+          const activeEditor = useEditorInstanceStore.getState().editor
+          const activeDocumentId = useEditorStore.getState().document.documentId
+          if (!activeEditor || activeDocumentId !== documentId) return
+
+          const sizeAfter = activeEditor.state.doc.content.size
+          const insertedSize = Math.max(0, sizeAfter - sizeBefore + replacedSize)
+          const selectionEnd = activeEditor.state.selection.from
+          const fallbackTo = selectionFrom + insertedSize
+          const annotationTo = Math.min(
+            activeEditor.state.doc.content.size,
+            Math.max(selectionEnd, fallbackTo)
+          )
+
+          if (annotationTo > selectionFrom) {
+            setPendingPasteAnnotation({
+              documentId,
+              from: selectionFrom,
+              to: annotationTo,
+              text: pastedText,
+            })
+          }
+        }, 0)
+
+        return false
       },
       handleDOMEvents: {
         mousedown: () => {
@@ -484,12 +576,30 @@ export function Editor() {
   const pendingSuggestions = useSuggestionStore((state) => state.pendingSuggestions)
   const suggestionStoreDocumentId = useSuggestionStore((state) => state.documentId)
 
+  // Load suggestions when the document changes (mirrors the annotation + comment
+  // recovery effects). Session restore / file open hydrate the editor without
+  // going through useTabs' explicit loadSuggestions, so without this a document's
+  // AI suggestions are lost on reload. loadSuggestions populates pendingSuggestions;
+  // the restore effect below re-applies them to the editor.
+  useEffect(() => {
+    if (!editor || !document.documentId) return
+    if (suggestionStoreDocumentId !== document.documentId) {
+      useSuggestionStore.getState().loadSuggestions(document.documentId)
+    }
+  }, [editor, document.documentId, suggestionStoreDocumentId])
+
   // Restore AI suggestions when document changes or pending suggestions are loaded
   useEffect(() => {
     if (!editor || !document.documentId) return
 
     // Only restore if there are pending suggestions and they match current document
     if (pendingSuggestions.length > 0 && suggestionStoreDocumentId === document.documentId) {
+      // Wait for the document content to be present (see the comment-restore
+      // effect): on reload the file loads asynchronously, and restoring against
+      // an empty doc would drop the suggestions, then clearSuggestions() consumes
+      // them. document.content is in the deps so this re-fires once text arrives.
+      if (!editor.state.doc.textContent.trim()) return
+
       console.log(`[Editor:${SESSION_ID}] Restoring suggestions:`, {
         documentId: document.documentId,
         count: pendingSuggestions.length
@@ -504,33 +614,96 @@ export function Editor() {
 
       return () => clearTimeout(timer)
     }
-  }, [editor, document.documentId, pendingSuggestions, suggestionStoreDocumentId])
+  }, [editor, document.documentId, pendingSuggestions, suggestionStoreDocumentId, document.content])
 
-  // Subscribe to pending comment marks reactively for restoration
-  const pendingComments = useCommentStore((state) => state.pendingComments)
-  const commentStoreDocumentId = useCommentStore((state) => state.documentId)
-
-  // Restore comment marks when document changes or pending comments are loaded
+  // Persist suggestions to IndexedDB when they change, so they survive a reload.
+  // snapshotSuggestions only buffers in-memory (HMR), and tab-switch saves are
+  // too infrequent — creating a suggestion then refreshing would lose it. Saving
+  // on a debounced transaction also keeps stored positions in sync as the doc
+  // edits. Skip while a restore is pending (pendingSuggestions not yet replayed)
+  // so the document-load transaction can't clobber IndexedDB with an empty set.
   useEffect(() => {
     if (!editor || !document.documentId) return
-
-    // Only restore if there are pending comments and they match current document
-    if (pendingComments.length > 0 && commentStoreDocumentId === document.documentId) {
-      console.log(`[Editor:${SESSION_ID}] Restoring comments:`, {
-        documentId: document.documentId,
-        count: pendingComments.length
-      })
-
-      // Small delay to ensure editor content is fully loaded (same pattern as suggestions)
-      const timer = setTimeout(() => {
-        editor.commands.restoreComments(pendingComments)
-        // Clear pending comments from memory after restoring
-        useCommentStore.getState().clearComments()
-      }, 100)
-
-      return () => clearTimeout(timer)
+    const docId = document.documentId
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const persist = () => {
+      timer = null
+      const store = useSuggestionStore.getState()
+      if (store.pendingSuggestions.length > 0) return // restore pending — don't clobber
+      const live = getAISuggestions(editor)
+      // NEVER overwrite the stored set with an empty one from a routine
+      // transaction. An empty editor here is almost always transient — a
+      // document load or a source-mode toggle strips the decorations and fires a
+      // transaction — NOT a real "user cleared all". Persisting that empty wiped
+      // suggestions from IndexedDB (data loss). Mirrors useTabs' deliberate
+      // `length > 0 ? save : skip`; genuine empties persist via tab-switch/delete.
+      if (live.length === 0) return
+      store.saveSuggestions(docId, live)
     }
-  }, [editor, document.documentId, pendingComments, commentStoreDocumentId])
+    const onTx = () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(persist, 500)
+    }
+    editor.on('transaction', onTx)
+    return () => {
+      editor.off('transaction', onTx)
+      if (timer) clearTimeout(timer)
+    }
+  }, [editor, document.documentId])
+
+  // Subscribe to comment store state. pendingComments stays populated (it's the
+  // live source of truth for replies/resolved); needsRestore is the one-shot
+  // signal that the marks must be re-applied to the editor after a load.
+  const needsRestore = useCommentStore((state) => state.needsRestore)
+  const commentStoreDocumentId = useCommentStore((state) => state.documentId)
+
+  // Load comments when the document changes (mirrors the annotation recovery
+  // effect above). Session restore and file-open hydrate the editor without
+  // going through useTabs' explicit loadComments calls, so without this the
+  // comment store stays empty and a document's threads are lost on reload.
+  // loadComments sets needsRestore; the restore effect below re-applies marks.
+  useEffect(() => {
+    if (!editor || !document.documentId) return
+    if (commentStoreDocumentId !== document.documentId) {
+      useCommentStore.getState().loadComments(document.documentId)
+    }
+  }, [editor, document.documentId, commentStoreDocumentId])
+
+  // Re-apply comment marks once after each load. Marks aren't serialized into
+  // the document, so they must be restored when content (re)loads — but NOT on
+  // every pendingComments change (a reply/resolve must not re-mark the doc).
+  // needsRestore gates this; we consume it whether or not there are comments.
+  useEffect(() => {
+    if (!editor || !document.documentId) return
+    if (!needsRestore || commentStoreDocumentId !== document.documentId) return
+
+    // Wait for the document content to actually be present before restoring. On
+    // reload, file content loads asynchronously from disk; restoring against an
+    // empty doc finds no text to mark and would then consume the one-shot flag,
+    // losing the marks until the next load. document.content is in the deps, so
+    // this re-fires once the real text arrives. (If there are no pending comments
+    // there's nothing to lose, so don't block on content.)
+    const hasPending = useCommentStore.getState().pendingComments.length > 0
+    const contentReady = !!editor.state.doc.textContent.trim()
+    if (hasPending && !contentReady) return
+
+    // Small delay to ensure editor content is fully loaded (same pattern as suggestions)
+    const timer = setTimeout(() => {
+      const fresh = useCommentStore.getState().pendingComments
+      if (fresh.length > 0) {
+        console.log(`[Editor:${SESSION_ID}] Restoring comments:`, {
+          documentId: document.documentId,
+          count: fresh.length
+        })
+        editor.commands.restoreComments(fresh)
+      }
+      // Consume the one-shot flag — but keep pendingComments populated so the
+      // CommentPopover thread + Activity timeline keep reading replies/resolved.
+      useCommentStore.getState().markRestored()
+    }, 100)
+
+    return () => clearTimeout(timer)
+  }, [editor, document.documentId, needsRestore, commentStoreDocumentId, document.content])
 
   // Auto-focus editor once when document loads (not on every content change)
   const hasFocusedRef = useRef(false)
@@ -576,26 +749,48 @@ export function Editor() {
     if (sourceMode && !prev) {
       // WYSIWYG → Source: save suggestions then serialize with frontmatter
       savedSuggestionsRef.current = getAISuggestions(editor)
+      sourceDocIdRef.current = useEditorStore.getState().document.documentId
       const md = editor.storage.markdown?.getMarkdown?.() ?? ''
       const fm = useEditorStore.getState().document.frontmatter ?? {}
       setSourceContent(serializeMarkdown(md, fm))
     } else if (!sourceMode && prev) {
+      // A document switch (not a user toggle) also flips sourceMode → false. In
+      // that case the new tab's content is already loaded by the content-sync
+      // effect, while the source editor still holds the PREVIOUS document's text.
+      // Writing that stale source back here would clobber the new tab — so when
+      // the active document no longer matches the source's document, skip the
+      // writeback and drop the previous doc's saved suggestions.
+      // (#bug: source persists across tabs)
+      const activeDocId = useEditorStore.getState().document.documentId
+      if (sourceDocIdRef.current !== activeDocId) {
+        savedSuggestionsRef.current = []
+        return
+      }
       // Source → WYSIWYG: parse frontmatter back out from raw source
       const liveContent = sourceEditorRef.current?.getContent() ?? sourceContent
       const { content: bodyOnly, frontmatter: parsedFm } = parseMarkdown(liveContent)
       useEditorStore.getState().setFrontmatter(parsedFm)
       editor.commands.setContent(bodyOnly)
-      if (savedSuggestionsRef.current.length > 0) {
-        // Small delay to ensure content is fully parsed before restoring marks
-        setTimeout(() => {
+      // setContent stripped both suggestion decorations AND comment marks. The
+      // document didn't change, so neither the suggestion- nor comment-restore
+      // effects will re-run — we must re-apply both here, or a source round-trip
+      // silently drops them from the body (while the stores keep the data).
+      const comments = useCommentStore.getState().pendingComments
+      setTimeout(() => {
+        if (savedSuggestionsRef.current.length > 0) {
           editor.commands.restoreAISuggestions(savedSuggestionsRef.current)
           savedSuggestionsRef.current = []
-        }, 50)
-      }
+        }
+        if (comments.length > 0) {
+          editor.commands.restoreComments(comments)
+        }
+      }, 50)
     }
   }, [sourceMode, editor])
 
-  // Reset source mode when switching documents
+  // Reset source mode when switching documents. The toggle effect's
+  // Source→WYSIWYG branch guards against clobbering the new tab by comparing
+  // sourceDocIdRef to the active document (see above).
   useEffect(() => {
     setSourceMode(false)
   }, [document.documentId, setSourceMode])
@@ -623,7 +818,9 @@ export function Editor() {
       openFile()
     } else if (isMod && e.key === 's' && !e.shiftKey) {
       e.preventDefault()
-      saveFile()
+      saveFile().catch((error) => {
+        console.error('[Editor] Failed to save from shortcut:', error)
+      })
     } else if (isMod && e.key === ',') {
       e.preventDefault()
       setDialogOpen(true)
@@ -927,6 +1124,40 @@ export function Editor() {
     setContent(currentBody)
   }, [setFrontmatter, setContent, editor])
 
+  const handleConfirmPasteAI = useCallback(() => {
+    if (!pendingPasteAnnotation) return
+
+    const activeDocumentId = useEditorStore.getState().document.documentId
+    const activeEditor = useEditorInstanceStore.getState().editor
+    if (activeDocumentId !== pendingPasteAnnotation.documentId || !activeEditor) {
+      setPendingPasteAnnotation(null)
+      return
+    }
+
+    const annotationTo = Math.min(
+      pendingPasteAnnotation.to,
+      activeEditor.state.doc.content.size
+    )
+    if (annotationTo > pendingPasteAnnotation.from) {
+      const messageId = `paste-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+      useAnnotationStore.getState().addAnnotation({
+        documentId: pendingPasteAnnotation.documentId,
+        type: 'insertion',
+        from: pendingPasteAnnotation.from,
+        to: annotationTo,
+        content: pendingPasteAnnotation.text,
+        provenance: {
+          model: 'External AI',
+          conversationId: 'paste',
+          messageId,
+        },
+        explanation: 'Marked pasted text as AI-authored',
+      })
+    }
+
+    setPendingPasteAnnotation(null)
+  }, [pendingPasteAnnotation])
+
   return (
     <div className="h-full flex flex-col relative">
       {/* Hide FindBar in source mode — CodeMirror has built-in Ctrl+F */}
@@ -1103,6 +1334,29 @@ export function Editor() {
           setPendingCommentSelection(null)
         }}
       />
+      <Dialog
+        open={pendingPasteAnnotation !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingPasteAnnotation(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Mark pasted text as AI-authored?</DialogTitle>
+            <DialogDescription>
+              Save provenance for this pasted block in the document activity.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingPasteAnnotation(null)}>
+              Not now
+            </Button>
+            <Button onClick={handleConfirmPasteAI}>
+              Mark as AI-authored
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {editor && <AISuggestionPopover editor={editor} />}
       {editor && <CommentPopover editor={editor} />}
       {editor && (

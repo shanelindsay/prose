@@ -42,11 +42,17 @@ export type IconId =
   | 'legacy'
 
 export interface Appearance {
-  color: ColorTheme
+  lightColor: ColorTheme
+  darkColor: ColorTheme
   mode: ThemeMode
   icon: IconId
   /** True on fresh installs and once the one-time post-migration toast has been dismissed. */
   migrationToastShown: boolean
+}
+
+export type AppearanceOnDisk = Partial<Appearance> & {
+  /** Pre-#722 structured appearance files used one color for both modes. */
+  color?: ColorTheme
 }
 
 /** Legacy theme values from v1.1 settings files. Read by the migrator only. */
@@ -134,6 +140,12 @@ interface SettingsBase {
    * tied to a specific project; they appear in every project's file explorer.
    */
   favorites?: Favorite[]
+  /**
+   * Per-menu customization: visibility and ordering of items.
+   * Keys are stable menu IDs (e.g. 'toolbar-more', 'files-overflow', 'chat-history').
+   * Unknown/new item IDs append visible so upgrades never hide new menu items.
+   */
+  menuCustomization?: Record<string, { order: string[]; hidden: string[]; barCount?: number }>
 }
 
 /**
@@ -143,7 +155,7 @@ interface SettingsBase {
  */
 export interface SettingsOnDisk extends SettingsBase {
   /** Absent for pre-v1.2 settings files. */
-  appearance?: Appearance
+  appearance?: AppearanceOnDisk
   /** Present in pre-v1.2 settings files; stripped after migration. */
   theme?: LegacyTheme
 }
@@ -182,6 +194,14 @@ export interface ChatMessage {
    * decisions already made.
    */
   toolActions?: Record<number, 'switched' | 'dismissed'>
+  /**
+   * Accumulated thinking text for this assistant turn (concatenated from
+   * all thinking blocks the model produced). Stored separately from
+   * `content` so it can be rendered in a collapsible UI block without
+   * polluting the text that goes through the tool-tag parser.
+   * Only set on assistant messages when the model produced thinking blocks.
+   */
+  thinkingText?: string
 }
 
 export interface FileResult {
@@ -190,12 +210,23 @@ export interface FileResult {
 }
 
 export interface FileItem {
+  /**
+   * Stable identity for this tree node, assigned by fileListStore after each
+   * IPC call and preserved across reloads via path matching. Used as the React
+   * key in FileTree so renames don't unmount/remount rows whose paths didn't
+   * change. Optional only at the IPC boundary — the store always stamps it.
+   */
+  id?: string
   name: string
   path: string
   isDirectory: boolean
   modifiedAt: string
   children?: FileItem[]
   hasChildren?: boolean // For lazy loading - indicates folder has content without loading it
+  /** True for non-markdown, non-txt files — shown greyed and not openable in the editor. */
+  isNonMarkdown?: boolean
+  /** True for dotfiles/dot-dirs (name starts with '.') when shown via dotfile toggle. */
+  isDotfile?: boolean
 }
 
 export interface RemarkableRegisterResponse {
@@ -358,7 +389,20 @@ export interface LLMToolResultBlock {
   content: string
 }
 
-export type LLMContentBlock = LLMTextBlock | LLMToolUseBlock | LLMToolResultBlock
+/**
+ * Thinking block returned by the Anthropic API when adaptive thinking is enabled.
+ * Preserved unmodified in assistant messages passed to continuations (required
+ * by the API — dropping or modifying thinking blocks in tool-use continuations
+ * causes a 400 error). The `signature` field is an opaque integrity token that
+ * the API generates and validates; we store it but never inspect it.
+ */
+export interface LLMThinkingBlock {
+  type: 'thinking'
+  thinking: string
+  signature?: string
+}
+
+export type LLMContentBlock = LLMTextBlock | LLMToolUseBlock | LLMToolResultBlock | LLMThinkingBlock
 
 export interface LLMMessage {
   role: 'user' | 'assistant' | 'tool'
@@ -391,6 +435,8 @@ export interface LLMStreamRequest extends LLMRequest {
   tools?: LLMToolDefinition[]
   maxToolRoundtrips?: number
   maxTokens?: number
+  /** Enable adaptive thinking (Anthropic-only). Defaults to true when omitted. */
+  thinking?: boolean
 }
 
 export interface LLMStreamChunk {
@@ -413,6 +459,12 @@ export interface LLMStreamToolCallStart {
   toolName: string
 }
 
+export interface LLMStreamThinkingDelta {
+  streamId: string
+  /** Cumulative thinking text so far (not an incremental delta — simpler to handle in the store). */
+  thinking: string
+}
+
 export interface LLMStreamComplete {
   streamId: string
   content: string
@@ -421,6 +473,13 @@ export interface LLMStreamComplete {
     name: string
     args: unknown
   }>
+  /**
+   * Full thinking blocks from this turn, if the model produced any.
+   * Passed back so `useChat` can embed them verbatim in the assistant
+   * content array for tool-loop continuations (the API requires them
+   * to be preserved unmodified).
+   */
+  thinkingBlocks?: LLMThinkingBlock[]
 }
 
 export interface LLMStreamError {
@@ -475,6 +534,7 @@ export interface ElectronAPI {
   onLLMStreamToolCallStart: (callback: (start: LLMStreamToolCallStart) => void) => () => void
   onLLMStreamComplete: (callback: (complete: LLMStreamComplete) => void) => () => void
   onLLMStreamError: (callback: (error: LLMStreamError) => void) => () => void
+  onLLMStreamThinkingDelta: (callback: (delta: LLMStreamThinkingDelta) => void) => () => void
   // Folder operations for quick save
   selectFolder: (defaultPath?: string, message?: string) => Promise<{ path: string; bookmark: string | null } | null>
   /** Activate a MAS security-scoped bookmark in-session (#654). Optional: older
@@ -492,12 +552,16 @@ export interface ElectronAPI {
   deleteFile: (path: string) => Promise<void>
   trashFile: (path: string) => Promise<void>
   duplicateFile: (path: string) => Promise<string>
+  /** Create a new directory at the given path. Returns the created path. */
+  createDirectory: (dirPath: string) => Promise<string>
   // Window operations
   closeWindow: () => Promise<void>
+  // Open a local file in its default app (for non-markdown "Open Externally")
+  openPath?: (path: string) => Promise<string>
   // External URL opening (for CMD+Click on links)
   openExternal?: (url: string) => Promise<void>
   // Directory listing (with lazy loading support via maxDepth parameter)
-  listDirectory: (path: string, maxDepth?: number) => Promise<FileItem[]>
+  listDirectory: (path: string, maxDepth?: number, showDotfiles?: boolean) => Promise<FileItem[]>
   // reMarkable sync
   remarkableRegister: (code: string) => Promise<RemarkableRegisterResponse>
   remarkableValidate: (deviceToken: string) => Promise<boolean>

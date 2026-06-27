@@ -7,11 +7,12 @@ import { useAnnotationStore } from '../extensions/ai-annotations'
 import { useSuggestionStore } from '../extensions/ai-suggestions/store'
 import { getAISuggestions } from '../extensions/ai-suggestions'
 import { useCommentStore } from '../extensions/comments/store'
-import { getComments } from '../extensions/comments'
+import { mergeCommentsForPersistence } from '../extensions/comments'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useFileListStore } from '../stores/fileListStore'
 import { parseMarkdown, serializeMarkdown, prepareTextContent } from '../lib/markdown'
 import { pipelineLog } from '../lib/aiPipelineLog'
+import { handleMissingPath, isMissingPathFileError } from '../lib/stalePath'
 import {
   generateId,
   generateIdFromPath,
@@ -37,6 +38,14 @@ import type { DraftState } from '../lib/persistence'
 // Track chat panel state before preview mode so we can restore on promote
 let chatPanelStateBeforePreview: boolean | null = null
 
+function restoreAfterPreviewBrowsing(): void {
+  useEditorStore.getState().setPreviewTab(false)
+  if (chatPanelStateBeforePreview !== null) {
+    useChatStore.getState().setPanelOpen(chatPanelStateBeforePreview)
+    chatPanelStateBeforePreview = null
+  }
+}
+
 /**
  * Promote the current preview tab to permanent and restore UI state.
  * Can be called from outside the hook (e.g., Editor mousedown handler).
@@ -46,11 +55,7 @@ export function promoteCurrentPreview(): void {
   if (previewTab) {
     useTabStore.getState().promotePreviewTab(previewTab.id)
   }
-  useEditorStore.getState().setPreviewTab(false)
-  if (chatPanelStateBeforePreview !== null) {
-    useChatStore.getState().setPanelOpen(chatPanelStateBeforePreview)
-    chatPanelStateBeforePreview = null
-  }
+  restoreAfterPreviewBrowsing()
 }
 
 export function useTabs() {
@@ -111,11 +116,19 @@ export function useTabs() {
 
       const suggestions = getAISuggestions(editor)
       console.log(`[useTabs:${SESSION_ID}] Saving suggestions:`, { documentId: docId, count: suggestions.length })
-      if (docId) {
+      // Never overwrite the stored set with an empty one: an empty editor here is
+      // almost always a transient strip (a tab switch landing inside a document
+      // load or source-mode toggle), not a real "user cleared all" — persisting
+      // it would wipe the suggestions. Mirrors the Editor debounced save and the
+      // rename path's `length > 0 ? save : skip`. Genuine empties clear on tab
+      // close (deleteSuggestions).
+      if (docId && suggestions.length > 0) {
         await useSuggestionStore.getState().saveSuggestions(docId, suggestions)
       }
 
-      const comments = getComments(editor)
+      // Merge live mark positions with the store's rich data (replies + resolved)
+      // so a tab-switch save doesn't clobber threads with marks-only data (#699).
+      const comments = mergeCommentsForPersistence(editor, useCommentStore.getState().pendingComments)
       console.log(`[useTabs:${SESSION_ID}] Saving comments:`, { documentId: docId, count: comments.length })
       if (docId) {
         await useCommentStore.getState().saveComments(docId, comments)
@@ -204,6 +217,12 @@ export function useTabs() {
 
     // Clear reMarkable read-only state
     useEditorStore.getState().setRemarkableReadOnly(false, null)
+
+    // Sync the global preview-read-only flag to the tab we're switching to.
+    // Without this, isPreviewTab stays stuck on the previously-active tab's
+    // value — leaving a permanent tab wrongly read-only (you can't type) after
+    // browsing a single-click preview. (QA — editor stuck read-only)
+    useEditorStore.getState().setPreviewTab(targetTab.isPreview ?? false)
 
     // Mark as editing
     setEditing(true)
@@ -297,6 +316,11 @@ export function useTabs() {
     // Clear reMarkable read-only state
     useEditorStore.getState().setRemarkableReadOnly(false, null)
 
+    // A brand-new tab is always a permanent, editable doc. Reset the global
+    // preview flag so a new tab opened while a preview was active isn't stuck
+    // read-only. (QA — editor stuck read-only)
+    useEditorStore.getState().setPreviewTab(false)
+
     // Mark as editing
     setEditing(true)
 
@@ -360,8 +384,21 @@ export function useTabs() {
     useAnnotationStore.getState().setLoadingDocument(true)
 
     // Read file content
-    if (!window.api) return false
-    const rawContent = await window.api.readFile(filePath)
+    if (!window.api) {
+      useAnnotationStore.getState().setLoadingDocument(false)
+      return false
+    }
+    let rawContent: string
+    try {
+      rawContent = await window.api.readFile(filePath)
+    } catch (error) {
+      useAnnotationStore.getState().setLoadingDocument(false)
+      if (isMissingPathFileError(error)) {
+        handleMissingPath(filePath, 'open')
+      }
+      console.error('[useTabs] Failed to open file:', error)
+      return false
+    }
     const isTxt = filePath.endsWith('.txt')
     const parsed = parseMarkdown(isTxt ? prepareTextContent(rawContent) : rawContent)
 
@@ -490,10 +527,21 @@ export function useTabs() {
 
     // Read file content
     if (!window.api) {
-      useEditorStore.getState().setPreviewTab(false)
+      restoreAfterPreviewBrowsing()
       return false
     }
-    const rawContent = await window.api.readFile(filePath)
+    let rawContent: string
+    try {
+      rawContent = await window.api.readFile(filePath)
+    } catch (error) {
+      restoreAfterPreviewBrowsing()
+      useAnnotationStore.getState().setLoadingDocument(false)
+      if (isMissingPathFileError(error)) {
+        handleMissingPath(filePath, 'open')
+      }
+      console.error('[useTabs] Failed to preview file:', error)
+      return false
+    }
     const isTxt = filePath.endsWith('.txt')
     const parsed = parseMarkdown(isTxt ? prepareTextContent(rawContent) : rawContent)
     const newDocumentId = await generateIdFromPath(filePath)

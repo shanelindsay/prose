@@ -17,7 +17,8 @@ import {
   executeGetOutline,
   executeListComments,
   executeAddComment,
-  executeResolveComment
+  executeResolveComment,
+  executeReplyToComment
 } from './executors/document'
 
 // Editor executors
@@ -114,6 +115,8 @@ export async function executeTool(
         return executeAddComment(validatedArgs)
       case 'resolve_comment':
         return executeResolveComment(validatedArgs)
+      case 'reply_to_comment':
+        return executeReplyToComment(validatedArgs)
 
       // Editor tools
       case 'edit':
@@ -145,7 +148,7 @@ export async function executeTool(
       case 'read_file':
         return await executeReadFile(validatedArgs)
       case 'create_and_open_file':
-        return await executeCreateAndOpenFile(validatedArgs)
+        return await executeCreateAndOpenFile(validatedArgs, provenance)
 
       // Tab tools
       case 'list_tabs':

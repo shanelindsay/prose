@@ -376,6 +376,11 @@ export const browserApi: ElectronAPI = {
     }
   },
 
+  openPath: async (_path: string): Promise<string> => {
+    // Can't open local files in browser mode
+    return ''
+  },
+
   openExternal: async (url: string): Promise<void> => {
     // In browser mode, just open in a new tab
     window.open(url, '_blank', 'noopener,noreferrer')

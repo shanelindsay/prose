@@ -1,7 +1,8 @@
 import { useEffect } from 'react'
-import { useReviewStore, useReviewMode } from '../../stores/reviewStore'
+import { useReviewStore, useReviewMode, useCommentReviewTargetId } from '../../stores/reviewStore'
 import { QuickReviewPanel } from './QuickReviewPanel'
 import { SideBySideDiffPanel } from './SideBySideDiffPanel'
+import { CommentReviewPanel } from './CommentReviewPanel'
 
 /**
  * Container that owns the Escape handler and mode-switching context.
@@ -15,6 +16,7 @@ import { SideBySideDiffPanel } from './SideBySideDiffPanel'
 export function ReviewContainer() {
   const reviewMode = useReviewMode()
   const setReviewMode = useReviewStore((s) => s.setReviewMode)
+  const commentReviewTargetId = useCommentReviewTargetId()
 
   // Escape to dismiss
   useEffect(() => {
@@ -33,7 +35,12 @@ export function ReviewContainer() {
 
   return (
     <div className="flex h-full flex-col">
-      {reviewMode === 'quick' ? (
+      {reviewMode === 'comments' ? (
+        <CommentReviewPanel
+          onExit={() => setReviewMode(null)}
+          initialThreadId={commentReviewTargetId}
+        />
+      ) : reviewMode === 'quick' ? (
         <QuickReviewPanel />
       ) : (
         <SideBySideDiffPanel />

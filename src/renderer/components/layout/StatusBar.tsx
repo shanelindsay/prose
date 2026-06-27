@@ -7,6 +7,8 @@ import { useEditorInstanceStore } from '../../stores/editorInstanceStore'
 import { useLinkHoverStore } from '../../stores/linkHoverStore'
 import { useReviewStore } from '../../stores/reviewStore'
 import { getAISuggestions } from '../../extensions/ai-suggestions/extension'
+import { getComments } from '../../extensions/comments/extension'
+import { requestCommentReview } from '../editor/AIEditsHistoryPanel'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip'
 import {
   DropdownMenu,
@@ -16,8 +18,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuLabel
 } from '../ui/dropdown-menu'
-import type { ToolMode } from '../../stores/chatStore'
-import { getModelsForProvider, type LLMProvider } from '../../../shared/llm/models'
+import { Brain } from 'lucide-react'
+import { cn } from '../../lib/utils'
+import { useChatStore, type ToolMode } from '../../stores/chatStore'
+import { getModelsForProvider, supportsAdaptiveThinking, type LLMProvider } from '../../../shared/llm/models'
 
 // Detect Mac for keyboard-hint copy. Works in both Electron and web mode,
 // unlike browserApi's isMacOS() which gates on isElectron().
@@ -28,6 +32,7 @@ export function StatusBar() {
   const { document, cursorPosition } = useEditor()
   const { settings, isLoaded: settingsLoaded, autosaveActive, setLLMConfig, saveSettings } = useSettings()
   const { toolMode, setToolMode } = useChat()
+  const { thinkingEnabled, setThinkingEnabled } = useChatStore()
   const isRemarkableReadOnly = useEditorStore((state) => state.isRemarkableReadOnly)
 
   // Track whether the upcoming toolMode change was initiated by a user click on
@@ -81,6 +86,22 @@ export function StatusBar() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, editor?.state.doc])
 
+  // Open (unresolved) comment threads currently marked in the doc — resolved
+  // threads remove their mark, so live marks == open threads (parallels the
+  // suggestion count above).
+  const commentCount = useMemo(() => {
+    if (!editor) return 0
+    return getComments(editor).length
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor, editor?.state.doc])
+
+  // Clicking the count enters Comment Review (a top-level reviewMode takeover,
+  // the peer of Quick Review). The App-level effect keyed on reviewMode opens
+  // and sizes the chat panel — same path as clicking the suggestion count.
+  const reviewComments = useCallback(() => {
+    requestCommentReview()
+  }, [])
+
   // Live word/char count from editor state, not debounced store (#563).
   // Subscribe to the editor 'update' event so counts refresh on every doc
   // mutation, and use textBetween with '\n' separators so words spanning block
@@ -124,6 +145,9 @@ export function StatusBar() {
   const currentModel = availableModels.find(m => m.id === settings.llm.model)
   // Compact display for the status bar — drop the "Claude " prefix (e.g. "Sonnet 4.6").
   const modelDisplayName = (currentModel?.name || settings.llm.model.split('/').pop() || settings.llm.model).replace(/^Claude\s+/, '')
+  // The extended-thinking toggle sits next to the model selector and only shows
+  // for models that support adaptive thinking (hidden for e.g. Haiku 4.5).
+  const showThinkingToggle = supportsAdaptiveThinking(settings.llm.model)
 
   const handleModelChange = async (modelId: string) => {
     setLLMConfig({ model: modelId })
@@ -194,6 +218,26 @@ export function StatusBar() {
           </>
         )}
 
+        {/* Open comment threads */}
+        {commentCount > 0 && (
+          <>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={reviewComments}
+                  className="text-amber-600 dark:text-amber-400 hover:text-amber-500 focus-visible:text-amber-500 focus-visible:outline-none transition-colors cursor-pointer"
+                >
+                  {commentCount} comment{commentCount !== 1 ? 's' : ''}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <p>Review open comment threads</p>
+              </TooltipContent>
+            </Tooltip>
+            <span className="text-muted-foreground/40 mx-1">|</span>
+          </>
+        )}
+
         {/* Model selector — hidden when user chose "Continue without AI" (#561) */}
         {settings.aiConsent?.consented === true && (
           <>
@@ -234,6 +278,29 @@ export function StatusBar() {
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>
+
+            {/* Extended thinking toggle — sits right next to the model selector,
+                shown only for thinking-capable models (hidden for Haiku 4.5). */}
+            {showThinkingToggle && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => setThinkingEnabled(!thinkingEnabled)}
+                    aria-pressed={thinkingEnabled}
+                    aria-label={thinkingEnabled ? 'Extended thinking on' : 'Extended thinking off'}
+                    className={cn(
+                      'ml-1 flex items-center transition-colors cursor-pointer focus-visible:outline-none',
+                      thinkingEnabled ? 'text-primary' : 'hover:text-foreground'
+                    )}
+                  >
+                    <Brain className="h-3 w-3" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  {thinkingEnabled ? 'Extended thinking on · click to disable' : 'Extended thinking off · click to enable'}
+                </TooltipContent>
+              </Tooltip>
+            )}
 
             <span className="text-muted-foreground/40 mx-1">|</span>
           </>

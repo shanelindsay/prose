@@ -32,7 +32,10 @@ export const selectors = {
   sourceMode: '[aria-label="Source mode"], [aria-label="WYSIWYG mode"]',
   hideAnnotations:
     '[aria-label="Hide AI annotations"], [aria-label="Show AI annotations"]',
-  moreOptions: '[aria-label="More options"]',
+  // Scoped to the main toolbar: the file-explorer header now renders its own
+  // "More options" (⋯) trigger too (CustomizableToolbar, #701), so an unscoped
+  // selector is ambiguous whenever the file panel is open.
+  moreOptions: '[data-testid="main-toolbar"] [aria-label="More options"]',
   toggleChat: '[aria-label="Show chat"], [aria-label="Hide chat"]',
 
   // Editor modes
@@ -344,14 +347,15 @@ export async function executeProseTool(
   toolName: string,
   args: Record<string, unknown>,
   mode: 'chat' | 'editor' | 'create' = 'create',
+  provenance?: Record<string, string>,
 ): Promise<ProseToolResult> {
   return page.evaluate(
-    async ({ name, toolArgs, toolMode }) => {
+    async ({ name, toolArgs, toolMode, toolProvenance }) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const tools = (window as any).__prose_tools
-      return tools.executeTool(name, toolArgs, toolMode)
+      return tools.executeTool(name, toolArgs, toolMode, toolProvenance)
     },
-    { name: toolName, toolArgs: args, toolMode: mode },
+    { name: toolName, toolArgs: args, toolMode: mode, toolProvenance: provenance },
   )
 }
 

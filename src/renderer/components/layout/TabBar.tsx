@@ -211,7 +211,6 @@ export function TabBar({ onTabClick, onTabClose, onTabCloseOthers, onTabCloseAll
           />
         ))}
       </Reorder.Group>
-      {newTabButton}
     </>
   )
 }

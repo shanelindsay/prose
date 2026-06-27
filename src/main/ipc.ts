@@ -6,11 +6,12 @@ import { randomUUID } from 'crypto'
 import { homedir } from 'os'
 import type { Settings } from '../renderer/types'
 import { withRetry, getNetworkErrorMessage } from '../shared/utils/retry'
-import { getDefaultModel, getDefaultHaikuModel } from '../shared/llm/models'
+import { getDefaultModel, getDefaultHaikuModel, supportsAdaptiveThinking } from '../shared/llm/models'
 import { getSettingsDir, LEGACY_SETTINGS_DIR } from './paths'
 import { clearRecentFiles } from './recentFiles'
 import { refreshMenu, setReopenClosedTabEnabled } from './menu'
 import { credentialStore } from './credentialStore'
+import { toFileOperationFailure, type ReadFileResult, type SaveFileResult } from '../shared/fileOperationResult'
 
 // Credential store keys
 const LLM_API_KEY = 'llm-api-key'
@@ -61,6 +62,8 @@ interface LLMStreamRequest extends LLMRequest {
   streamId: string
   tools?: LLMToolDefinition[]
   maxToolRoundtrips?: number
+  maxTokens?: number
+  thinking?: boolean
 }
 
 // Track active streams for abort support
@@ -147,7 +150,7 @@ export function validatePath(inputPath: string): string {
 }
 
 const defaultSettings: Settings = {
-  appearance: { color: 'mono', mode: 'system', icon: 'pilcrow', migrationToastShown: true },
+  appearance: { lightColor: 'mono', darkColor: 'prose', mode: 'system', icon: 'pilcrow', migrationToastShown: true },
   llm: {
     provider: 'anthropic',
     model: getDefaultModel('anthropic'),
@@ -195,15 +198,25 @@ export function setupIpcHandlers(): void {
   })
 
   // File: Save content to path
-  ipcMain.handle('file:save', async (_event, path: string, content: string) => {
-    const safePath = validatePath(path)
-    await writeFile(safePath, content, 'utf-8')
+  ipcMain.handle('file:save', async (_event, path: string, content: string): Promise<SaveFileResult> => {
+    try {
+      const safePath = validatePath(path)
+      await writeFile(safePath, content, 'utf-8')
+      return { ok: true }
+    } catch (error) {
+      return toFileOperationFailure(path, error)
+    }
   })
 
   // File: Read file at path
-  ipcMain.handle('file:read', async (_event, path: string) => {
-    const safePath = validatePath(path)
-    return await readFile(safePath, 'utf-8')
+  ipcMain.handle('file:read', async (_event, path: string): Promise<ReadFileResult> => {
+    try {
+      const safePath = validatePath(path)
+      const content = await readFile(safePath, 'utf-8')
+      return { ok: true, content }
+    } catch (error) {
+      return toFileOperationFailure(path, error)
+    }
   })
 
   // File: Read binary file as base64
@@ -490,7 +503,7 @@ export function setupIpcHandlers(): void {
   })
 
   // File: List directory contents (with lazy loading support)
-  ipcMain.handle('file:listDirectory', async (_event, dirPath: string, maxDepth: number = 1) => {
+  ipcMain.handle('file:listDirectory', async (_event, dirPath: string, maxDepth: number = 1, showDotfiles: boolean = false) => {
     interface FileItem {
       name: string
       path: string
@@ -498,7 +511,11 @@ export function setupIpcHandlers(): void {
       modifiedAt: string
       children?: FileItem[]
       hasChildren?: boolean // For lazy loading - indicates folder has content without loading it
+      isNonMarkdown?: boolean // Non-editable file, shown greyed in the explorer
+      isDotfile?: boolean    // Dot-prefixed entry (shown when showDotfiles is true)
     }
+
+    const MARKDOWN_EXTS = new Set(['.md', '.markdown', '.txt'])
 
     async function listDir(dir: string, depth: number = 0): Promise<FileItem[]> {
       try {
@@ -506,8 +523,10 @@ export function setupIpcHandlers(): void {
         const items: FileItem[] = []
 
         for (const entry of entries) {
-          // Skip hidden files
-          if (entry.name.startsWith('.')) continue
+          const isDotfile = entry.name.startsWith('.')
+
+          // Skip dotfiles unless the toggle is on
+          if (isDotfile && !showDotfiles) continue
 
           const fullPath = join(dir, entry.name)
           let stats
@@ -528,17 +547,18 @@ export function setupIpcHandlers(): void {
                 isDirectory: true,
                 modifiedAt: stats.mtime.toISOString(),
                 children,
-                hasChildren: children.length > 0
+                hasChildren: children.length > 0,
+                ...(isDotfile ? { isDotfile: true } : {})
               })
             } else {
               // Beyond depth limit - just check if folder has any relevant content
               let hasChildren = false
               try {
                 const subEntries = await readdir(fullPath, { withFileTypes: true })
-                hasChildren = subEntries.some(e =>
-                  !e.name.startsWith('.') &&
-                  (e.isDirectory() || e.name.endsWith('.md') || e.name.endsWith('.markdown') || e.name.endsWith('.txt'))
-                )
+                hasChildren = subEntries.some(e => {
+                  if (e.name.startsWith('.') && !showDotfiles) return false
+                  return e.isDirectory() || e.name.endsWith('.md') || e.name.endsWith('.markdown') || e.name.endsWith('.txt')
+                })
               } catch {
                 // Can't read folder, assume no children
               }
@@ -547,15 +567,21 @@ export function setupIpcHandlers(): void {
                 path: fullPath,
                 isDirectory: true,
                 modifiedAt: stats.mtime.toISOString(),
-                hasChildren
+                hasChildren,
+                ...(isDotfile ? { isDotfile: true } : {})
               })
             }
-          } else if (entry.name.endsWith('.md') || entry.name.endsWith('.markdown') || entry.name.endsWith('.txt')) {
+          } else {
+            const dotIdx = entry.name.lastIndexOf('.')
+            const ext = dotIdx > 0 ? entry.name.slice(dotIdx) : ''
+            const isMarkdown = MARKDOWN_EXTS.has(ext)
             items.push({
               name: entry.name,
               path: fullPath,
               isDirectory: false,
-              modifiedAt: stats.mtime.toISOString()
+              modifiedAt: stats.mtime.toISOString(),
+              ...(!isMarkdown ? { isNonMarkdown: true } : {}),
+              ...(isDotfile ? { isDotfile: true } : {})
             })
           }
         }
@@ -573,6 +599,13 @@ export function setupIpcHandlers(): void {
     // Validate and expand path
     const safePath = validatePath(dirPath)
     return listDir(safePath, 0)
+  })
+
+  // File: Create a new directory (MAS-sandbox-safe via the user-granted parent)
+  ipcMain.handle('file:createDirectory', async (_event, dirPath: string) => {
+    const safePath = validatePath(dirPath)
+    await mkdir(safePath, { recursive: true })
+    return safePath
   })
 
   // Settings: Load from userData/settings.json
@@ -965,16 +998,49 @@ export function setupIpcHandlers(): void {
 
         console.log('[LLM:stream] Creating Anthropic stream with tools:', anthropicTools.map(t => t.name))
 
-        const stream = client.messages.stream({
+        // Extended thinking — adaptive mode, capability-gated by
+        // supportsAdaptiveThinking() (THINKING_CAPABLE_PREFIXES in models.ts:
+        // Sonnet 4.6, Opus 4.6+, and Fable 5). Models outside that list (e.g.
+        // Haiku) return HTTP 400 if *any* thinking param is sent. `display:
+        // "summarized"` is mandatory — the default "omitted" yields an empty
+        // thinking string. Depth is controlled by output_config.effort, not a
+        // token budget.
+        //
+        // Disabling must be EXPLICIT: on adaptive-thinking models the param
+        // defaults to on, so simply omitting `thinking` leaves the model
+        // thinking anyway (the user toggling it off had no effect). We send
+        // { type: 'disabled' } to actually suppress it — but only for models
+        // that accept the param at all; non-capable models must omit it.
+        const modelSupportsThinking = supportsAdaptiveThinking(request.model)
+        const thinkingEnabled = request.thinking !== false && modelSupportsThinking
+        const thinkingParam = !modelSupportsThinking
+          ? undefined
+          : thinkingEnabled
+            ? { type: 'adaptive' as const, display: 'summarized' as const }
+            : { type: 'disabled' as const }
+
+        const maxTokens = request.maxTokens || 16000
+
+        const streamParams: Parameters<typeof client.messages.stream>[0] = {
           model: request.model,
-          max_tokens: request.maxTokens || 4096,
+          max_tokens: maxTokens,
           system: request.system,
           messages: anthropicMessages,
-          tools: anthropicTools
-        })
+          tools: anthropicTools,
+          ...(thinkingParam ? { thinking: thinkingParam } : {}),
+          ...(thinkingEnabled ? { output_config: { effort: 'high' as const } } : {})
+        }
+
+        const stream = client.messages.stream(streamParams)
 
         let fullContent = ''
         const toolCalls: Array<{ id: string; name: string; args: unknown }> = []
+
+        // Track thinking block accumulation for streaming delta events.
+        // We send cumulative thinking text on each thinking_delta so the
+        // renderer can update its display without managing deltas itself.
+        let currentThinkingText = ''
+        let inThinkingBlock = false
 
         stream.on('text', (text) => {
           if (abortController.signal.aborted) return
@@ -983,25 +1049,49 @@ export function setupIpcHandlers(): void {
           event.sender.send('llm:stream:chunk', { streamId, delta: text })
         })
 
-        stream.on('contentBlockStart', (block) => {
+        // The SDK provides a dedicated `thinking` event that fires once per
+        // thinking_delta. The second argument is the cumulative snapshot, which
+        // we forward directly to the renderer as a "thinking delta" so the
+        // store doesn't need to accumulate increments itself.
+        stream.on('thinking', (_thinkingDelta, thinkingSnapshot) => {
           if (abortController.signal.aborted) return
-          console.log('[LLM:stream] Content block start:', block.content_block.type)
-          if (block.content_block.type === 'tool_use') {
-            console.log('[LLM:stream] Tool use started:', block.content_block.name)
-            // Fire a drafting event before any input_json_delta arrives — the
-            // visible latency for tools like `insert`/`edit` is the LLM
-            // composing the input, not the tool's actual execution.
-            event.sender.send('llm:stream:tool-call:start', {
-              streamId,
-              toolCallId: block.content_block.id,
-              toolName: block.content_block.name
-            })
-          }
+          inThinkingBlock = true
+          currentThinkingText = thinkingSnapshot
+          event.sender.send('llm:stream:thinking:delta', {
+            streamId,
+            thinking: thinkingSnapshot
+          })
         })
 
-        stream.on('contentBlockStop', (block) => {
+        // Use the typed `streamEvent` to detect tool_use block start (for the
+        // drafting chip) and thinking block boundaries.
+        stream.on('streamEvent', (rawEvent) => {
           if (abortController.signal.aborted) return
-          console.log('[LLM:stream] Content block stop')
+          if (rawEvent.type === 'content_block_start') {
+            const blockType = (rawEvent as { type: string; index: number; content_block: { type: string; id?: string; name?: string } }).content_block.type
+            const contentBlock = (rawEvent as { type: string; index: number; content_block: { type: string; id?: string; name?: string } }).content_block
+            console.log('[LLM:stream] Content block start:', blockType)
+            if (blockType === 'thinking') {
+              inThinkingBlock = true
+              currentThinkingText = ''
+              console.log('[LLM:stream] Thinking block started')
+            } else if (blockType === 'tool_use') {
+              console.log('[LLM:stream] Tool use started:', contentBlock.name)
+              // Fire a drafting event before any input_json_delta arrives — the
+              // visible latency for tools like `insert`/`edit` is the LLM
+              // composing the input, not the tool's actual execution.
+              event.sender.send('llm:stream:tool-call:start', {
+                streamId,
+                toolCallId: contentBlock.id,
+                toolName: contentBlock.name
+              })
+            }
+          } else if (rawEvent.type === 'content_block_stop') {
+            if (inThinkingBlock) {
+              inThinkingBlock = false
+              console.log('[LLM:stream] Thinking block complete, length:', currentThinkingText.length)
+            }
+          }
         })
 
         stream.on('error', (err) => {
@@ -1017,7 +1107,11 @@ export function setupIpcHandlers(): void {
         const finalMessage = await stream.finalMessage()
         console.log('[LLM:stream] Got finalMessage, stop_reason:', finalMessage.stop_reason)
 
-        // Extract tool calls from the final message
+        // Extract tool calls and thinking blocks from the final message.
+        // Thinking blocks are passed back so useChat can embed them verbatim
+        // in the assistant content array for tool-loop continuations — the
+        // Anthropic API requires thinking blocks to be preserved unmodified.
+        const thinkingBlocks: Array<{ type: 'thinking'; thinking: string; signature?: string }> = []
         for (const block of finalMessage.content) {
           if (block.type === 'tool_use') {
             const toolCall = {
@@ -1027,14 +1121,21 @@ export function setupIpcHandlers(): void {
             }
             toolCalls.push(toolCall)
             event.sender.send('llm:stream:tool-call', { streamId, toolCall })
+          } else if (block.type === 'thinking') {
+            thinkingBlocks.push({
+              type: 'thinking',
+              thinking: block.thinking,
+              ...(block.signature ? { signature: block.signature } : {})
+            })
           }
         }
 
-        console.log('[LLM:stream] Sending complete:', fullContent.length, 'chars, toolCalls:', toolCalls.length)
+        console.log('[LLM:stream] Sending complete:', fullContent.length, 'chars, toolCalls:', toolCalls.length, 'thinkingBlocks:', thinkingBlocks.length)
         event.sender.send('llm:stream:complete', {
           streamId,
           content: fullContent,
-          toolCalls: toolCalls.length > 0 ? toolCalls : undefined
+          toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+          thinkingBlocks: thinkingBlocks.length > 0 ? thinkingBlocks : undefined
         })
 
         return { success: true }
@@ -1468,6 +1569,12 @@ export function setupIpcHandlers(): void {
   // closed-tab stack (enabled when non-empty). Rebuilds the menu only on change.
   ipcMain.handle('menu:setReopenClosedTabEnabled', async (_event, enabled: boolean) => {
     setReopenClosedTabEnabled(!!enabled)
+  })
+
+  // Shell: Open a local file in its default app (for non-markdown "Open Externally")
+  ipcMain.handle('shell:openPath', async (_event, path: string) => {
+    const safe = validatePath(path)
+    return shell.openPath(safe)
   })
 
   // Shell: Open external URL (for CMD+Click on links)

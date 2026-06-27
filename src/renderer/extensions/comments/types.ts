@@ -8,19 +8,44 @@ export interface CommentMark {
   createdAt: number
 }
 
+/** A single reply within a comment thread. */
+export interface CommentReply {
+  id: string
+  /** 'user' for human replies, 'ai' for AI-generated replies. */
+  author: 'user' | 'ai'
+  text: string
+  createdAt: number
+}
+
 export interface CommentData {
   id: string
   markedText: string
   comment: string
   createdAt: number
+  /**
+   * Who authored the top-level comment. 'user' for human-created comments (the
+   * UI path), 'ai' for comments the model leaves via `add_comment`. Missing in
+   * older data → treated as 'user'.
+   */
+  author?: 'user' | 'ai'
   /** 0-based index of which occurrence of markedText this comment anchors to. Missing in older data → treated as 0. */
   occurrenceIndex?: number
   from: number
   to: number
+  /** Ordered list of replies in the thread. Missing in older data → treated as []. */
+  replies?: CommentReply[]
+  /**
+   * True when the comment has been resolved. Resolved threads persist in the
+   * store (collapsed) rather than being deleted. Missing in older data → treated
+   * as false (active thread).
+   */
+  resolved?: boolean
 }
 
 export interface CommentOptions {
   HTMLAttributes?: Record<string, unknown>
   onCommentAdded?: (comment: CommentData) => void
   onCommentRemoved?: (id: string) => void
+  onCommentResolved?: (id: string) => void
+  onCommentReplied?: (id: string, reply: CommentReply) => void
 }

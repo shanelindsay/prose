@@ -12,7 +12,7 @@ import { getSuggestionsWithFeedback } from '../extensions/ai-suggestions'
 import { executeTool, resolveToolPosition } from '../lib/tools'
 import { getToolsForClaudeAPI } from '../../shared/tools/registry'
 import { resolveModelName } from '../../shared/llm/models'
-import type { LLMMessage, LLMStreamToolCall, LLMStreamToolCallStart, LLMContentBlock } from '../types'
+import type { LLMMessage, LLMStreamToolCall, LLMStreamToolCallStart, LLMContentBlock, LLMThinkingBlock } from '../types'
 
 // Chat Mode gets a read-only tool subset rather than the full read+write
 // surface, so the agent can ground itself in the document without proposing
@@ -125,6 +125,12 @@ const toolLoopContextRef = {
     // hallucinating "I'm still in <old> Mode" despite the tool list
     // and per-mode instructions reflecting the new mode.
     modeJustSwitched: boolean
+    // Thinking blocks from the most recent stream turn. The Anthropic
+    // API requires these to be embedded verbatim in the assistant content
+    // array of tool-loop continuations — dropping or modifying them
+    // causes a 400 error. We accumulate them here and prepend them to
+    // assistantContentBlocks before pushing the continuation message.
+    thinkingBlocks: LLMThinkingBlock[]
   } | null,
   streamId: null as string | null
 }
@@ -147,6 +153,7 @@ export function useChat() {
     isPanelOpen,
     context,
     toolMode,
+    thinkingEnabled,
     activeConversationId,
     isStreaming,
     isInitializing,
@@ -194,6 +201,15 @@ export function useChat() {
       } else {
         console.log('[useChat:chunk] ✗ REJECTED - streamId mismatch')
       }
+    })
+
+    // Thinking delta: the main process sends cumulative thinking text on each
+    // thinking_delta event. We write it directly to the streaming message so
+    // the ThinkingBlock component can show live updates while the model thinks.
+    const unsubThinkingDelta = api.onLLMStreamThinkingDelta?.((delta) => {
+      const state = useChatStore.getState()
+      if (delta.streamId !== state.currentStreamId || !state.streamingMessageId) return
+      state.updateMessage(state.streamingMessageId, { thinkingText: delta.thinking })
     })
 
     const unsubToolCall = api.onLLMStreamToolCall((toolCallEvent: LLMStreamToolCall) => {
@@ -274,9 +290,18 @@ export function useChat() {
 
         // Build assistant message content with text AND tool_use blocks
         // The Anthropic API requires tool_use blocks in the assistant message
-        // for the subsequent tool_result to be valid
+        // for the subsequent tool_result to be valid.
+        //
+        // Thinking blocks MUST come first and be preserved unmodified. The
+        // API rejects continuations that drop or modify them (#700).
         const assistantText = state.messages.find((m) => m.id === assistantMsgId)?.content || ''
         const assistantContentBlocks: LLMContentBlock[] = []
+
+        // Prepend thinking blocks from this turn — required by the API
+        const priorThinking = toolLoopContextRef.current?.thinkingBlocks ?? []
+        for (const tb of priorThinking) {
+          assistantContentBlocks.push(tb)
+        }
 
         // Add text block if there's any text content
         if (assistantText.trim()) {
@@ -395,13 +420,16 @@ export function useChat() {
         // Update context for potential next tool loop with new streamId.
         // Preserve `modeJustSwitched` across the whole turn so subsequent
         // continuations keep the "you just switched" notice.
+        // Store thinking blocks so the NEXT continuation can prepend them
+        // to its assistant content array (the API requires them preserved).
         const priorTurnContext = toolLoopContextRef.current
         toolLoopContextRef.current = {
           apiMessages: updatedMessages,
           assistantMsgId,
           roundtripCount: roundtripCount + 1,
           lastErrorSignature: currentErrorSignature,
-          modeJustSwitched: priorTurnContext?.modeJustSwitched ?? false
+          modeJustSwitched: priorTurnContext?.modeJustSwitched ?? false,
+          thinkingBlocks: (complete.thinkingBlocks as LLMThinkingBlock[] | undefined) ?? []
         }
         toolLoopContextRef.streamId = newStreamId
         pendingToolCallsRef.streamId = newStreamId
@@ -442,7 +470,8 @@ export function useChat() {
             streamId: newStreamId,
             tools,
             maxToolRoundtrips: 5,
-            maxTokens: state.toolMode === 'chat' ? 3072 : 4096
+            maxTokens: state.toolMode === 'chat' ? 16000 : 16000,
+            thinking: state.thinkingEnabled
           })
         } catch (error) {
           console.error('[Chat] Tool loop error:', error)
@@ -497,6 +526,7 @@ export function useChat() {
     return () => {
       console.log('[useChat:listeners] CLEANUP - unsubscribing all listeners')
       unsubChunk()
+      unsubThinkingDelta?.()
       unsubToolCall()
       unsubToolCallStart()
       unsubComplete()
@@ -629,7 +659,8 @@ export function useChat() {
           assistantMsgId,
           roundtripCount: 0,
           lastErrorSignature: null,
-          modeJustSwitched
+          modeJustSwitched,
+          thinkingBlocks: [] // populated by the first complete event
         }
         toolLoopContextRef.streamId = streamId
         pendingToolCallsRef.streamId = streamId
@@ -656,7 +687,13 @@ export function useChat() {
           streamId,
           tools,
           maxToolRoundtrips: 5,
-          maxTokens: toolMode === 'chat' ? 3072 : 4096
+          maxTokens: 16000,
+          // Read fresh at send time, not from the destructured render value:
+          // sendMessage is a useCallback whose deps omit thinkingEnabled, so the
+          // closed-over copy goes stale the moment the user toggles thinking and
+          // sends without an intervening recreate (same getState() pattern as
+          // toolMode above and the tool-loop continuation). (#700)
+          thinking: useChatStore.getState().thinkingEnabled
         })
       } catch (error) {
         console.error('[Chat] Error:', error)
@@ -736,18 +773,17 @@ export function useChat() {
     const comments = getComments(editor)
     if (comments.length === 0) return
 
-    // Build the prompt from comments
+    // Build the prompt from comments. The AI uses reply_to_comment /
+    // suggest_edit / resolve_comment to act on each thread — marks are not
+    // removed here; the AI resolves them via tools when done.
     const commentsPrompt = buildCommentsPrompt(comments)
-
-    // Only remove comments if the message was actually dispatched to the AI (#631)
-    const dispatched = await sendMessage(commentsPrompt)
-    if (dispatched) {
-      editor.commands.unsetAllComments()
-    }
+    await sendMessage(commentsPrompt)
   }, [sendMessage])
 
-  // Process a single comment by id — same prompt shape as processComments,
-  // but scoped to just one mark so the user can act per-comment from the popover.
+  // Process a single comment by id — launches the AI to read the thread and
+  // decide: reply, suggest_edit, or both, then resolve when done.
+  // The AI uses list_comments / reply_to_comment / suggest_edit / resolve_comment
+  // rather than the host deleting the mark immediately.
   const processComment = useCallback(async (commentId: string) => {
     const editor = useEditorInstanceStore.getState().editor
     if (!editor) return
@@ -756,10 +792,8 @@ export function useChat() {
     if (!target) return
 
     const commentsPrompt = buildCommentsPrompt([target])
-    const dispatched = await sendMessage(commentsPrompt)
-    if (dispatched) {
-      editor.commands.unsetComment(commentId)
-    }
+    // Do NOT delete the mark before or after — the AI decides when to resolve.
+    await sendMessage(commentsPrompt)
   }, [sendMessage])
 
   // Helper to get current comment count

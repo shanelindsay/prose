@@ -2,7 +2,10 @@ import { create } from 'zustand'
 import { useTabStore } from './tabStore'
 import { useChatStore } from './chatStore'
 
-export type ReviewMode = 'quick' | 'side-by-side'
+// 'comments' is the comment-thread counterpart to 'quick'/'side-by-side' — a
+// top-level review takeover (a peer of Quick Review, not a child of the Activity
+// tab) so the two can toggle between each other through the single mode slot.
+export type ReviewMode = 'quick' | 'side-by-side' | 'comments'
 
 interface TabReviewState {
   reviewMode: ReviewMode | null
@@ -13,9 +16,13 @@ interface ReviewStoreState {
   tabStates: Record<string, TabReviewState>
   wasChatOpenBeforeReview: Record<string, boolean>
   previousChatWidth: Record<string, number>
+  /** Thread to open Comment Review focused on (from a card/popover expand icon); null = start at 0. Transient, global. */
+  commentReviewTargetId: string | null
   setReviewMode: (mode: ReviewMode | null) => void
   setCurrentSuggestionIndex: (index: number) => void
   setPreviousChatWidth: (width: number) => void
+  /** Enter Comment Review (optionally focused on a thread). The single entry point. */
+  enterCommentReview: (threadId?: string) => void
 }
 
 const defaultTabState: TabReviewState = { reviewMode: null, currentSuggestionIndex: 0 }
@@ -24,10 +31,11 @@ function getActiveTabId(): string {
   return useTabStore.getState().activeTabId ?? ''
 }
 
-export const useReviewStore = create<ReviewStoreState>((set) => ({
+export const useReviewStore = create<ReviewStoreState>((set, get) => ({
   tabStates: {},
   wasChatOpenBeforeReview: {},
   previousChatWidth: {},
+  commentReviewTargetId: null,
 
   setReviewMode: (mode) => {
     const tabId = getActiveTabId()
@@ -79,12 +87,30 @@ export const useReviewStore = create<ReviewStoreState>((set) => ({
       },
     }))
   },
+
+  enterCommentReview: (threadId) => {
+    set({ commentReviewTargetId: threadId ?? null })
+    // Reuse setReviewMode so the snapshot / panel-open / resize logic (and the
+    // App-level effect keyed on reviewMode) treats Comment Review exactly like
+    // Quick Review.
+    get().setReviewMode('comments')
+  },
 }))
 
 /** Review mode for the currently active tab */
 export function useReviewMode(): ReviewMode | null {
   const tabId = useTabStore((s) => s.activeTabId)
   return useReviewStore((s) => s.tabStates[tabId ?? '']?.reviewMode ?? null)
+}
+
+/** Non-reactive read of the active tab's review mode (for use inside effects). */
+export function getActiveReviewMode(): ReviewMode | null {
+  return useReviewStore.getState().tabStates[getActiveTabId()]?.reviewMode ?? null
+}
+
+/** The thread Comment Review should open focused on (null = start at first). */
+export function useCommentReviewTargetId(): string | null {
+  return useReviewStore((s) => s.commentReviewTargetId)
 }
 
 /** Current suggestion index for the currently active tab */

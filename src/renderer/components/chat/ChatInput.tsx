@@ -1,7 +1,6 @@
-import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { Button } from '../ui/button'
-import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip'
-import { Square, MessageSquare, ChevronRight, X, Sparkles } from 'lucide-react'
+import { Square, ChevronRight, X } from 'lucide-react'
 import { useChat } from '../../hooks/useChat'
 import { useAIConfigured } from '../../hooks/useAIConfigured'
 import { aiUnavailableMessage } from '../../lib/llm'
@@ -141,32 +140,12 @@ interface ChatInputProps {
   onStop?: () => void
 }
 
-/**
- * Wraps a (possibly disabled) control in a tooltip only when `tip` is set.
- * The span trigger is needed because Radix tooltips don't fire hover events
- * on disabled buttons. When `tip` is null, renders children unchanged so the
- * normal (enabled) layout is untouched.
- */
-function AIControl({ tip, children }: { tip: string | null; children: ReactNode }) {
-  if (!tip) return <>{children}</>
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="block w-full">{children}</span>
-      </TooltipTrigger>
-      <TooltipContent>{tip}</TooltipContent>
-    </Tooltip>
-  )
-}
-
 export function ChatInput({ onSend, isLoading, isStreaming, onStop }: ChatInputProps) {
   const [message, setMessage] = useState('')
-  const [commentCount, setCommentCount] = useState(0)
-  const [suggestionFeedbackCount, setSuggestionFeedbackCount] = useState(0)
   const [selectedIndex, setSelectedIndex] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const itemRefs = useRef<Map<number, HTMLDivElement>>(new Map())
-  const { context, setContext, toolMode, processComments, getCommentCount, processSuggestionReplies, getSuggestionFeedbackCount, isInitializing } = useChat()
+  const { context, setContext, toolMode, isInitializing } = useChat()
   const ai = useAIConfigured()
   const aiBlockedTip = !ai.available && ai.reason ? aiUnavailableMessage(ai.reason) : null
   const editor = useEditorInstanceStore((state) => state.editor)
@@ -455,46 +434,6 @@ export function ChatInput({ onSend, isLoading, isStreaming, onStop }: ChatInputP
     setTimeout(() => textareaRef.current?.focus(), 0)
   }
 
-  // Track comment count changes
-  const updateCommentCount = useCallback(() => {
-    setCommentCount(getCommentCount())
-  }, [getCommentCount])
-
-  // Track suggestion feedback count changes
-  const updateSuggestionFeedbackCount = useCallback(() => {
-    setSuggestionFeedbackCount(getSuggestionFeedbackCount())
-  }, [getSuggestionFeedbackCount])
-
-  // Check for comments and suggestion feedback when editor changes or on mount
-  useEffect(() => {
-    if (!editor) return
-
-    updateCommentCount()
-    updateSuggestionFeedbackCount()
-
-    // Listen for editor updates
-    const handleUpdate = () => {
-      updateCommentCount()
-      updateSuggestionFeedbackCount()
-    }
-    editor.on('update', handleUpdate)
-    editor.on('selectionUpdate', handleUpdate)
-
-    return () => {
-      editor.off('update', handleUpdate)
-      editor.off('selectionUpdate', handleUpdate)
-    }
-  }, [editor, updateCommentCount, updateSuggestionFeedbackCount])
-
-  const handleProcessComments = () => {
-    processComments()
-    setCommentCount(0) // Optimistically clear count
-  }
-
-  const handleProcessSuggestionFeedback = () => {
-    processSuggestionReplies()
-    setSuggestionFeedbackCount(0) // Optimistically clear count
-  }
 
   // Parse slash commands: /tool_name [args]
   // With hybrid routing, LLM handles complex argument interpretation
@@ -816,37 +755,8 @@ export function ChatInput({ onSend, isLoading, isStreaming, onStop }: ChatInputP
         </div>
       )}
 
-      {/* Process Comments button */}
-      {commentCount > 0 && (
-        <AIControl tip={aiBlockedTip}>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={handleProcessComments}
-            disabled={isLoading || !ai.available}
-            className="mb-2 w-full justify-start gap-2"
-          >
-            <MessageSquare className="h-4 w-4" />
-            Process {commentCount} comment{commentCount !== 1 ? 's' : ''}
-          </Button>
-        </AIControl>
-      )}
-
-      {/* Process Suggestion Feedback button */}
-      {suggestionFeedbackCount > 0 && (
-        <AIControl tip={aiBlockedTip}>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={handleProcessSuggestionFeedback}
-            disabled={isLoading || !ai.available}
-            className="mb-2 w-full justify-start gap-2 bg-purple-500/10 hover:bg-purple-500/20 border-purple-500/30"
-          >
-            <Sparkles className="h-4 w-4 text-purple-500" />
-            Process {suggestionFeedbackCount} suggestion feedback{suggestionFeedbackCount !== 1 ? 's' : ''}
-          </Button>
-        </AIControl>
-      )}
+      {/* Process Comments + Process Suggestion Feedback moved to the shared
+          action row in ChatPanel. */}
 
       {/* Terminal-style input */}
       <div className="relative">

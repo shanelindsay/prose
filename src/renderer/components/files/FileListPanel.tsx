@@ -25,12 +25,6 @@ import {
   ContextMenuTrigger
 } from '../ui/context-menu'
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '../ui/dropdown-menu'
-import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -40,14 +34,17 @@ import {
 } from '../ui/dialog'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
-import { History, Cloud, Plus, FileText, BookOpen, CloudOff, ChevronUp, ChevronLeft, ChevronRight, ChevronDown, Folder, FolderOpen, FolderInput, Download, Trash2, FilePlus, ClipboardPaste, ExternalLink, X, Globe, Edit3, RefreshCw, Loader2, AlertTriangle, Bug, Boxes, Star, MoreHorizontal } from 'lucide-react'
+import { History, Cloud, Plus, FileText, BookOpen, CloudOff, ChevronUp, ChevronLeft, ChevronRight, ChevronDown, Folder, FolderOpen, FolderInput, FolderPlus, Download, Trash2, FilePlus, ClipboardPaste, ExternalLink, X, Globe, Edit3, RefreshCw, Loader2, AlertTriangle, Bug, Boxes, Star, Check } from 'lucide-react'
 import { useSettings } from '../../hooks/useSettings'
 import { cn } from '../../lib/utils'
 import { getApi } from '../../lib/browserApi'
+import { pruneMissingRecentFiles } from '../../lib/stalePath'
 import { requestBugReport } from '../EnableLoggingDialog'
 import type { RemarkableNotebookMetadata, RemarkableCloudNotebook, GoogleDocEntry } from '../../types'
 import { ProjectsPanel } from './ProjectsPanel'
 import { useProjects, useFavorites, useProjectsStore } from '../../stores/projectsStore'
+import { CustomizableToolbar } from '../ui/CustomizableToolbar'
+import type { ToolbarAction } from '../ui/CustomizableToolbar'
 
 export function FileListPanel() {
   const {
@@ -130,7 +127,8 @@ export function FileListPanel() {
   }, [])
 
   // View toggles in priority order (earliest stay inline longest).
-  const viewToggles = [
+  // All possible toggles — feature-gated ones are only present when enabled.
+  const allViewToggles = [
     {
       key: 'folder', Icon: Folder, label: 'Files', active: viewMode === 'folder',
       onClick: () => {
@@ -156,15 +154,28 @@ export function FileListPanel() {
         : setViewMode('notebooks'),
     }] : []),
   ]
+
+  // View-mode actions for the unified, customizable header (#701). Order +
+  // visibility persist under 'files-header'; the split between header buttons
+  // and the ⋯ overflow is a user-positioned boundary (handled by
+  // CustomizableToolbar), clamped by a width budget so the header still
+  // auto-collapses into ⋯ when the sidebar is narrow.
+  const viewToggleActions: ToolbarAction[] = allViewToggles.map((t) => ({
+    id: t.key,
+    label: t.label,
+    icon: <t.Icon className="h-4 w-4" />,
+    onSelect: t.onClick,
+    active: t.active,
+  }))
+
   const TOGGLE_PX = 36 // 32px button + 4px gap
   // Title gets a real min-width: shown at >=120px, otherwise hidden entirely
   // (rather than shrinking to a sliver) so the toggles collapse into ··· sooner.
   const showHeaderTitle = headerWidth === 0 || headerWidth >= 192
   const toggleBudget = headerWidth > 0 ? headerWidth - (showHeaderTitle ? 120 : 0) : Infinity
   const maxInlineToggles = Math.max(1, Math.floor(toggleBudget / TOGGLE_PX))
-  const togglesOverflow = viewToggles.length > maxInlineToggles
-  const inlineToggles = togglesOverflow ? viewToggles.slice(0, maxInlineToggles - 1) : viewToggles
-  const overflowToggles = togglesOverflow ? viewToggles.slice(maxInlineToggles - 1) : []
+  // Reserve one slot for the ⋯ trigger; Infinity (unmeasured) → no cap yet.
+  const headerBarCap = Number.isFinite(maxInlineToggles) ? Math.max(1, maxInlineToggles - 1) : undefined
 
   // Switch away from notebooks view if reMarkable becomes disconnected
   useEffect(() => {
@@ -185,9 +196,15 @@ export function FileListPanel() {
   const renamingPath = useFileListStore((s) => s.renamingPath)
   const setRenamingPath = useFileListStore((s) => s.setRenamingPath)
 
+  // Multi-select state and actions
+  const selectedPaths = useFileListStore((s) => s.selectedPaths)
+  const toggleSelectFile = useFileListStore((s) => s.toggleSelectFile)
+  const rangeSelectTo = useFileListStore((s) => s.rangeSelectTo)
+  const clearMultiSelect = useFileListStore((s) => s.clearMultiSelect)
+
   // Delete confirmation state
   const [deleteTarget, setDeleteTarget] = useState<{
-    path: string
+    paths: string[]
     fileName: string
     linkedNotebookId: string | null
   } | null>(null)
@@ -223,15 +240,22 @@ export function FileListPanel() {
 
   // Handle file delete request (opens confirmation dialog) — must be before useExplorerActions
   const handleFileDeleteRequest = async (path: string) => {
-    const fileName = path.split('/').pop() || path
+    // If the target row is part of a multi-selection, act on the whole set;
+    // otherwise act on just that file. This makes both the context menu and the
+    // ⌘⌫ keyboard shortcut operate on the selected set (#723 — bulk file actions).
+    const selected = useFileListStore.getState().selectedPaths
+    const paths = selected.size > 1 && selected.has(path) ? Array.from(selected) : [path]
 
-    // Check if file is linked to a reMarkable notebook
+    const fileName = paths[0]?.split('/').pop() || paths[0] || path
+
+    // The reMarkable notebook link only drives the single-file dialog copy. For a
+    // bulk delete we show a generic count and clear any links per-file on confirm.
     let linkedNotebookId: string | null = null
-    if (syncDirectory && window.api?.remarkableFindNotebookByFilePath) {
+    if (paths.length === 1 && syncDirectory && window.api?.remarkableFindNotebookByFilePath) {
       linkedNotebookId = await window.api.remarkableFindNotebookByFilePath(path, syncDirectory)
     }
 
-    setDeleteTarget({ path, fileName, linkedNotebookId })
+    setDeleteTarget({ paths, fileName, linkedNotebookId })
   }
 
   // New file dialog state (context-aware: stores target directory)
@@ -252,10 +276,24 @@ export function FileListPanel() {
     setNewFileDialogOpen(true)
   }, [])
 
+  // New Folder dialog state (declared before useExplorerActions so the hook's
+  // Cmd+Shift+N handler can target handleNewFolderInDir without a TDZ error)
+  const [newFolderDialogOpen, setNewFolderDialogOpen] = useState(false)
+  const [newFolderTargetDir, setNewFolderTargetDir] = useState<string | null>(null)
+  const [newFolderName, setNewFolderName] = useState('')
+
+  const handleNewFolderInDir = useCallback((parentDir: string) => {
+    setNewFolderTargetDir(parentDir)
+    setNewFolderName('')
+    setOperationError(null)
+    setNewFolderDialogOpen(true)
+  }, [])
+
   // Explorer actions hook (keyboard shortcuts + operations)
   const { moveFile, pasteFile, clipboardPath, clipboardOperation } = useExplorerActions({
     containerRef,
     onNewFile: handleNewFileInDir,
+    onNewFolder: handleNewFolderInDir,
     onFileOpen: async (path) => {
       selectFile(path)
       const shouldDescribe = await openFileInPreviewTab(path)
@@ -275,44 +313,89 @@ export function FileListPanel() {
     closeTab: forceCloseTab
   })
 
+  // Flatten the currently-visible explorer rows (files and folders) in tree
+  // order. Used to pick the row that slides into a deleted slot so keyboard
+  // focus + arrow-key navigation land somewhere sensible afterwards (#723).
+  const visibleRowPaths = useCallback(() => {
+    const { files, expandedFolders } = useFileListStore.getState()
+    const out: string[] = []
+    const walk = (items: typeof files) => {
+      for (const item of items) {
+        out.push(item.path)
+        if (item.isDirectory && expandedFolders.has(item.path) && item.children) walk(item.children)
+      }
+    }
+    walk(files)
+    return out
+  }, [])
+
   // Confirm and execute file deletion
   const handleConfirmDelete = async () => {
     if (!deleteTarget || !window.api) return
 
+    // Snapshot the visible rows before deleting so we can select the row that
+    // takes the deleted item's place once the list refreshes (Finder-like).
+    const visibleBefore = visibleRowPaths()
+    const deletedIndices = deleteTarget.paths
+      .map((p) => visibleBefore.indexOf(p))
+      .filter((i) => i >= 0)
+    const firstDeletedIndex = deletedIndices.length ? Math.min(...deletedIndices) : 0
+
     setIsDeleting(true)
     try {
-      // If linked to a notebook, clear the markdown path first
-      if (deleteTarget.linkedNotebookId && syncDirectory) {
-        await window.api.remarkableClearNotebookMarkdownPath(
-          deleteTarget.linkedNotebookId,
-          syncDirectory
-        )
-      }
+      const single = deleteTarget.paths.length === 1
+      let googleChanged = false
 
-      // Move to trash (recoverable)
-      await window.api.trashFile(deleteTarget.path)
+      for (const p of deleteTarget.paths) {
+        // If linked to a notebook, clear the markdown path first. Single-file
+        // deletes reuse the link resolved for the dialog; bulk deletes look up
+        // each file's link individually.
+        if (syncDirectory && window.api.remarkableFindNotebookByFilePath) {
+          const linkedId = single
+            ? deleteTarget.linkedNotebookId
+            : await window.api.remarkableFindNotebookByFilePath(p, syncDirectory)
+          if (linkedId && window.api.remarkableClearNotebookMarkdownPath) {
+            await window.api.remarkableClearNotebookMarkdownPath(linkedId, syncDirectory)
+          }
+        }
 
-      // If this file is tracked in Google Docs metadata, remove its entry
-      if (googleDocsMetadata && window.api.googleRemoveSyncMetadataEntry) {
-        const trackedEntry = Object.values(googleDocsMetadata.documents).find(
-          (e) => e.localPath === deleteTarget.path
-        )
-        if (trackedEntry) {
-          await window.api.googleRemoveSyncMetadataEntry(trackedEntry.googleDocId)
-          await loadGoogleDocsMetadata()
+        // Move to trash (recoverable)
+        await window.api.trashFile(p)
+
+        // If this file is tracked in Google Docs metadata, remove its entry
+        if (googleDocsMetadata && window.api.googleRemoveSyncMetadataEntry) {
+          const trackedEntry = Object.values(googleDocsMetadata.documents).find(
+            (e) => e.localPath === p
+          )
+          if (trackedEntry) {
+            await window.api.googleRemoveSyncMetadataEntry(trackedEntry.googleDocId)
+            googleChanged = true
+          }
+        }
+
+        // Close the tab if the trashed file was open (full close flow)
+        const tab = useTabStore.getState().getTabByPath(p)
+        if (tab) {
+          await forceCloseTab(tab.id)
         }
       }
 
-      // Close the tab if the trashed file was open (full close flow)
-      const tab = useTabStore.getState().getTabByPath(deleteTarget.path)
-      if (tab) {
-        await forceCloseTab(tab.id)
+      if (googleChanged) {
+        await loadGoogleDocsMetadata()
       }
 
-      // Refresh file list
+      // Refresh the list, then select the row that slid into the deleted slot
+      // (or the last row if we deleted the tail) so arrow-key nav continues from
+      // a sensible spot. Focus return to the panel is handled by the dialog's
+      // onCloseAutoFocus below.
       await loadFiles()
+      const visibleAfter = visibleRowPaths()
+      const neighbor = visibleAfter.length
+        ? visibleAfter[Math.min(firstDeletedIndex, visibleAfter.length - 1)]
+        : null
+      selectFile(neighbor)
 
-      // Close dialog
+      // Close dialog (its onCloseAutoFocus returns focus to the explorer panel)
       setDeleteTarget(null)
     } catch (error) {
       console.error('Failed to delete file:', error)
@@ -329,6 +412,35 @@ export function FileListPanel() {
     setOperationError(null)
     setNewFileDialogOpen(true)
   }
+
+  const handleNewFolder = () => {
+    setNewFolderTargetDir(rootPath)
+    setNewFolderName('')
+    setOperationError(null)
+    setNewFolderDialogOpen(true)
+  }
+
+  const handleCreateNewFolder = async () => {
+    const targetDir = newFolderTargetDir || rootPath
+    if (!targetDir || !newFolderName.trim() || !window.api?.createDirectory) return
+
+    try {
+      const folderPath = `${targetDir}/${newFolderName.trim()}`
+      await window.api.createDirectory(folderPath)
+      await loadFiles()
+      // Expand parent so the new folder is visible
+      useFileListStore.getState().setExpanded(targetDir, true)
+      setNewFolderDialogOpen(false)
+    } catch (error) {
+      console.error('Error creating folder:', error)
+      setOperationError('Failed to create folder. Please try again.')
+    }
+  }
+
+  // Open a non-markdown file in its default external app
+  const handleOpenExternally = useCallback((path: string) => {
+    window.api?.openPath(path)
+  }, [])
 
   // Add a path to the persisted pointer list (folders → projects/favorites,
   // files → favorites). Idempotent: dedup by path so re-adding is a no-op.
@@ -356,6 +468,18 @@ export function FileListPanel() {
       addedAt: new Date().toISOString(),
     })
   }, [])
+
+  // Add to Favorites, multi-select aware: if the right-clicked row is part of a
+  // multi-selection, favorite every selected path; otherwise just that one.
+  // addPathAsFavorite already dedupes, so re-favoriting is a no-op. (#723)
+  const handleAddFavoriteRequest = useCallback(
+    (path: string, isDirectory: boolean) => {
+      const selected = useFileListStore.getState().selectedPaths
+      const paths = selected.size > 1 && selected.has(path) ? Array.from(selected) : [path]
+      for (const p of paths) addPathAsFavorite(p, isDirectory)
+    },
+    [addPathAsFavorite]
+  )
 
   // Inverse of the add helpers: look the pointer up by path and drop it. Go
   // through useProjectsStore.removeProject (not the bare settings mutator) so an
@@ -408,15 +532,28 @@ export function FileListPanel() {
     setRenamingPath(path)
   }, [selectFile, setRenamingPath])
 
-  // Inline rename complete handler
+  // Inline rename complete handler — works for both files and directories
   const handleRenameComplete = useCallback(async (oldPath: string, newName: string) => {
     setRenamingPath(null)
+    // Return focus to the explorer panel so arrow-key nav resumes immediately
+    // after the inline input unmounts (covers commit and every early-return).
+    requestAnimationFrame(() => containerRef.current?.focus())
     if (!newName.trim()) return
 
     try {
       const dir = oldPath.substring(0, oldPath.lastIndexOf('/'))
-      const oldExt = oldPath.match(/\.(md|markdown|txt)$/)?.[0] || '.md'
-      const finalName = newName.endsWith(oldExt) ? newName : `${newName}${oldExt}`
+      const isMarkdownFile = /\.(md|markdown|txt)$/.test(oldPath)
+
+      let finalName: string
+      if (isMarkdownFile) {
+        // File: preserve/append the extension
+        const oldExt = oldPath.match(/\.(md|markdown|txt)$/)?.[0] || '.md'
+        finalName = newName.endsWith(oldExt) ? newName : `${newName}${oldExt}`
+      } else {
+        // Directory (or non-markdown file): use the name as typed
+        finalName = newName.trim()
+      }
+
       const newPath = `${dir}/${finalName}`
 
       // Same name? No-op
@@ -425,46 +562,106 @@ export function FileListPanel() {
       // Check conflict
       const exists = await api.fileExists(newPath)
       if (exists) {
-        console.error(`File "${finalName}" already exists`)
+        console.error(`"${finalName}" already exists`)
         return
       }
 
       await api.renameFile(oldPath, newPath)
 
-      // Tab sync: update tab if file was open
-      const tab = useTabStore.getState().getTabByPath(oldPath)
-      if (tab) {
-        const newTitle = finalName.replace(/\.(md|markdown|txt)$/, '')
-        useTabStore.getState().updateTab(tab.id, { path: newPath, title: newTitle })
-      }
-
-      // If this file is tracked in Google Docs metadata, update its localPath
-      if (googleDocsMetadata && window.api?.googleUpdateSyncMetadataEntry) {
-        const trackedEntry = Object.values(googleDocsMetadata.documents).find(
-          (e) => e.localPath === oldPath
-        )
-        if (trackedEntry) {
+      if (isMarkdownFile) {
+        // Tab sync: update tab if the file was open
+        const tab = useTabStore.getState().getTabByPath(oldPath)
+        if (tab) {
           const newTitle = finalName.replace(/\.(md|markdown|txt)$/, '')
-          await window.api.googleUpdateSyncMetadataEntry({
-            ...trackedEntry,
-            localPath: newPath,
-            title: newTitle
-          })
-          await loadGoogleDocsMetadata()
+          useTabStore.getState().updateTab(tab.id, { path: newPath, title: newTitle })
+        }
+
+        // If tracked in Google Docs metadata, update its localPath
+        if (googleDocsMetadata && window.api?.googleUpdateSyncMetadataEntry) {
+          const trackedEntry = Object.values(googleDocsMetadata.documents).find(
+            (e) => e.localPath === oldPath
+          )
+          if (trackedEntry) {
+            const newTitle = finalName.replace(/\.(md|markdown|txt)$/, '')
+            await window.api.googleUpdateSyncMetadataEntry({
+              ...trackedEntry,
+              localPath: newPath,
+              title: newTitle
+            })
+            await loadGoogleDocsMetadata()
+          }
         }
       }
 
-      // Refresh file list and select the renamed file
-      await loadFiles()
+      // Migrate every reference whose path is the renamed entry or lives under
+      // it. The markdown-file tab/title + Google-metadata sync above covers the
+      // renamed file itself; this also covers favorites, projects, and — for a
+      // directory rename — open tabs of files *inside* the folder. Without it
+      // those references orphan onto the now-dead path (#703 HITL: a folder
+      // rename dropped its favorite and could leave child tabs saving to a
+      // stale location).
+      const remapPath = (p: string): string | null => {
+        if (p === oldPath) return newPath
+        if (p.startsWith(`${oldPath}/`)) return `${newPath}${p.slice(oldPath.length)}`
+        return null
+      }
+      for (const tab of useTabStore.getState().tabs) {
+        if (!tab.path) continue
+        const migrated = remapPath(tab.path)
+        if (migrated && migrated !== tab.path) {
+          useTabStore.getState().updateTab(tab.id, { path: migrated })
+        }
+      }
+      for (const fav of useSettingsStore.getState().settings.favorites ?? []) {
+        const migrated = remapPath(fav.path)
+        if (migrated) {
+          useSettingsStore.getState().updateFavorite(
+            fav.id,
+            fav.path === oldPath ? { path: migrated, name: finalName } : { path: migrated }
+          )
+        }
+      }
+      for (const proj of useSettingsStore.getState().settings.projects ?? []) {
+        const migrated = remapPath(proj.path)
+        if (migrated) {
+          useSettingsStore.getState().updateProject(
+            proj.id,
+            proj.path === oldPath ? { path: migrated, name: finalName } : { path: migrated }
+          )
+        }
+      }
+
+      // Update the tree in-place — no IPC round-trip, so no flicker from
+      // unmounting rows whose paths didn't change.
+      useFileListStore.getState().renameInTree(oldPath, newPath, finalName)
       selectFile(newPath)
     } catch (error) {
-      console.error('Error renaming file:', error)
+      console.error('Error renaming:', error)
     }
-  }, [api, googleDocsMetadata, loadGoogleDocsMetadata, loadFiles, selectFile, setRenamingPath])
+  }, [api, googleDocsMetadata, loadGoogleDocsMetadata, selectFile, setRenamingPath])
 
   const handleRenameCancel = useCallback(() => {
     setRenamingPath(null)
+    requestAnimationFrame(() => containerRef.current?.focus())
   }, [setRenamingPath])
+
+  // Range-select: resolves visible file paths and delegates to the store
+  const handleFileRangeSelect = useCallback((path: string) => {
+    const { files, expandedFolders } = useFileListStore.getState()
+    // Collect visible file paths (not folders) in tree order
+    const collectVisible = (items: typeof files): string[] => {
+      const paths: string[] = []
+      for (const item of items) {
+        if (!item.isDirectory) paths.push(item.path)
+        if (item.isDirectory && expandedFolders.has(item.path) && item.children) {
+          paths.push(...collectVisible(item.children))
+        }
+      }
+      return paths
+    }
+    const visibleFilePaths = collectVisible(files)
+    rangeSelectTo(path, visibleFilePaths)
+  }, [rangeSelectTo])
 
   // Dialog-based rename (for Google Docs view where inline isn't available)
   const handleFileRename = (path: string) => {
@@ -615,6 +812,13 @@ export function FileListPanel() {
     }
   }, [viewMode, googleConnected]) // Intentionally exclude googleSync and isGoogleSyncing to only trigger on view change
 
+  useEffect(() => {
+    if (viewMode !== 'recent' || recentFiles.length === 0) return
+    pruneMissingRecentFiles(recentFiles).catch((error) => {
+      console.error('[FileListPanel] Failed to prune missing recent files:', error)
+    })
+  }, [viewMode, recentFiles])
+
   const handleFileClick = async (path: string) => {
     selectFile(path)
     const shouldDescribe = await openFileInPreviewTab(path)
@@ -630,6 +834,18 @@ export function FileListPanel() {
     if (shouldDescribe) {
       const { document } = useEditorStore.getState()
       useSummaryStore.getState().generateSummary(document.documentId, document.content)
+    }
+  }
+
+  // "Open" from the context menu, multi-select aware: open every selected file
+  // as a permanent tab. Open sequentially (await each) to avoid racing tab
+  // creation and the summary read of the active document. Falls back to the
+  // single path when the row isn't part of a multi-selection. (#723)
+  const handleFileOpenRequest = async (path: string) => {
+    const selected = useFileListStore.getState().selectedPaths
+    const paths = selected.size > 1 && selected.has(path) ? Array.from(selected) : [path]
+    for (const p of paths) {
+      await handleFileDoubleClick(p)
     }
   }
 
@@ -1105,50 +1321,17 @@ export function FileListPanel() {
             </Tooltip>
           )}
         </div>
-        <div className="flex shrink-0 items-center gap-1">
-          {/* View toggles — responsive: overflow into a ··· menu when narrow */}
-          {inlineToggles.map((t) => (
-            <Tooltip key={t.key}>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className={cn("h-8 w-8", t.active && "bg-accent text-accent-foreground")}
-                  onClick={t.onClick}
-                  aria-label={t.label}
-                >
-                  <t.Icon className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{t.label}</TooltipContent>
-            </Tooltip>
-          ))}
-          {overflowToggles.length > 0 && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className={cn("h-8 w-8", overflowToggles.some((t) => t.active) && "bg-accent text-accent-foreground")}
-                  aria-label="More views"
-                >
-                  <MoreHorizontal className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {overflowToggles.map((t) => (
-                  <DropdownMenuItem
-                    key={t.key}
-                    className={cn(t.active && "bg-muted")}
-                    onClick={t.onClick}
-                  >
-                    <t.Icon className="h-4 w-4 mr-2" />
-                    {t.label}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+        <div className="flex shrink-0 items-center">
+          {/* View toggles — unified, customizable header + ⋯ overflow (#701).
+              maxBarCap keeps the auto-collapse-when-narrow behavior. */}
+          <CustomizableToolbar
+            menuId="files-header"
+            actions={viewToggleActions}
+            defaultBarCount={viewToggleActions.length}
+            maxBarCap={headerBarCap}
+            compact
+            align="end"
+          />
         </div>
       </div>
 
@@ -1183,7 +1366,14 @@ export function FileListPanel() {
       )}
 
       {/* Content */}
-      <ScrollArea className="flex-1">
+      {/* Radix's internal viewport content wrapper is display:table + min-width:100%,
+          which shrink-wraps to content and breaks percentage-height resolution for
+          its children. Make it a full-height flex column so the file-list trigger
+          (flex:1 0 auto, below) fills the viewport and covers the empty space below
+          the rows — right-click in the blank area still offers New File / New Folder
+          / Paste (#703). Scoped to this ScrollArea; the panel truncates, so dropping
+          the table layout costs no horizontal-scroll behavior. */}
+      <ScrollArea className="flex-1 [&_[data-radix-scroll-area-viewport]>div]:!flex [&_[data-radix-scroll-area-viewport]>div]:!flex-col [&_[data-radix-scroll-area-viewport]>div]:h-full">
         {viewMode === 'projects' && !currentProject ? (
           <ProjectsPanel mode="projects" />
         ) : viewMode === 'favorites' ? (
@@ -1397,7 +1587,7 @@ export function FileListPanel() {
             <ContextMenu>
               <ContextMenuTrigger asChild>
                 <div
-                  className="p-2 min-h-full"
+                  className="p-2 grow shrink-0"
                   onDragOver={(e) => {
                     if (e.dataTransfer.types.includes('application/prose-file-path')) {
                       e.preventDefault()
@@ -1453,13 +1643,22 @@ export function FileListPanel() {
                       projectPaths={projectPaths}
                       expandedFolders={expandedFolders}
                       selectedPath={selectedPath}
+                      selectedPaths={selectedPaths}
                       loadingFolders={loadingFolders}
                       renamingPath={renamingPath}
                       clipboardPath={clipboardPath}
                       clipboardOperation={clipboardOperation}
                       onFileClick={handleFileClick}
+                      onFileToggleSelect={toggleSelectFile}
+                      onFileRangeSelect={handleFileRangeSelect}
                       onFileDoubleClick={handleFileDoubleClick}
-                      onFolderToggle={toggleFolder}
+                      onFolderToggle={(path) => {
+                        // Select the folder as well as toggling it, so it becomes
+                        // the selected row — required for Enter-to-rename and the
+                        // Finder-like highlight on the clicked folder (#703).
+                        selectFile(path)
+                        toggleFolder(path)
+                      }}
                       onFolderDoubleClick={setRootPath}
                       onFileTrash={handleFileDeleteRequest}
                       onFileRename={handleFileRenameInline}
@@ -1467,13 +1666,14 @@ export function FileListPanel() {
                       onFileCopy={(path: string) => useFileListStore.getState().setClipboardPath(path, 'copy')}
                       onFileCut={(path: string) => useFileListStore.getState().setClipboardPath(path, 'cut')}
                       onFilePaste={pasteFile}
-                      onFileMove={moveFile}
-                      onFileOpen={handleFileDoubleClick}
                       onRenameComplete={handleRenameComplete}
                       onRenameCancel={handleRenameCancel}
                       onNewFile={handleNewFileInDir}
+                      onNewFolder={handleNewFolderInDir}
+                      onFileOpen={handleFileOpenRequest}
+                      onOpenExternally={handleOpenExternally}
                       onAddProject={addPathAsProject}
-                      onAddFavorite={addPathAsFavorite}
+                      onAddFavorite={handleAddFavoriteRequest}
                       onRemoveProject={removePathAsProject}
                       onRemoveFavorite={removePathAsFavorite}
                       onFileDrop={handleFileDrop}
@@ -1487,25 +1687,15 @@ export function FileListPanel() {
                   New File
                   <ContextMenuShortcut>⌘N</ContextMenuShortcut>
                 </ContextMenuItem>
+                <ContextMenuItem onClick={handleNewFolder}>
+                  <FolderPlus className="h-4 w-4 mr-2" />
+                  New Folder
+                  <ContextMenuShortcut>⇧⌘N</ContextMenuShortcut>
+                </ContextMenuItem>
                 <ContextMenuItem onClick={() => pasteFile()} disabled={!clipboardPath}>
                   <ClipboardPaste className="h-4 w-4 mr-2" />
                   Paste
                   <ContextMenuShortcut>⌘V</ContextMenuShortcut>
-                </ContextMenuItem>
-                <ContextMenuSeparator />
-                <ContextMenuItem
-                  onClick={() => rootPath && addPathAsProject(rootPath)}
-                  disabled={!rootPath}
-                >
-                  <Boxes className="h-4 w-4 mr-2" />
-                  Add as Project
-                </ContextMenuItem>
-                <ContextMenuItem
-                  onClick={() => rootPath && addPathAsFavorite(rootPath, true)}
-                  disabled={!rootPath}
-                >
-                  <Star className="h-4 w-4 mr-2" />
-                  Add to Favorites
                 </ContextMenuItem>
               </ContextMenuContent>
             </ContextMenu>
@@ -1515,11 +1705,23 @@ export function FileListPanel() {
 
       {/* Delete confirmation dialog */}
       <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
-        <DialogContent>
+        <DialogContent
+          onCloseAutoFocus={(e) => {
+            // Take over focus return: land it on the explorer panel (not the
+            // now-removed trigger) so arrow-key navigation works immediately.
+            e.preventDefault()
+            containerRef.current?.focus()
+          }}
+        >
           <DialogHeader>
             <DialogTitle>Move to Trash?</DialogTitle>
             <DialogDescription>
-              {deleteTarget?.linkedNotebookId ? (
+              {deleteTarget && deleteTarget.paths.length > 1 ? (
+                <>
+                  Are you sure you want to move <strong>{deleteTarget.paths.length} files</strong> to the Trash?
+                  You can restore them from the Trash if needed.
+                </>
+              ) : deleteTarget?.linkedNotebookId ? (
                 <>
                   This will move <strong>{deleteTarget?.fileName}</strong> to the Trash and unlink it from its reMarkable notebook.
                   The original OCR content will be preserved and you can re-create an editable version later.
@@ -1686,6 +1888,53 @@ export function FileListPanel() {
               Cancel
             </Button>
             <Button onClick={handleCreateNewFile} disabled={!newFileName.trim()}>
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* New Folder Dialog */}
+      <Dialog open={newFolderDialogOpen} onOpenChange={(open) => {
+        if (!open) {
+          setNewFolderDialogOpen(false)
+          setOperationError(null)
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>New Folder</DialogTitle>
+            <DialogDescription>
+              Enter a name for the new folder.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="new-folder-name">Folder name</Label>
+              <Input
+                id="new-folder-name"
+                value={newFolderName}
+                onChange={(e) => {
+                  setNewFolderName(e.target.value)
+                  setOperationError(null)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleCreateNewFolder()
+                  }
+                }}
+                autoFocus
+              />
+              {operationError && (
+                <p className="text-sm text-destructive">{operationError}</p>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setNewFolderDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreateNewFolder} disabled={!newFolderName.trim()}>
               Create
             </Button>
           </DialogFooter>

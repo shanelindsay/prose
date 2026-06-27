@@ -10,7 +10,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from '../ui/dropdown-menu'
-import { MessageSquare, History, Plus, Trash2, Sparkles, Info, Loader2, Filter } from 'lucide-react'
+import { MessageSquare, History, Plus, Trash2, Sparkles, Info, Loader2, Filter, SlidersHorizontal, Eye, EyeOff, Check, ChevronUp, ChevronDown, Maximize2 } from 'lucide-react'
+import { useMenuCustomization } from '../../hooks/useMenuCustomization'
+import type { MenuItemDescriptor } from '../../hooks/useMenuCustomization'
 import { useChatStore } from '../../stores/chatStore'
 import { useEditorStore } from '../../stores/editorStore'
 import { useEditorInstanceStore } from '../../stores/editorInstanceStore'
@@ -20,23 +22,34 @@ import { useSummaryStore } from '../../stores/summaryStore'
 import { getAISuggestions } from '../../extensions/ai-suggestions/extension'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip'
 import { ReviewContainer } from '../review/ReviewContainer'
-import { AIEditsHistoryPanel } from '../editor/AIEditsHistoryPanel'
+import { AIEditsHistoryPanel, activityItemVisible, DEFAULT_ACTIVITY_FILTER, requestCommentReview, type ActivityFilter } from '../editor/AIEditsHistoryPanel'
 import { useAnnotationStore } from '../../extensions/ai-annotations/store'
+import { useCommentStore } from '../../extensions/comments/store'
 import { MODE_SWITCH_RUN_EVENT } from './toolResultRenderers/RequestModeSwitchResult'
 import { cn } from '../../lib/utils'
+import { useSettingsStore } from '../../stores/settingsStore'
 
 export function ChatPanel() {
-  const { messages, isLoading, isStreaming, sendMessage, stopGeneration, clearMessages } = useChat()
+  const { messages, isLoading, isStreaming, sendMessage, stopGeneration, clearMessages, processComments, processSuggestionReplies, getSuggestionFeedbackCount } = useChat()
+  const { settings } = useSettingsStore()
   const scrollRef = useRef<HTMLDivElement>(null)
   const chatTabRef = useRef<HTMLButtonElement>(null)
   const activityTabRef = useRef<HTMLButtonElement>(null)
   const reviewMode = useReviewMode()
   const [infoOpen, setInfoOpen] = useState(false)
   const [sidebarMode, setSidebarMode] = useState<'chat' | 'activity'>('chat')
-  // Filter superseded (detached) entries out of the Activity list. Lifted here
-  // because the toggle lives in this header but the filtering happens in
-  // AIEditsHistoryPanel.
-  const [hideSuperseded, setHideSuperseded] = useState(false)
+  // Multi-category Activity filter. Lifted here because the funnel lives in this
+  // header, but the filtering happens in AIEditsHistoryPanel. Each category
+  // (open/pending/resolved threads, current/superseded edits) toggles on/off.
+  const [activityFilter, setActivityFilter] = useState<ActivityFilter>(DEFAULT_ACTIVITY_FILTER)
+  const toggleFilter = useCallback(
+    (key: keyof ActivityFilter) => setActivityFilter((f) => ({ ...f, [key]: !f[key] })),
+    []
+  )
+  // Comment Review is now a top-level takeover (reviewMode === 'comments',
+  // rendered by ReviewContainer via the early return below), not a child of this
+  // Activity tab — so it and Quick Review toggle through one mode slot.
+  // requestCommentReview() is the single entry point.
 
   const {
     conversations,
@@ -89,15 +102,23 @@ export function ChatPanel() {
     return () => window.removeEventListener(MODE_SWITCH_RUN_EVENT, handler)
   }, [sendMessage])
 
-  // Annotation counts for the Activity tab badge + filter affordance.
+  // Activity feed sources for the tab badge + filter affordance.
   const annotations = useAnnotationStore((s) => s.annotations)
-  const supersededCount = useMemo(
-    () => annotations.reduce((n, a) => (a.detached ? n + 1 : n), 0),
-    [annotations]
-  )
-  // Badge reflects what's currently shown: total when including superseded,
-  // current-only when the filter is engaged.
-  const activityCount = hideSuperseded ? annotations.length - supersededCount : annotations.length
+  const pendingComments = useCommentStore((s) => s.pendingComments)
+
+  // There's something to filter whenever any annotation or comment exists.
+  const hasActivity = annotations.length > 0 || pendingComments.length > 0
+  // Open (unresolved) threads are the Review set.
+  const openThreadCount = useMemo(() => pendingComments.filter((c) => !c.resolved).length, [pendingComments])
+  // Any category turned off means the filter is engaged (tints the funnel).
+  const isFiltering = Object.values(activityFilter).some((v) => !v)
+
+  // Badge reflects what's currently shown under the active filter.
+  const activityCount = useMemo(() => {
+    const a = annotations.filter((an) => activityItemVisible({ kind: 'annotation', annotation: an }, activityFilter)).length
+    const c = pendingComments.filter((cm) => activityItemVisible({ kind: 'comment', comment: cm }, activityFilter)).length
+    return a + c
+  }, [annotations, pendingComments, activityFilter])
 
   // Track pending suggestion count
   const suggestionCount = useMemo(() => {
@@ -105,6 +126,13 @@ export function ChatPanel() {
     return getAISuggestions(editor).length
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, editor?.state.doc])
+
+  // Suggestions that have user feedback awaiting a Process pass.
+  const suggestionFeedbackCount = useMemo(() => {
+    if (!editor) return 0
+    return getSuggestionFeedbackCount()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor, editor?.state.doc, getSuggestionFeedbackCount])
 
   // Filter out hidden messages for display
   const visibleMessages = messages.filter((m) => !m.hidden)
@@ -204,6 +232,22 @@ export function ChatPanel() {
     deleteConversation(conversationId)
   }
 
+  // Customizable footer items in the chat history dropdown.
+  // Only static items are customizable — the conversation list is not.
+  const chatHistoryFooterDescriptors: MenuItemDescriptor[] = [
+    { id: 'new-chat', label: 'New Chat' },
+  ]
+  const {
+    visibleIds: chatHistoryVisibleIds,
+    hiddenIds: chatHistoryHiddenIds,
+    orderedAllIds: chatHistoryOrderedIds,
+    toggleHidden: toggleChatHistoryHidden,
+    moveUp: moveChatHistoryUp,
+    moveDown: moveChatHistoryDown,
+  } = useMenuCustomization('chat-history', chatHistoryFooterDescriptors)
+  const [isChatHistoryEditMode, setIsChatHistoryEditMode] = useState(false)
+  const showNewChat = chatHistoryVisibleIds.includes('new-chat')
+
   if (reviewMode) {
     return (
       <div className="flex h-full flex-col bg-muted/20">
@@ -264,30 +308,50 @@ export function ChatPanel() {
             </button>
           </div>
 
-          {/* Filter: hide/show superseded — only when there's something to filter */}
-          {sidebarMode === 'activity' && supersededCount > 0 && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className={cn(
-                    'h-6 w-6',
-                    hideSuperseded ? 'bg-accent text-primary' : 'text-muted-foreground hover:text-foreground'
-                  )}
-                  onClick={() => setHideSuperseded((v) => !v)}
-                  aria-pressed={hideSuperseded}
-                  aria-label={hideSuperseded ? 'Show superseded edits' : 'Hide superseded edits'}
+          {/* Filter: toggle any activity category on/off — only when there's
+              something to filter. */}
+          {sidebarMode === 'activity' && hasActivity && (
+            <DropdownMenu>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={cn(
+                        'h-6 w-6',
+                        isFiltering ? 'bg-accent text-primary' : 'text-muted-foreground hover:text-foreground'
+                      )}
+                      aria-label="Filter activity"
+                    >
+                      <Filter className="h-3.5 w-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent>Filter activity</TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent align="start" className="w-52">
+                <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                  Comment threads
+                </div>
+                <FilterRow label="Open" active={activityFilter.openThreads} onClick={() => toggleFilter('openThreads')} />
+                <FilterRow label="Pending" active={activityFilter.pendingThreads} onClick={() => toggleFilter('pendingThreads')} />
+                <FilterRow label="Resolved" active={activityFilter.resolvedThreads} onClick={() => toggleFilter('resolvedThreads')} />
+                <DropdownMenuSeparator />
+                <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                  AI edits
+                </div>
+                <FilterRow label="Current" active={activityFilter.edits} onClick={() => toggleFilter('edits')} />
+                <FilterRow label="Superseded" active={activityFilter.superseded} onClick={() => toggleFilter('superseded')} />
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="cursor-pointer text-xs"
+                  onClick={() => setActivityFilter(DEFAULT_ACTIVITY_FILTER)}
                 >
-                  <Filter className="h-3.5 w-3.5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                {hideSuperseded
-                  ? 'Showing current edits · click to include superseded'
-                  : 'Hide superseded edits'}
-              </TooltipContent>
-            </Tooltip>
+                  Show all
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
         </div>
 
@@ -318,7 +382,7 @@ export function ChatPanel() {
               <TooltipContent>Document info</TooltipContent>
             </Tooltip>
             {conversations.length > 0 && (
-              <DropdownMenu>
+              <DropdownMenu onOpenChange={(open) => { if (!open) setIsChatHistoryEditMode(false) }}>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <DropdownMenuTrigger asChild>
@@ -334,43 +398,121 @@ export function ChatPanel() {
                   </TooltipTrigger>
                   <TooltipContent>Chat history</TooltipContent>
                 </Tooltip>
-                <DropdownMenuContent align="end" className="w-64">
-                  {conversations.map((conversation) => (
-                    <DropdownMenuItem
-                      key={conversation.id}
-                      className="flex items-center justify-between gap-2 cursor-pointer"
-                      onClick={() => handleSelectConversation(conversation.id)}
-                    >
-                      <span
-                        className={`truncate flex-1 ${
-                          conversation.id === activeConversationId
-                            ? 'font-medium'
-                            : ''
-                        }`}
-                      >
-                        {conversation.title ?? 'New Chat'}
-                      </span>
-                      {conversations.length > 1 && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6 shrink-0 opacity-50 hover:opacity-100"
-                          onClick={(e) =>
-                            handleDeleteConversation(e, conversation.id)
-                          }
-                          aria-label="Delete conversation"
+                {isChatHistoryEditMode ? (
+                  <DropdownMenuContent
+                    align="end"
+                    className="w-52"
+                    onCloseAutoFocus={(e) => e.preventDefault()}
+                    onInteractOutside={() => setIsChatHistoryEditMode(false)}
+                    onEscapeKeyDown={() => setIsChatHistoryEditMode(false)}
+                  >
+                    <div className="px-2 py-1 text-xs font-medium text-muted-foreground select-none">
+                      Customize menu
+                    </div>
+                    {chatHistoryOrderedIds.map((id, idx) => {
+                      const isHidden = chatHistoryHiddenIds.includes(id)
+                      const label = id === 'new-chat' ? 'New Chat' : id
+                      return (
+                        <div
+                          key={id}
+                          className={`flex items-center gap-1 px-1 py-0.5 rounded-sm${isHidden ? ' opacity-40' : ''}`}
                         >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      )}
+                          <div className="flex flex-col shrink-0">
+                            <button
+                              type="button"
+                              className="h-3.5 w-5 flex items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-25 focus:outline-none"
+                              onClick={(e) => { e.stopPropagation(); moveChatHistoryUp(id) }}
+                              disabled={idx === 0}
+                              aria-label={`Move ${label} up`}
+                              tabIndex={-1}
+                            >
+                              <ChevronUp className="h-3 w-3" />
+                            </button>
+                            <button
+                              type="button"
+                              className="h-3.5 w-5 flex items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-25 focus:outline-none"
+                              onClick={(e) => { e.stopPropagation(); moveChatHistoryDown(id) }}
+                              disabled={idx === chatHistoryOrderedIds.length - 1}
+                              aria-label={`Move ${label} down`}
+                              tabIndex={-1}
+                            >
+                              <ChevronDown className="h-3 w-3" />
+                            </button>
+                          </div>
+                          <div className="flex flex-1 items-center gap-2 px-1 py-1 text-sm animate-wiggle select-none">
+                            <Plus className="h-4 w-4 shrink-0 text-muted-foreground" />
+                            <span className="truncate">{label}</span>
+                          </div>
+                          <button
+                            type="button"
+                            className="shrink-0 h-6 w-6 flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent focus:outline-none"
+                            onClick={(e) => { e.stopPropagation(); toggleChatHistoryHidden(id) }}
+                            aria-label={isHidden ? `Show ${label}` : `Hide ${label}`}
+                            aria-pressed={isHidden}
+                            tabIndex={-1}
+                          >
+                            {isHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                          </button>
+                        </div>
+                      )
+                    })}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      className="cursor-pointer font-medium"
+                      onSelect={() => setIsChatHistoryEditMode(false)}
+                    >
+                      <Check className="mr-2 h-4 w-4" />
+                      Done
                     </DropdownMenuItem>
-                  ))}
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={handleNewChat} className="cursor-pointer">
-                    <Plus className="h-4 w-4 mr-2" />
-                    New Chat
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
+                  </DropdownMenuContent>
+                ) : (
+                  <DropdownMenuContent align="end" className="w-64">
+                    {conversations.map((conversation) => (
+                      <DropdownMenuItem
+                        key={conversation.id}
+                        className="flex items-center justify-between gap-2 cursor-pointer"
+                        onClick={() => handleSelectConversation(conversation.id)}
+                      >
+                        <span
+                          className={`truncate flex-1 ${
+                            conversation.id === activeConversationId
+                              ? 'font-medium'
+                              : ''
+                          }`}
+                        >
+                          {conversation.title ?? 'New Chat'}
+                        </span>
+                        {conversations.length > 1 && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 shrink-0 opacity-50 hover:opacity-100"
+                            onClick={(e) =>
+                              handleDeleteConversation(e, conversation.id)
+                            }
+                            aria-label="Delete conversation"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        )}
+                      </DropdownMenuItem>
+                    ))}
+                    <DropdownMenuSeparator />
+                    {showNewChat && (
+                      <DropdownMenuItem onClick={handleNewChat} className="cursor-pointer">
+                        <Plus className="h-4 w-4 mr-2" />
+                        New Chat
+                      </DropdownMenuItem>
+                    )}
+                    <DropdownMenuItem
+                      className="cursor-pointer text-muted-foreground"
+                      onSelect={(e) => { e.preventDefault(); setIsChatHistoryEditMode(true) }}
+                    >
+                      <SlidersHorizontal className="mr-2 h-4 w-4" />
+                      Customize…
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                )}
               </DropdownMenu>
             )}
             <Tooltip>
@@ -417,8 +559,9 @@ export function ChatPanel() {
       >
         {sidebarMode === 'activity' ? (
           <AIEditsHistoryPanel
-            hideSuperseded={hideSuperseded}
-            onShowAll={() => setHideSuperseded(false)}
+            filter={activityFilter}
+            onShowAll={() => setActivityFilter(DEFAULT_ACTIVITY_FILTER)}
+            onReviewThread={requestCommentReview}
           />
         ) : (
           <>
@@ -496,16 +639,54 @@ export function ChatPanel() {
               )}
             </div>
 
-            {/* Suggestion review chip */}
-            {suggestionCount > 0 && (
-              <div className="px-4 py-3">
-                <button
-                  onClick={() => useReviewStore.getState().setReviewMode('quick')}
-                  className="w-full flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium bg-violet-500/10 hover:bg-violet-500/20 border border-violet-500/30 text-violet-600 dark:text-violet-400 transition-colors"
-                >
-                  <Sparkles className="h-3 w-3" />
-                  Review {suggestionCount} suggestion{suggestionCount !== 1 ? 's' : ''}
-                </button>
+            {/* Action chips — share one row, expand/shrink to fit. Each shows
+                only when it has work to offer. */}
+            {(openThreadCount > 0 || suggestionCount > 0 || suggestionFeedbackCount > 0) && (
+              <div className="flex flex-wrap items-stretch gap-2 px-4 py-3">
+                {openThreadCount > 0 && (
+                  <ActionChip
+                    icon={<Sparkles className="h-3.5 w-3.5 shrink-0" />}
+                    verb="Process"
+                    noun={openThreadCount === 1 ? 'comment' : 'comments'}
+                    count={openThreadCount}
+                    variant="violet"
+                    title={`Run the AI over all ${openThreadCount} open comment threads`}
+                    onClick={() => processComments()}
+                  />
+                )}
+                {openThreadCount > 0 && (
+                  <ActionChip
+                    icon={<MessageSquare className="h-3.5 w-3.5 shrink-0" />}
+                    verb="Review"
+                    noun={openThreadCount === 1 ? 'comment' : 'comments'}
+                    count={openThreadCount}
+                    variant="neutral"
+                    title={`Review ${openThreadCount} open comment ${openThreadCount === 1 ? 'thread' : 'threads'} one at a time`}
+                    onClick={() => requestCommentReview()}
+                  />
+                )}
+                {suggestionCount > 0 && (
+                  <ActionChip
+                    icon={<Maximize2 className="h-3.5 w-3.5 shrink-0" />}
+                    verb="Review"
+                    noun={suggestionCount === 1 ? 'suggestion' : 'suggestions'}
+                    count={suggestionCount}
+                    variant="neutral"
+                    title={`Review ${suggestionCount} AI suggestion${suggestionCount === 1 ? '' : 's'}`}
+                    onClick={() => useReviewStore.getState().setReviewMode('quick')}
+                  />
+                )}
+                {suggestionFeedbackCount > 0 && (
+                  <ActionChip
+                    icon={<Sparkles className="h-3.5 w-3.5 shrink-0" />}
+                    verb="Process"
+                    noun="feedback"
+                    count={suggestionFeedbackCount}
+                    variant="violet"
+                    title={`Send your feedback on ${suggestionFeedbackCount} suggestion${suggestionFeedbackCount === 1 ? '' : 's'} to the AI`}
+                    onClick={() => processSuggestionReplies()}
+                  />
+                )}
               </div>
             )}
 
@@ -520,5 +701,62 @@ export function ChatPanel() {
         )}
       </div>
     </div>
+  )
+}
+
+/** A shared-width action chip above the input (Process Comments / Review
+ *  Comments / Review Suggestions). flex-1 so several share the row; the label
+ *  truncates when space is tight, the icon + count stay. */
+function ActionChip({
+  icon,
+  verb,
+  noun,
+  count,
+  variant,
+  title,
+  onClick,
+}: {
+  icon: React.ReactNode
+  verb: string
+  /** Final noun, already pluralized by the caller (e.g. "comments", "feedback"). */
+  noun: string
+  count: number
+  variant: 'neutral' | 'violet'
+  title?: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className={cn(
+        'flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[11px] font-medium transition-colors',
+        variant === 'violet'
+          ? 'border-violet-500/30 bg-violet-500/10 text-violet-600 hover:bg-violet-500/20 dark:text-violet-400'
+          : 'border-border bg-muted/40 text-foreground/80 hover:bg-muted'
+      )}
+    >
+      {icon}
+      <span className="truncate">
+        {verb} {count} {noun}
+      </span>
+    </button>
+  )
+}
+
+/** A toggle row in the Activity filter menu — label + check when active. The
+ *  menu stays open on click so several categories can be toggled in one go. */
+function FilterRow({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <DropdownMenuItem
+      onSelect={(e) => {
+        e.preventDefault()
+        onClick()
+      }}
+      className="flex cursor-pointer items-center justify-between text-xs"
+    >
+      <span className={cn(!active && 'text-muted-foreground')}>{label}</span>
+      {active && <Check className="h-3.5 w-3.5" />}
+    </DropdownMenuItem>
   )
 }

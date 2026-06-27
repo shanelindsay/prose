@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, type KeyboardEvent } from 'react'
 import { downloadSkillWithAlert } from '../../lib/skillDownload'
 import { requestBugReport } from '../EnableLoggingDialog'
 import { useEditor } from '../../hooks/useEditor'
@@ -17,13 +17,6 @@ import { useGoogleDocsEnabled } from '../../lib/featureFlags'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger
-} from '../ui/dropdown-menu'
-import {
   Tooltip,
   TooltipContent,
   TooltipTrigger
@@ -39,6 +32,9 @@ import {
   AlertDialogTitle
 } from '../ui/alert-dialog'
 import { TabBar } from './TabBar'
+import { CustomizableToolbar } from '../ui/CustomizableToolbar'
+import type { ToolbarAction } from '../ui/CustomizableToolbar'
+import type { CustomizableMenuItem } from '../ui/CustomizableMenu'
 import {
   Moon,
   Monitor,
@@ -48,7 +44,6 @@ import {
   PanelLeft,
   PanelRightClose,
   PanelRight,
-  MoreHorizontal,
   Copy,
   Check,
   Timer,
@@ -307,12 +302,336 @@ export function Toolbar() {
     await createNewTab()
   }
 
+  // Build the items list for the "More options" customizable menu.
+  // Items are computed once per render — stable ids let the customization hook
+  // merge saved order/hidden with any new items added in future releases.
+  const moreMenuItems = useMemo((): CustomizableMenuItem[] => {
+    const isMas = window.api?.isMasBuild ?? false
+    return [
+      { id: 'new-document', label: 'New Document', icon: <FilePlus />, onSelect: handleNewFile },
+      { id: 'open', label: 'Open...', icon: <FolderOpen />, onSelect: () => openFile() },
+      { id: 'save', label: 'Save', icon: <Save />, onSelect: saveFile },
+      { id: 'save-as', label: 'Save as...', icon: <FileDown />, onSelect: saveFileAs },
+      { id: 'export-html', label: 'Export HTML...', icon: <FileCode />, disabled: !document.content, onSelect: handleExportHtml },
+      { id: 'settings', label: 'Settings', icon: <Settings />, separatorBefore: true, onSelect: () => setDialogOpen(true) },
+      ...(!isMas
+        ? [{ id: 'download-skill', label: 'Download Skill', icon: <Sparkles />, onSelect: () => downloadSkillWithAlert() }]
+        : []),
+      ...(isMas
+        ? [{ id: 'support', label: 'Request Support', icon: <LifeBuoy />, separatorBefore: true, onSelect: () => window.open('https://solo.ist/prose/support', '_blank', 'noopener,noreferrer') }]
+        : [{ id: 'report-bug', label: 'Report a Bug', icon: <Bug />, separatorBefore: true, onSelect: () => requestBugReport('https://github.com/solo-ist/prose/issues/new?template=bug-report.yml') }]),
+      { id: 'request-feature', label: 'Request a Feature', icon: <MessageSquarePlus />, onSelect: () => window.open('https://github.com/solo-ist/prose/issues/new?template=feature-request.yml', '_blank', 'noopener,noreferrer') },
+      { id: 'discuss-ideas', label: 'Discuss Ideas', icon: <MessagesSquare />, onSelect: () => window.open('https://github.com/solo-ist/prose/discussions/categories/ideas', '_blank', 'noopener,noreferrer') },
+      // Close is pinned: always last, not customizable
+      { id: 'close', label: 'Close', icon: <X />, onSelect: handleClose, pinned: true },
+    ]
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [document.content, handleExportHtml, handleClose, openFile, saveFile, saveFileAs, setDialogOpen])
+
+  // Unified, customizable right-side action set: the stateful toggle buttons and
+  // the document actions are ONE drag-reorderable, hide-able list (#701). Each
+  // toggle keeps its bespoke rendering via renderBar; document actions fall back
+  // to a standard icon button when promoted to the bar. Recomputed each render
+  // (not memoized) so the renderBar closures never capture stale state.
+  const toolbarActions: ToolbarAction[] = [
+    {
+      id: 'copy',
+      label: hasCopied ? 'Copied!' : 'Copy Markdown',
+      icon: <Copy />,
+      onSelect: handleCopy,
+      disabled: !document.content,
+      renderBar: (key) => (
+        <Tooltip key={key}>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" size="icon" onClick={handleCopy} disabled={!document.content} aria-label="Copy Markdown">
+              {hasCopied ? (
+                <Check className="h-4 w-4 text-green-500" />
+              ) : (
+                <Copy className="h-4 w-4" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{hasCopied ? 'Copied!' : `Copy Markdown (${isMacOS() ? '⌘⇧C' : 'Ctrl+Shift+C'})`}</TooltipContent>
+        </Tooltip>
+      ),
+    },
+    {
+      id: 'autosave',
+      label: autosaveActive ? 'Autosave on' : 'Autosave paused',
+      icon: <Timer />,
+      onSelect: toggleAutosaveActive,
+      available: !!settings.autosave?.enabled,
+      active: autosaveActive,
+      renderBar: (key) => (
+        <Tooltip key={key}>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={toggleAutosaveActive}
+              aria-label={autosaveActive ? 'Pause autosave' : 'Resume autosave'}
+              className={autosaveActive ? '' : 'text-muted-foreground'}
+            >
+              <Timer className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{autosaveActive ? 'Autosave on' : 'Autosave paused'}</TooltipContent>
+        </Tooltip>
+      ),
+    },
+    {
+      id: 'source-mode',
+      label: sourceMode ? 'WYSIWYG mode' : 'Source mode',
+      icon: <Code />,
+      onSelect: toggleSourceMode,
+      disabled: isRemarkableReadOnly || isPreviewTab,
+      active: sourceMode,
+      renderBar: (key) => (
+        <Tooltip key={key}>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={toggleSourceMode}
+              disabled={isRemarkableReadOnly || isPreviewTab}
+              aria-label={sourceMode ? 'WYSIWYG mode' : 'Source mode'}
+            >
+              {sourceMode ? (
+                <FileText className="h-4 w-4" />
+              ) : (
+                <Code className="h-4 w-4" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {sourceMode ? 'WYSIWYG mode' : 'Source mode'} ({isMacOS() ? '⌘⇧E' : 'Ctrl+Shift+E'})
+          </TooltipContent>
+        </Tooltip>
+      ),
+    },
+    {
+      id: 'annotations',
+      label: annotationsVisible ? 'Hide AI annotations' : 'Show AI annotations',
+      icon: <Eye />,
+      onSelect: toggleAnnotationsVisible,
+      active: annotationsVisible,
+      renderBar: (key) => (
+        <Tooltip key={key}>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={toggleAnnotationsVisible}
+              aria-label={annotationsVisible ? 'Hide AI annotations' : 'Show AI annotations'}
+              aria-pressed={annotationsVisible}
+              className={annotationsVisible ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'}
+            >
+              {annotationsVisible ? (
+                <Eye className="h-4 w-4" />
+              ) : (
+                <EyeOff className="h-4 w-4" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{annotationsVisible ? 'Hide' : 'Show'} AI annotations</TooltipContent>
+        </Tooltip>
+      ),
+    },
+    {
+      id: 'theme',
+      // Menu-row label + icon mirror the bar: reflect the current mode.
+      label: `Toggle ${settings.appearance.mode} mode`,
+      icon: settings.appearance.mode === 'system' ? <Monitor /> : settings.appearance.mode === 'light' ? <Sun /> : <Moon />,
+      onSelect: toggleTheme,
+      disabled: !isLoaded,
+      renderBar: (key) => (
+        <Tooltip key={key}>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" size="icon" onClick={toggleTheme} disabled={!isLoaded} aria-label="Toggle appearance mode">
+              {settings.appearance.mode === 'system' ? (
+                <Monitor className="h-4 w-4" />
+              ) : settings.appearance.mode === 'light' ? (
+                <Sun className="h-4 w-4" />
+              ) : (
+                <Moon className="h-4 w-4" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {settings.appearance.mode === 'system'
+              ? `System · ${effectiveTheme === 'dark' ? 'Dark' : 'Light'}`
+              : settings.appearance.mode === 'light' ? 'Light' : 'Dark'}
+          </TooltipContent>
+        </Tooltip>
+      ),
+    },
+    {
+      id: 'google',
+      label: googlePicture ? 'Open Google Docs' : 'Connect Google account',
+      icon: <CircleUserRound />,
+      available: googleDocsEnabled,
+      onSelect: () => {
+        if (googlePicture) {
+          const authParam = settings.google?.email ? `?authuser=${encodeURIComponent(settings.google.email)}` : ''
+          window.open(`https://docs.google.com${authParam}`, '_blank')
+        } else {
+          setDialogOpen(true, 'account')
+        }
+      },
+      renderBar: (key) => (
+        <Tooltip key={key}>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => {
+                if (googlePicture) {
+                  const authParam = settings.google?.email ? `?authuser=${encodeURIComponent(settings.google.email)}` : ''
+                  window.open(`https://docs.google.com${authParam}`, '_blank')
+                } else {
+                  setDialogOpen(true, 'account')
+                }
+              }}
+              aria-label={googlePicture ? 'Open Google Docs' : 'Connect Google account'}
+              className="relative"
+            >
+              {googlePicture ? (
+                <>
+                  <img
+                    src={googlePicture}
+                    alt="Google account"
+                    className="h-5 w-5 rounded-full"
+                    referrerPolicy="no-referrer"
+                  />
+                  {isGoogleSyncing && (
+                    <svg
+                      className="absolute inset-0 pointer-events-none"
+                      style={{ width: '100%', height: '100%' }}
+                      viewBox="0 0 40 40"
+                      fill="none"
+                    >
+                      <defs>
+                        <linearGradient id="sync-ring-a" x1="0%" y1="0%" x2="100%" y2="100%">
+                          <stop offset="0%" stopColor="#8b5cf6" />
+                          <stop offset="50%" stopColor="#d946ef" />
+                          <stop offset="100%" stopColor="#8b5cf6" />
+                        </linearGradient>
+                        <linearGradient id="sync-ring-b" x1="100%" y1="0%" x2="0%" y2="100%">
+                          <stop offset="0%" stopColor="#06b6d4" stopOpacity="0.7" />
+                          <stop offset="100%" stopColor="#a78bfa" stopOpacity="0.7" />
+                        </linearGradient>
+                      </defs>
+                      <circle
+                        className="animate-spin"
+                        cx="20" cy="20" r="18"
+                        stroke="url(#sync-ring-a)"
+                        strokeWidth="2"
+                        strokeDasharray="28 85"
+                        strokeLinecap="round"
+                        style={{ animationDuration: '2s', transformOrigin: '50% 50%' }}
+                      />
+                      <circle
+                        className="animate-spin"
+                        cx="20" cy="20" r="14"
+                        stroke="url(#sync-ring-b)"
+                        strokeWidth="1.5"
+                        strokeDasharray="18 70"
+                        strokeLinecap="round"
+                        style={{ animationDuration: '1.5s', animationDirection: 'reverse', transformOrigin: '50% 50%' }}
+                      />
+                    </svg>
+                  )}
+                </>
+              ) : isGoogleSyncing ? (
+                <svg
+                  viewBox="0 0 40 40"
+                  fill="none"
+                  style={{ width: '1.25rem', height: '1.25rem' }}
+                >
+                  <defs>
+                    <linearGradient id="sync-ring-solo" x1="0%" y1="0%" x2="100%" y2="100%">
+                      <stop offset="0%" stopColor="#8b5cf6" />
+                      <stop offset="50%" stopColor="#d946ef" />
+                      <stop offset="100%" stopColor="#8b5cf6" />
+                    </linearGradient>
+                  </defs>
+                  <circle
+                    className="animate-spin"
+                    cx="20" cy="20" r="18"
+                    stroke="url(#sync-ring-solo)"
+                    strokeWidth="2"
+                    strokeDasharray="28 85"
+                    strokeLinecap="round"
+                    style={{ animationDuration: '2s', transformOrigin: '50% 50%' }}
+                  />
+                  <circle
+                    className="animate-spin"
+                    cx="20" cy="20" r="12"
+                    stroke="url(#sync-ring-solo)"
+                    strokeWidth="1.5"
+                    strokeDasharray="15 60"
+                    strokeLinecap="round"
+                    style={{ animationDuration: '1.5s', animationDirection: 'reverse', transformOrigin: '50% 50%' }}
+                  />
+                </svg>
+              ) : (
+                <CircleUserRound className="h-5 w-5 text-muted-foreground" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {googlePicture ? 'Open Google Docs' : 'Connect Google account'}
+          </TooltipContent>
+        </Tooltip>
+      ),
+    },
+    {
+      id: 'chat',
+      label: isChatOpen ? 'Hide chat' : 'Show chat',
+      icon: <PanelRight />,
+      onSelect: toggleChat,
+      active: isChatOpen,
+      pinnedBar: true,
+      renderBar: (key) => (
+        <Tooltip key={key}>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" size="icon" onClick={toggleChat} aria-label={isChatOpen ? 'Hide chat' : 'Show chat'}>
+              {isChatOpen ? (
+                <PanelRightClose className="h-4 w-4" />
+              ) : (
+                <PanelRight className="h-4 w-4" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{isChatOpen ? 'Hide chat' : 'Show chat'}</TooltipContent>
+        </Tooltip>
+      ),
+    },
+    // Document actions (formerly the ⋯-only menu) — promotable to the bar.
+    ...moreMenuItems.map((m): ToolbarAction => ({
+      id: m.id,
+      label: m.label ?? m.id,
+      icon: m.icon,
+      onSelect: m.onSelect ?? (() => {}),
+      disabled: m.disabled,
+      pinned: m.pinned,
+    })),
+  ]
+
+  // Default bar/menu boundary (until the user drags it): the toggle actions sit
+  // on the bar, document actions in the ⋯ menu. "chat" is pinned to the bar
+  // separately and excluded from this count.
+  const TOGGLE_IDS = ['copy', 'autosave', 'source-mode', 'annotations', 'theme', 'google']
+  const defaultBarCount = toolbarActions.filter(
+    (a) => TOGGLE_IDS.includes(a.id) && a.available !== false && !a.pinnedBar
+  ).length
+
   // Add left padding on macOS to clear traffic lights (less when fullscreen)
   const leftPadding = isMacOS() ? (isFullscreen ? 'pl-4' : 'pl-[88px]') : 'pl-4'
 
   return (
     <>
-      <div className={`flex h-12 items-center justify-between border-b border-border bg-background pr-4 ${leftPadding} app-region-drag`}>
+      <div data-testid="main-toolbar" className={`flex h-12 items-center justify-between border-b border-border bg-background pr-4 ${leftPadding} app-region-drag`}>
         {/* Left: File explorer toggle */}
         <div className="flex items-center gap-2 app-region-no-drag">
           <Tooltip>
@@ -346,291 +665,16 @@ export function Toolbar() {
           />
         </div>
 
-        {/* Right: Actions */}
-        <div className="flex items-center gap-1 ml-2 app-region-no-drag">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={handleCopy}
-                disabled={!document.content}
-                aria-label="Copy Markdown"
-              >
-                {hasCopied ? (
-                  <Check className="h-4 w-4 text-green-500" />
-                ) : (
-                  <Copy className="h-4 w-4" />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{hasCopied ? 'Copied!' : `Copy Markdown (${isMacOS() ? '⌘⇧C' : 'Ctrl+Shift+C'})`}</TooltipContent>
-          </Tooltip>
-
-          {settings.autosave?.enabled && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={toggleAutosaveActive}
-                  aria-label={autosaveActive ? 'Pause autosave' : 'Resume autosave'}
-                  className={autosaveActive ? '' : 'text-muted-foreground'}
-                >
-                  <Timer className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{autosaveActive ? 'Autosave on' : 'Autosave paused'}</TooltipContent>
-            </Tooltip>
-          )}
-
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={toggleSourceMode}
-                disabled={isRemarkableReadOnly || isPreviewTab}
-                aria-label={sourceMode ? 'WYSIWYG mode' : 'Source mode'}
-              >
-                {sourceMode ? (
-                  <FileText className="h-4 w-4" />
-                ) : (
-                  <Code className="h-4 w-4" />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              {sourceMode ? 'WYSIWYG mode' : 'Source mode'} ({isMacOS() ? '⌘⇧E' : 'Ctrl+Shift+E'})
-            </TooltipContent>
-          </Tooltip>
-
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={toggleAnnotationsVisible}
-                aria-label={annotationsVisible ? 'Hide AI annotations' : 'Show AI annotations'}
-                aria-pressed={annotationsVisible}
-                className={annotationsVisible ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'}
-              >
-                {annotationsVisible ? (
-                  <Eye className="h-4 w-4" />
-                ) : (
-                  <EyeOff className="h-4 w-4" />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              {annotationsVisible ? 'Hide' : 'Show'} AI annotations
-            </TooltipContent>
-          </Tooltip>
-
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={toggleTheme} disabled={!isLoaded} aria-label="Toggle appearance mode">
-                {settings.appearance.mode === 'system' ? (
-                  <Monitor className="h-4 w-4" />
-                ) : settings.appearance.mode === 'light' ? (
-                  <Sun className="h-4 w-4" />
-                ) : (
-                  <Moon className="h-4 w-4" />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              {settings.appearance.mode === 'system'
-                ? `System · ${effectiveTheme === 'dark' ? 'Dark' : 'Light'}`
-                : settings.appearance.mode === 'light' ? 'Light' : 'Dark'}
-            </TooltipContent>
-          </Tooltip>
-
-          {googleDocsEnabled && <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => {
-                  if (googlePicture) {
-                    const authParam = settings.google?.email ? `?authuser=${encodeURIComponent(settings.google.email)}` : ''
-                    window.open(`https://docs.google.com${authParam}`, '_blank')
-                  } else {
-                    setDialogOpen(true, 'account')
-                  }
-                }}
-                aria-label={googlePicture ? 'Open Google Docs' : 'Connect Google account'}
-                className="relative"
-              >
-                {googlePicture ? (
-                  <>
-                    <img
-                      src={googlePicture}
-                      alt="Google account"
-                      className="h-5 w-5 rounded-full"
-                      referrerPolicy="no-referrer"
-                    />
-                    {isGoogleSyncing && (
-                      <svg
-                        className="absolute inset-0 pointer-events-none"
-                        style={{ width: '100%', height: '100%' }}
-                        viewBox="0 0 40 40"
-                        fill="none"
-                      >
-                        <defs>
-                          <linearGradient id="sync-ring-a" x1="0%" y1="0%" x2="100%" y2="100%">
-                            <stop offset="0%" stopColor="#8b5cf6" />
-                            <stop offset="50%" stopColor="#d946ef" />
-                            <stop offset="100%" stopColor="#8b5cf6" />
-                          </linearGradient>
-                          <linearGradient id="sync-ring-b" x1="100%" y1="0%" x2="0%" y2="100%">
-                            <stop offset="0%" stopColor="#06b6d4" stopOpacity="0.7" />
-                            <stop offset="100%" stopColor="#a78bfa" stopOpacity="0.7" />
-                          </linearGradient>
-                        </defs>
-                        <circle
-                          className="animate-spin"
-                          cx="20" cy="20" r="18"
-                          stroke="url(#sync-ring-a)"
-                          strokeWidth="2"
-                          strokeDasharray="28 85"
-                          strokeLinecap="round"
-                          style={{ animationDuration: '2s', transformOrigin: '50% 50%' }}
-                        />
-                        <circle
-                          className="animate-spin"
-                          cx="20" cy="20" r="14"
-                          stroke="url(#sync-ring-b)"
-                          strokeWidth="1.5"
-                          strokeDasharray="18 70"
-                          strokeLinecap="round"
-                          style={{ animationDuration: '1.5s', animationDirection: 'reverse', transformOrigin: '50% 50%' }}
-                        />
-                      </svg>
-                    )}
-                  </>
-                ) : isGoogleSyncing ? (
-                  <svg
-                    viewBox="0 0 40 40"
-                    fill="none"
-                    style={{ width: '1.25rem', height: '1.25rem' }}
-                  >
-                    <defs>
-                      <linearGradient id="sync-ring-solo" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stopColor="#8b5cf6" />
-                        <stop offset="50%" stopColor="#d946ef" />
-                        <stop offset="100%" stopColor="#8b5cf6" />
-                      </linearGradient>
-                    </defs>
-                    <circle
-                      className="animate-spin"
-                      cx="20" cy="20" r="18"
-                      stroke="url(#sync-ring-solo)"
-                      strokeWidth="2"
-                      strokeDasharray="28 85"
-                      strokeLinecap="round"
-                      style={{ animationDuration: '2s', transformOrigin: '50% 50%' }}
-                    />
-                    <circle
-                      className="animate-spin"
-                      cx="20" cy="20" r="12"
-                      stroke="url(#sync-ring-solo)"
-                      strokeWidth="1.5"
-                      strokeDasharray="15 60"
-                      strokeLinecap="round"
-                      style={{ animationDuration: '1.5s', animationDirection: 'reverse', transformOrigin: '50% 50%' }}
-                    />
-                  </svg>
-                ) : (
-                  <CircleUserRound className="h-5 w-5 text-muted-foreground" />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              {googlePicture ? 'Open Google Docs' : 'Connect Google account'}
-            </TooltipContent>
-          </Tooltip>}
-
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={toggleChat} aria-label={isChatOpen ? 'Hide chat' : 'Show chat'}>
-                {isChatOpen ? (
-                  <PanelRightClose className="h-4 w-4" />
-                ) : (
-                  <PanelRight className="h-4 w-4" />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              {isChatOpen ? 'Hide chat' : 'Show chat'}
-            </TooltipContent>
-          </Tooltip>
-
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" aria-label="More options">
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={handleNewFile}>
-                <FilePlus className="mr-2 h-4 w-4" />
-                New Document
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => openFile()}>
-                <FolderOpen className="mr-2 h-4 w-4" />
-                Open...
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={saveFile}>
-                <Save className="mr-2 h-4 w-4" />
-                Save
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={saveFileAs}>
-                <FileDown className="mr-2 h-4 w-4" />
-                Save as...
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={handleExportHtml} disabled={!document.content}>
-                <FileCode className="mr-2 h-4 w-4" />
-                Export HTML...
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => setDialogOpen(true)}>
-                <Settings className="mr-2 h-4 w-4" />
-                Settings
-              </DropdownMenuItem>
-              {!window.api?.isMasBuild && (
-                <DropdownMenuItem onClick={() => downloadSkillWithAlert()}>
-                  <Sparkles className="mr-2 h-4 w-4" />
-                  Download Claude Skill
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuSeparator />
-              {window.api?.isMasBuild ? (
-                <DropdownMenuItem onClick={() => window.open('https://solo.ist/prose/support', '_blank', 'noopener,noreferrer')}>
-                  <LifeBuoy className="mr-2 h-4 w-4" />
-                  Request Support
-                </DropdownMenuItem>
-              ) : (
-                <DropdownMenuItem onClick={() => requestBugReport('https://github.com/solo-ist/prose/issues/new?template=bug-report.yml')}>
-                  <Bug className="mr-2 h-4 w-4" />
-                  Report a Bug
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem onClick={() => window.open('https://github.com/solo-ist/prose/issues/new?template=feature-request.yml', '_blank', 'noopener,noreferrer')}>
-                <MessageSquarePlus className="mr-2 h-4 w-4" />
-                Request a Feature
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => window.open('https://github.com/solo-ist/prose/discussions/categories/ideas', '_blank', 'noopener,noreferrer')}>
-                <MessagesSquare className="mr-2 h-4 w-4" />
-                Discuss Ideas
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={handleClose}>
-                <X className="mr-2 h-4 w-4" />
-                Close
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+        {/* Right: Actions — unified customizable bar + ⋯ overflow (#701) */}
+        <div className="flex items-center ml-2 app-region-no-drag">
+          <CustomizableToolbar
+            menuId="toolbar"
+            actions={toolbarActions}
+            defaultBarCount={defaultBarCount}
+            customizeTitle="Drag to customize toolbar"
+            boundaryLabel="in the ⋯ menu"
+            align="end"
+          />
         </div>
       </div>
 

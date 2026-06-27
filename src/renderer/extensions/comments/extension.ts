@@ -6,8 +6,13 @@
  */
 
 import { Mark, mergeAttributes } from '@tiptap/core'
+import { Plugin, PluginKey } from '@tiptap/pm/state'
+import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import type { MarkSerializerSpec } from 'prosemirror-markdown'
 import type { CommentOptions, CommentData } from './types'
+import { useCommentStore } from './store'
+
+const commentStatePluginKey = new PluginKey('commentState')
 
 /**
  * Markdown serializer for comment marks - outputs just the text content
@@ -26,7 +31,7 @@ declare module '@tiptap/core' {
       /**
        * Add a comment to the current selection
        */
-      setComment: (attrs: { id: string; comment: string }) => ReturnType
+      setComment: (attrs: { id: string; comment: string; author?: 'user' | 'ai' }) => ReturnType
       /**
        * Remove a comment by ID
        */
@@ -157,6 +162,9 @@ export const Comment = Mark.create<CommentOptions>({
             markedText,
             comment: attrs.comment,
             createdAt: Date.now(),
+            // Default to a human author; `add_comment` passes 'ai' so the thread
+            // renders under the Prose identity instead of "You".
+            author: attrs.author ?? 'user',
             occurrenceIndex,
             from,
             to,
@@ -222,27 +230,40 @@ export const Comment = Mark.create<CommentOptions>({
           const { doc, schema } = state
           let restored = 0
 
+          // doc.textContent has no block separators; textBetween stored the
+          // markedText with a space separator. Normalise before searching so
+          // cross-block comments match (#665 fix).
+          const docText = doc.textContent
+
           for (const comment of comments) {
-            // Use the stored marked text to locate where the comment mark should be applied.
-            // We search for the first occurrence of the marked text in the document.
-            const searchText = comment.markedText
-            if (!searchText) {
+            // Resolved threads are stored but must not be re-marked in the
+            // editor — they're history only.
+            if (comment.resolved) continue
+
+            const rawSearchText = comment.markedText
+            if (!rawSearchText) {
               console.warn('[Comment] Cannot restore comment without markedText:', comment.id)
               continue
             }
 
-            const docText = doc.textContent
-            // Walk occurrences of searchText and stop at the Nth one, where N is
-            // comment.occurrenceIndex (default 0 for backward-compat with older data).
+            // Normalise the stored markedText to the same representation as
+            // textContent (strip the space block-separators injected by
+            // textBetween). Single-block comments are unaffected.
+            const searchText = rawSearchText.replace(/ /g, '')
+
+            // Walk occurrences of searchText and stop at the Nth one, where N
+            // is comment.occurrenceIndex (default 0 for backward-compat).
+            // We also search textContent with the normalised text.
+            const docTextNorm = docText.replace(/ /g, '')
             const targetOccurrence = comment.occurrenceIndex ?? 0
             let currentOccurrence = 0
             let searchOffset = 0
-            let textIndex = -1
+            let normIndex = -1
             let foundTarget = false
             while (true) {
-              const matchIdx = docText.indexOf(searchText, searchOffset)
+              const matchIdx = docTextNorm.indexOf(searchText, searchOffset)
               if (matchIdx === -1) break
-              textIndex = matchIdx // track last found as fallback
+              normIndex = matchIdx // track last found as fallback
               if (currentOccurrence === targetOccurrence) {
                 foundTarget = true
                 break
@@ -250,10 +271,10 @@ export const Comment = Mark.create<CommentOptions>({
               currentOccurrence++
               searchOffset = matchIdx + searchText.length
             }
-            if (textIndex === -1) {
+            if (normIndex === -1) {
               console.warn('[Comment] Cannot find markedText in document:', {
                 id: comment.id,
-                markedText: searchText.substring(0, 50)
+                markedText: rawSearchText.substring(0, 50)
               })
               continue
             }
@@ -266,30 +287,36 @@ export const Comment = Mark.create<CommentOptions>({
               })
             }
 
-            // Walk the document to map char index → ProseMirror positions
-            let charCount = 0
+            // Map the normalised char index back to a ProseMirror position by
+            // walking text nodes and accumulating the char count without spaces
+            // (matching the normalised search above).
+            let normCount = 0
             let foundStart = -1
             let foundEnd = -1
+            const normEnd = normIndex + searchText.length
 
             doc.descendants((node, nodePos) => {
               if (foundStart !== -1 && foundEnd !== -1) return false
 
               if (node.isText && node.text) {
-                const nodeText = node.text
-                const nodeStart = charCount
-                const nodeEnd = charCount + nodeText.length
+                const nodeNorm = node.text.replace(/ /g, '')
+                const nodeNormStart = normCount
+                const nodeNormEnd = normCount + nodeNorm.length
 
-                if (foundStart === -1 && textIndex >= nodeStart && textIndex < nodeEnd) {
-                  foundStart = nodePos + (textIndex - nodeStart)
+                if (foundStart === -1 && normIndex >= nodeNormStart && normIndex < nodeNormEnd) {
+                  // Offset within this text node in original chars.
+                  // We need to map normIndex back to a char offset inside node.text.
+                  const charOffset = mapNormOffsetToChar(node.text, normIndex - nodeNormStart)
+                  foundStart = nodePos + charOffset
                 }
 
-                const targetEnd = textIndex + searchText.length
-                if (foundStart !== -1 && targetEnd > nodeStart && targetEnd <= nodeEnd) {
-                  foundEnd = nodePos + (targetEnd - nodeStart)
+                if (foundStart !== -1 && normEnd > nodeNormStart && normEnd <= nodeNormEnd) {
+                  const charOffset = mapNormOffsetToChar(node.text, normEnd - nodeNormStart)
+                  foundEnd = nodePos + charOffset
                   return false
                 }
 
-                charCount += nodeText.length
+                normCount += nodeNorm.length
               }
             })
 
@@ -324,6 +351,52 @@ export const Comment = Mark.create<CommentOptions>({
           return false
         },
     }
+  },
+
+  // Style inline comment marks by thread state (read from the comment store):
+  // pending (no replies) → pink dashed underline; open thread (has replies) →
+  // the default amber. Resolved threads remove their mark, so only these two
+  // render in the document.
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: commentStatePluginKey,
+        view: (view) => {
+          // A reply lands in the store without a ProseMirror transaction, so
+          // nudge the view to recompute decorations when the store changes.
+          // queueMicrotask defers past the current dispatch (onCommentAdded
+          // fires mid-transaction) to avoid reentrant dispatches.
+          const unsubscribe = useCommentStore.subscribe(() => {
+            queueMicrotask(() => {
+              if (view.isDestroyed) return
+              view.dispatch(view.state.tr.setMeta(commentStatePluginKey, true))
+            })
+          })
+          return { destroy: unsubscribe }
+        },
+        props: {
+          decorations: (state) => {
+            const byId = new Map(
+              useCommentStore.getState().pendingComments.map((c) => [c.id, c])
+            )
+            const decos: Decoration[] = []
+            state.doc.descendants((node, pos) => {
+              const mark = node.marks.find((m) => m.type.name === 'comment')
+              if (!mark || !mark.attrs.id) return
+              const data = byId.get(mark.attrs.id)
+              // Unknown ids (not yet mirrored into the store) read as pending.
+              const pending = data ? !data.resolved && (data.replies?.length ?? 0) === 0 : true
+              if (pending) {
+                decos.push(
+                  Decoration.inline(pos, pos + node.nodeSize, { class: 'comment-mark--pending' })
+                )
+              }
+            })
+            return DecorationSet.create(state.doc, decos)
+          },
+        },
+      }),
+    ]
   },
 })
 
@@ -399,6 +472,72 @@ export function getComments(editor: { state: { doc: { descendants: (fn: (node: {
   })
 
   return comments
+}
+
+/**
+ * Merge live comment marks (current positions, from `getComments`) with the
+ * persisted store entries (replies + resolved state, which the marks don't
+ * carry) into the canonical shape to persist.
+ *
+ * - Live marks win for position/markedText/occurrenceIndex.
+ * - Stored entries contribute replies + resolved + author (the mark doesn't
+ *   carry author, so it must be re-grafted from the store or it resets to user).
+ * - Resolved threads have no mark (restoreComments skips them), so they're
+ *   appended from the store as history-only entries.
+ *
+ * This is the persistence-shaped sibling of executeListComments' tool-facing
+ * merge — keep the two in step. Saving raw getComments() instead of this is the
+ * bug that drops replies/resolved on every tab-switch save.
+ */
+export function mergeCommentsForPersistence(
+  editor: Parameters<typeof getComments>[0],
+  stored: CommentData[]
+): CommentData[] {
+  const liveMarks = getComments(editor)
+
+  // Safety net against transient data loss: if the document currently has NO
+  // live comment marks but the store still holds unresolved threads, the marks
+  // were stripped transiently (a document load or source-mode toggle fires
+  // setContent before the restore re-applies them) — NOT deleted. A tab-switch
+  // save landing in that window would otherwise drop every unresolved thread
+  // (they'd survive the merge only as live marks). Return the stored set
+  // unchanged so the threads can't be lost; the next save with marks present
+  // re-syncs positions. (Mirrors the suggestion save's "never persist empty".)
+  if (liveMarks.length === 0 && stored.some((c) => !c.resolved)) {
+    return stored
+  }
+
+  const storedById = new Map(stored.map((c) => [c.id, c]))
+  const liveIds = new Set(liveMarks.map((m) => m.id))
+
+  const merged = liveMarks.map((m) => {
+    const s = storedById.get(m.id)
+    return s ? { ...m, replies: s.replies ?? [], resolved: s.resolved ?? false, author: s.author ?? 'user' } : m
+  })
+
+  // Resolved (markless) threads survive only in the store — keep them.
+  const resolvedOnly = stored.filter((c) => c.resolved && !liveIds.has(c.id))
+
+  return [...merged, ...resolvedOnly]
+}
+
+/**
+ * Map a normalised char offset (spaces stripped) back to the real char offset
+ * within an original string. Used by restoreComments when matching comment text
+ * across block boundaries (#665).
+ *
+ * Example: original = "hello world", stripped = "helloworld"
+ *   mapNormOffsetToChar(original, 5) → 6 (the 'w' after the space)
+ */
+function mapNormOffsetToChar(original: string, normOffset: number): number {
+  let norm = 0
+  for (let i = 0; i < original.length; i++) {
+    if (original[i] !== ' ') {
+      if (norm === normOffset) return i
+      norm++
+    }
+  }
+  return original.length
 }
 
 export default Comment
