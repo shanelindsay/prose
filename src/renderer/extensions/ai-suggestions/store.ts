@@ -27,6 +27,7 @@ import {
   useReviewEventStore,
   type ReviewActor,
 } from '../review-events'
+import { isMcpAttributionLabel } from '../../../shared/tools/mcpClientIdentity'
 
 interface SuggestionPersistenceState {
   /** Current document ID being tracked. */
@@ -97,7 +98,7 @@ let historySaveQueue: Promise<void> = Promise.resolve()
 
 function suggestionActor(suggestion: AISuggestionData): ReviewActor {
   const source = suggestion.provenanceSource ?? (
-    suggestion.provenanceModel === 'Claude (MCP)' ? 'mcp' :
+    isMcpAttributionLabel(suggestion.provenanceModel) ? 'mcp' :
       suggestion.provenanceModel ? 'chat' : 'system'
   )
 

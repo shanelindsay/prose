@@ -575,7 +575,9 @@ app.whenReady().then(async () => {
     // All MCP tools require renderer, so we can only start after this point
     const socketServer = getMcpSocketServer()
     socketServer.setAuthToken(mcpAuthToken)
-    socketServer.setToolInvokeHandler((name, args) => bridge.executeTool(name, args))
+    socketServer.setToolInvokeHandler((name, args, clientIdentity) =>
+      bridge.executeTool(name, args, clientIdentity)
+    )
     try {
       await socketServer.start()
       console.log('[Main] MCP socket server started')

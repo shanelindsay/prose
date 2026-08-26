@@ -5,6 +5,7 @@
 import type { Editor } from '@tiptap/core'
 import type { ToolResult, ToolExecutionContext } from '../../../../shared/tools/types'
 import { toolSuccess, toolError } from '../../../../shared/tools/types'
+import { isMcpAttributionLabel } from '../../../../shared/tools/mcpClientIdentity'
 import { useEditorStore } from '../../../stores/editorStore'
 import { useEditorInstanceStore } from '../../../stores/editorInstanceStore'
 import { useSettingsStore } from '../../../stores/settingsStore'
@@ -938,7 +939,7 @@ export async function executeSuggestEdit(
   const isMcpProvenance =
     context?.origin === 'mcp' ||
     contextAttribution?.origin === 'mcp' ||
-    provenance?.model === 'Claude (MCP)'
+    isMcpAttributionLabel(provenance?.model)
   const provenanceSource: 'chat' | 'mcp' | 'unknown' | undefined = isMcpProvenance
     ? 'mcp'
     : provenance

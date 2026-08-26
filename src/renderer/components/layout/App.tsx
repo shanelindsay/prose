@@ -63,6 +63,7 @@ import { handleMissingPath } from '../../lib/stalePath'
 import type { DraftState, SessionState } from '../../lib/persistence'
 import { executeTool } from '../../lib/tools'
 import type { ToolExecutionContext } from '../../../shared/tools/types'
+import { createMcpReviewAttribution } from '../../../shared/tools/mcpClientIdentity'
 import { useReviewMode, useWasChatOpenBeforeReview, usePreviousChatWidth, useReviewStore, type ReviewMode } from '../../stores/reviewStore'
 import { chatOpenDefaultPct, reviewChatWidthPct } from '../../hooks/usePanelLayout'
 
@@ -949,9 +950,10 @@ export function App() {
   // Handle MCP tool invocations (only active in MCP server mode)
   useEffect(() => {
     if (!window.api?.onMcpToolInvoke) return
-    const unsubscribe = window.api.onMcpToolInvoke(async (requestId, toolName, args) => {
+    const unsubscribe = window.api.onMcpToolInvoke(async (requestId, toolName, args, clientIdentity) => {
       try {
         const documentId = useEditorStore.getState().document.documentId
+        const attribution = createMcpReviewAttribution(clientIdentity, requestId)
         // The bridge supplies the request ID; the renderer supplies the active
         // document identity. Keep both the trusted MCP context and the legacy
         // provenance object so existing suggestion attribution remains intact.
@@ -959,16 +961,10 @@ export function App() {
           origin: 'mcp',
           requestId,
           expectedDocumentId: documentId,
-          attribution: {
-            actor: 'assistant',
-            origin: 'mcp',
-            label: 'Claude (MCP)',
-            model: 'Claude (MCP)',
-            requestId,
-          },
+          attribution,
         }
         const result = await executeTool(toolName, args, 'create', {
-          model: 'Claude (MCP)',
+          model: attribution.model || attribution.label || 'MCP client',
           conversationId: requestId,
           messageId: requestId,
           documentId: documentId ?? '',

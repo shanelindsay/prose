@@ -14,6 +14,10 @@ import * as path from 'path'
 import * as crypto from 'crypto'
 import { app } from 'electron'
 import { getToolsForMCP, isToolExposedViaMCP } from '../../shared/tools/registry'
+import {
+  normalizeMcpClientIdentity,
+  type McpClientIdentity,
+} from '../../shared/tools/mcpClientIdentity'
 import type { ToolResult } from '../../shared/tools/types'
 
 // Socket location in app support directory
@@ -28,7 +32,7 @@ const MAX_BUFFER_SIZE = 1024 * 1024
  */
 export class McpSocketServer {
   private server: net.Server | null = null
-  private onToolInvoke: ((name: string, args: unknown) => Promise<ToolResult>) | null = null
+  private onToolInvoke: ((name: string, args: unknown, clientIdentity?: McpClientIdentity) => Promise<ToolResult>) | null = null
   private authToken: string | null = null
   private authenticatedSockets = new WeakSet<net.Socket>()
 
@@ -51,7 +55,7 @@ export class McpSocketServer {
   /**
    * Set the tool invocation handler.
    */
-  setToolInvokeHandler(handler: (name: string, args: unknown) => Promise<ToolResult>): void {
+  setToolInvokeHandler(handler: (name: string, args: unknown, clientIdentity?: McpClientIdentity) => Promise<ToolResult>): void {
     this.onToolInvoke = handler
   }
 
@@ -221,7 +225,11 @@ export class McpSocketServer {
         })
       } else if (method === 'tools/call') {
         // Execute tool
-        const { name, arguments: args } = params as { name: string; arguments?: unknown }
+        const { name, arguments: args, clientIdentity } = params as {
+          name: string
+          arguments?: unknown
+          clientIdentity?: unknown
+        }
 
         // Keep the call surface identical to tools/list. A client can send a
         // direct tools/call without first listing tools, so the allowlist must
@@ -242,7 +250,11 @@ export class McpSocketServer {
           return
         }
 
-        const result = await this.onToolInvoke(name, args ?? {})
+        const result = await this.onToolInvoke(
+          name,
+          args ?? {},
+          normalizeMcpClientIdentity(clientIdentity),
+        )
 
         if (result.success) {
           this.sendResult(socket, id, {

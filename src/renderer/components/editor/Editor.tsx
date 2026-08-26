@@ -77,6 +77,7 @@ import { useCommentStore } from '../../extensions/comments/store'
 import { LinkPopover } from './LinkPopover'
 import { SourceEditor, SourceEditorHandle } from './SourceEditor'
 import { getApi } from '../../lib/browserApi'
+import { isMcpAttributionLabel } from '../../../shared/tools/mcpClientIdentity'
 
 const AI_PASTE_PROMPT_MIN_CHARS = 200
 
@@ -95,7 +96,7 @@ function shouldPromptForAIPaste(text: string): boolean {
 
 function actorForSuggestion(suggestion: AISuggestionData): ReviewActor {
   const source = suggestion.provenanceSource ?? (
-    suggestion.provenanceModel === 'Claude (MCP)' ? 'mcp' :
+    isMcpAttributionLabel(suggestion.provenanceModel) ? 'mcp' :
       suggestion.provenanceModel ? 'chat' : 'system'
   )
   return {
