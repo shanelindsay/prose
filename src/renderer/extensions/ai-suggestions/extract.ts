@@ -49,7 +49,10 @@ function suggestionFromMark(
   to: number,
 ): AISuggestionData {
   const source = attrs.provenanceSource
-  const provenanceSource = source === 'chat' || source === 'mcp' || source === 'unknown'
+  const provenanceSource = source === 'ui'
+    || source === 'chat'
+    || source === 'mcp'
+    || source === 'unknown'
     ? source
     : undefined
 
@@ -73,6 +76,7 @@ function suggestionFromMark(
     insertionAnchorText: optionalString(attrs.insertionAnchorText),
     deletionNodeId: optionalString(attrs.deletionNodeId),
     supersedes: stringArray(attrs.supersedes),
+    humanInline: attrs.humanInline === true,
     blockConversionIntent: optionalString(attrs.blockConversionIntent) ?? null,
   }
 }

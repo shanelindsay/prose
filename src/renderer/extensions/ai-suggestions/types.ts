@@ -25,6 +25,8 @@ export interface AISuggestionMark {
   insertionAnchorNodeId?: string
   insertionAnchorText?: string
   deletionNodeId?: string
+  /** True for simple text changes captured from the local human editor. */
+  humanInline?: boolean
 }
 
 export interface AISuggestionData {
@@ -42,7 +44,7 @@ export interface AISuggestionData {
   provenanceMessageId?: string
   documentId?: string
   /** Where the suggestion came from (kept on the active mark for restoration). */
-  provenanceSource?: 'chat' | 'mcp' | 'unknown'
+  provenanceSource?: 'ui' | 'chat' | 'mcp' | 'unknown'
   /** MCP invocation identity, when the caller supplies one. */
   provenanceInvocationId?: string
   /** Anchor node ID for a pending block insertion. */
@@ -53,6 +55,11 @@ export interface AISuggestionData {
   deletionNodeId?: string
   /** IDs of earlier suggestions this suggestion revises. */
   supersedes?: string[]
+  /**
+   * Simple local human text suggestions use inline accept/reject geometry rather
+   * than the block insertion/deletion behaviour used by MCP tools.
+   */
+  humanInline?: boolean
   /**
    * Raw markdown of a block-type conversion (#673) — present when the
    * suggestion's content opened with block markup differing from the host
