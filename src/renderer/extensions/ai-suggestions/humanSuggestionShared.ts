@@ -121,6 +121,27 @@ export function hasSuggestionInRange(doc: PMNode, from: number, to: number): boo
   return found
 }
 
+export function humanInsertionAt(doc: PMNode, position: number): HumanSuggestionTarget | null {
+  const ids = new Set<string>()
+  const from = Math.max(0, position - 1)
+  const to = Math.min(doc.content.size, position + 1)
+  doc.nodesBetween(from, to, (node) => {
+    for (const mark of node.marks) {
+      if (
+        mark.type.name === 'aiSuggestion'
+        && mark.attrs.humanInline === true
+        && mark.attrs.type === 'insertion'
+        && typeof mark.attrs.id === 'string'
+      ) ids.add(mark.attrs.id)
+    }
+  })
+  for (const id of ids) {
+    const target = findHumanSuggestion(doc, id)
+    if (target && position >= target.from && position <= target.to) return target
+  }
+  return null
+}
+
 export function humanInsertionCoveringRange(
   doc: PMNode,
   from: number,

@@ -1,6 +1,6 @@
-import type { MarkType, Node as PMNode } from '@tiptap/pm/model'
+import type { Node as PMNode } from '@tiptap/pm/model'
 import { Plugin, PluginKey, TextSelection, type EditorState, type Transaction } from '@tiptap/pm/state'
-import { ReplaceStep } from '@tiptap/pm/transform'
+import type { EditorView } from '@tiptap/pm/view'
 import { useEditorStore } from '../../stores/editorStore'
 import { isHumanSuggesting } from '../../stores/humanSuggestionModeStore'
 import type { AISuggestionData } from './types'
@@ -8,6 +8,7 @@ import {
   HUMAN_SUGGESTION_TRANSACTION,
   findHumanSuggestion,
   hasSuggestionInRange,
+  humanInsertionAt,
   humanInsertionCoveringRange,
   humanMarkAttrs,
   queueSuggestionCancellation,
@@ -26,74 +27,21 @@ interface ActiveGroup {
   lastChangedAt: number
 }
 
-interface TextChange {
-  from: number
-  to: number
-  originalText: string
-  suggestedText: string
-  direction: 'backward' | 'forward'
-  changedInsertion?: HumanSuggestionTarget
-}
-
 let activeGroup: ActiveGroup | null = null
 
-function isTrackableTransaction(transaction: Transaction): boolean {
-  if (!transaction.docChanged || transaction.getMeta(HUMAN_SUGGESTION_TRANSACTION)) return false
-  const uiEvent = transaction.getMeta('uiEvent')
-  return uiEvent === 'input'
-    || uiEvent === 'paste'
-    || uiEvent === 'cut'
-    || transaction.getMeta('composition') !== undefined
-}
-
-function simpleTextChange(
-  transactions: readonly Transaction[],
-  oldState: EditorState,
-  newState: EditorState,
-): TextChange | null {
-  let candidateIndex = -1
-  for (let index = transactions.length - 1; index >= 0; index -= 1) {
-    if (isTrackableTransaction(transactions[index])) {
-      candidateIndex = index
-      break
-    }
+function canSuggest(): { documentId: string } | null {
+  const editorState = useEditorStore.getState()
+  if (
+    !isHumanSuggesting()
+    || editorState.sourceMode
+    || editorState.isRemarkableReadOnly
+    || editorState.isPreviewTab
+    || !editorState.document.documentId
+  ) {
+    activeGroup = null
+    return null
   }
-  if (candidateIndex < 0) return null
-
-  const candidate = transactions[candidateIndex]
-  if (candidate.steps.length !== 1 || !(candidate.steps[0] instanceof ReplaceStep)) return null
-  const step = candidate.steps[0]
-  const beforeDoc = candidate.docs[0]
-  if (!beforeDoc) return null
-
-  const $from = beforeDoc.resolve(step.from)
-  const $to = beforeDoc.resolve(step.to)
-  if ($from.parent !== $to.parent || !$from.parent.isTextblock) return null
-
-  const suggestedText = step.slice.content.textBetween(0, step.slice.content.size, '\n')
-  if (suggestedText.includes('\n') || step.slice.content.size !== suggestedText.length) return null
-  const originalText = beforeDoc.textBetween(step.from, step.to, '\n')
-  if (originalText.includes('\n') || originalText === suggestedText) return null
-
-  let from = candidate.mapping.map(step.from, -1)
-  let to = candidate.mapping.map(step.to, 1)
-  for (let index = candidateIndex + 1; index < transactions.length; index += 1) {
-    from = transactions[index].mapping.map(from, -1)
-    to = transactions[index].mapping.map(to, 1)
-  }
-  if (from < 0 || to < from || to > newState.doc.content.size) return null
-  if (newState.doc.textBetween(from, to, '\n') !== suggestedText) return null
-
-  return {
-    from,
-    to,
-    originalText,
-    suggestedText,
-    direction: oldState.selection.from > candidate.selection.from ? 'backward' : 'forward',
-    changedInsertion: originalText.length > 0
-      ? humanInsertionCoveringRange(beforeDoc, step.from, step.to) ?? undefined
-      : undefined,
-  }
+  return { documentId: editorState.document.documentId }
 }
 
 function currentGroup(
@@ -111,147 +59,112 @@ function currentGroup(
   return findHumanSuggestion(doc, activeGroup.id)
 }
 
+function finishSuggestionTransaction(
+  view: EditorView,
+  tr: Transaction,
+  data: AISuggestionData,
+  isNew: boolean,
+): boolean {
+  tr.setMeta(HUMAN_SUGGESTION_TRANSACTION, true)
+  view.dispatch(tr)
+  queueSuggestionRecord(data, isNew)
+  return true
+}
+
 function updateOwnInsertion(
-  change: TextChange,
-  newState: EditorState,
+  view: EditorView,
+  target: HumanSuggestionTarget,
+  from: number,
+  to: number,
+  text: string,
   documentId: string,
-  markType: MarkType,
-  now: number,
-): Transaction | null {
-  const previous = change.changedInsertion
-  if (!previous) return null
+): boolean {
+  const markType = view.state.schema.marks.aiSuggestion
+  if (!markType) return false
 
-  const tr = newState.tr
-  let target = findHumanSuggestion(newState.doc, previous.id)
-  if (!target && change.suggestedText.length > 0 && change.from < change.to) {
-    target = { ...previous, from: change.from, to: change.to }
+  const tr = view.state.tr.insertText(text, from, to)
+  const insertedFrom = tr.mapping.map(from, -1)
+  const insertedTo = insertedFrom + text.length
+  let mapped = findHumanSuggestion(tr.doc, target.id)
+  if (!mapped && text && insertedFrom < insertedTo) {
+    mapped = { ...target, from: insertedFrom, to: insertedTo }
   }
-  if (!target || target.from >= target.to) {
+
+  if (!mapped || mapped.from >= mapped.to) {
+    tr.setMeta(HUMAN_SUGGESTION_TRANSACTION, true)
+    view.dispatch(tr)
     activeGroup = null
-    queueSuggestionCancellation(suggestionData(previous.attrs, previous.from, previous.to))
-    return null
+    queueSuggestionCancellation(suggestionData(target.attrs, target.from, target.to))
+    return true
   }
 
-  const suggestedText = newState.doc.textBetween(target.from, target.to, '')
-  if (!suggestedText) {
-    activeGroup = null
-    queueSuggestionCancellation(suggestionData(previous.attrs, previous.from, previous.to))
-    return null
-  }
-
+  const suggestedText = tr.doc.textBetween(mapped.from, mapped.to, '')
+  if (!suggestedText) return false
+  const now = Date.now()
   const attrs = humanMarkAttrs({
-    id: previous.id,
+    id: target.id,
     type: 'insertion',
     originalText: '',
     suggestedText,
-    createdAt: typeof previous.attrs.createdAt === 'number' ? previous.attrs.createdAt : now,
+    createdAt: typeof target.attrs.createdAt === 'number' ? target.attrs.createdAt : now,
     documentId,
   })
-  tr.removeMark(target.from, target.to, markType)
-  tr.addMark(target.from, target.to, markType.create(attrs))
+  tr.removeMark(mapped.from, mapped.to, markType)
+  tr.addMark(mapped.from, mapped.to, markType.create(attrs))
+  tr.setSelection(TextSelection.create(tr.doc, insertedTo))
   tr.setStoredMarks([])
-  tr.setMeta(HUMAN_SUGGESTION_TRANSACTION, true)
 
-  const data = suggestionData(attrs, target.from, target.to)
-  activeGroup = { id: previous.id, type: 'insertion', documentId, lastChangedAt: now }
-  queueSuggestionRecord(data, false)
-  return tr
+  const data = suggestionData(attrs, mapped.from, mapped.to)
+  activeGroup = { id: target.id, type: 'insertion', documentId, lastChangedAt: now }
+  return finishSuggestionTransaction(view, tr, data, false)
 }
 
 function captureInsertion(
-  change: TextChange,
-  newState: EditorState,
+  view: EditorView,
+  position: number,
+  text: string,
   documentId: string,
-  markType: MarkType,
-  now: number,
-): Transaction | null {
-  const tr = newState.tr
-  const existing = currentGroup(newState.doc, documentId, 'insertion', now)
-  const touches = existing && change.from <= existing.to && change.to >= existing.from
-  let data: AISuggestionData
-  let isNew = true
+): boolean {
+  const markType = view.state.schema.marks.aiSuggestion
+  if (!markType || !text) return false
 
-  if (existing && touches) {
-    const from = Math.min(existing.from, change.from)
-    const to = Math.max(existing.to, change.to)
-    const attrs = humanMarkAttrs({
-      id: existing.id,
-      type: 'insertion',
-      originalText: '',
-      suggestedText: newState.doc.textBetween(from, to, ''),
-      createdAt: typeof existing.attrs.createdAt === 'number' ? existing.attrs.createdAt : now,
-      documentId,
-    })
-    tr.removeMark(existing.from, existing.to, markType)
-    tr.addMark(from, to, markType.create(attrs))
-    data = suggestionData(attrs, from, to)
-    isNew = false
-  } else {
-    if (hasSuggestionInRange(newState.doc, change.from, change.to)) return null
-    const attrs = humanMarkAttrs({
-      id: crypto.randomUUID(),
-      type: 'insertion',
-      originalText: '',
-      suggestedText: change.suggestedText,
-      createdAt: now,
-      documentId,
-    })
-    tr.addMark(change.from, change.to, markType.create(attrs))
-    data = suggestionData(attrs, change.from, change.to)
+  const ownInsertion = humanInsertionAt(view.state.doc, position)
+  if (ownInsertion) {
+    return updateOwnInsertion(view, ownInsertion, position, position, text, documentId)
   }
+  if (hasSuggestionInRange(view.state.doc, position, position)) return true
 
-  activeGroup = { id: data.id, type: 'insertion', documentId, lastChangedAt: now }
-  tr.setStoredMarks([])
-  tr.setMeta(HUMAN_SUGGESTION_TRANSACTION, true)
-  queueSuggestionRecord(data, isNew)
-  return tr
-}
-
-function captureDeletion(
-  change: TextChange,
-  newState: EditorState,
-  documentId: string,
-  markType: MarkType,
-  now: number,
-): Transaction | null {
-  const tr = newState.tr
-  const beforeInsert = currentGroup(newState.doc, documentId, 'deletion', now)
-  tr.insertText(change.originalText, change.from)
-  const insertedFrom = change.from
-  const insertedTo = change.from + change.originalText.length
-  const existing = beforeInsert
-    ? {
-        ...beforeInsert,
-        from: tr.mapping.map(beforeInsert.from, 1),
-        to: tr.mapping.map(beforeInsert.to, 1),
-      }
-    : null
-  const touches = existing && insertedFrom <= existing.to && insertedTo >= existing.from
+  const now = Date.now()
+  const existing = currentGroup(view.state.doc, documentId, 'insertion', now)
+  const tr = view.state.tr.insertText(text, position)
+  const insertedFrom = position
+  const insertedTo = position + text.length
   let data: AISuggestionData
   let isNew = true
 
-  if (existing && touches) {
-    const from = Math.min(existing.from, insertedFrom)
-    const to = Math.max(existing.to, insertedTo)
+  if (existing && position >= existing.from && position <= existing.to) {
+    const mappedFrom = tr.mapping.map(existing.from, 1)
+    const mappedTo = tr.mapping.map(existing.to, -1)
+    const from = Math.min(mappedFrom, insertedFrom)
+    const to = Math.max(mappedTo, insertedTo)
     const attrs = humanMarkAttrs({
       id: existing.id,
-      type: 'deletion',
-      originalText: tr.doc.textBetween(from, to, ''),
-      suggestedText: '',
+      type: 'insertion',
+      originalText: '',
+      suggestedText: tr.doc.textBetween(from, to, ''),
       createdAt: typeof existing.attrs.createdAt === 'number' ? existing.attrs.createdAt : now,
       documentId,
     })
-    tr.removeMark(existing.from, existing.to, markType)
+    tr.removeMark(mappedFrom, mappedTo, markType)
     tr.addMark(from, to, markType.create(attrs))
     data = suggestionData(attrs, from, to)
     isNew = false
   } else {
-    if (hasSuggestionInRange(tr.doc, insertedFrom, insertedTo)) return null
     const attrs = humanMarkAttrs({
       id: crypto.randomUUID(),
-      type: 'deletion',
-      originalText: change.originalText,
-      suggestedText: '',
+      type: 'insertion',
+      originalText: '',
+      suggestedText: text,
       createdAt: now,
       documentId,
     })
@@ -259,74 +172,151 @@ function captureDeletion(
     data = suggestionData(attrs, insertedFrom, insertedTo)
   }
 
-  activeGroup = { id: data.id, type: 'deletion', documentId, lastChangedAt: now }
-  tr.setSelection(TextSelection.create(tr.doc, change.direction === 'backward' ? data.from : data.to))
+  tr.setSelection(TextSelection.create(tr.doc, insertedTo))
   tr.setStoredMarks([])
-  tr.setMeta(HUMAN_SUGGESTION_TRANSACTION, true)
-  queueSuggestionRecord(data, isNew)
-  return tr
+  activeGroup = { id: data.id, type: 'insertion', documentId, lastChangedAt: now }
+  return finishSuggestionTransaction(view, tr, data, isNew)
 }
 
 function captureReplacement(
-  change: TextChange,
-  newState: EditorState,
+  view: EditorView,
+  from: number,
+  to: number,
+  text: string,
   documentId: string,
-  markType: MarkType,
-  now: number,
-): Transaction {
+): boolean {
+  const markType = view.state.schema.marks.aiSuggestion
+  if (!markType || from >= to || !text) return false
+
+  const ownInsertion = humanInsertionCoveringRange(view.state.doc, from, to)
+  if (ownInsertion) return updateOwnInsertion(view, ownInsertion, from, to, text, documentId)
+  if (hasSuggestionInRange(view.state.doc, from, to)) return true
+
   activeGroup = null
-  const tr = newState.tr
-  tr.replaceWith(change.from, change.to, newState.schema.text(change.originalText))
-  const to = change.from + change.originalText.length
+  const originalText = view.state.doc.textBetween(from, to, '')
+  if (!originalText) return false
+  const now = Date.now()
   const attrs = humanMarkAttrs({
     id: crypto.randomUUID(),
     type: 'edit',
-    originalText: change.originalText,
-    suggestedText: change.suggestedText,
+    originalText,
+    suggestedText: text,
     createdAt: now,
     documentId,
   })
-  tr.addMark(change.from, to, markType.create(attrs))
+  const tr = view.state.tr
+  tr.addMark(from, to, markType.create(attrs))
   tr.setSelection(TextSelection.create(tr.doc, to))
-  tr.setStoredMarks([])
-  tr.setMeta(HUMAN_SUGGESTION_TRANSACTION, true)
-  queueSuggestionRecord(suggestionData(attrs, change.from, to), true)
-  return tr
+  return finishSuggestionTransaction(view, tr, suggestionData(attrs, from, to), true)
 }
 
-function captureHumanChange(
-  transactions: readonly Transaction[],
-  oldState: EditorState,
-  newState: EditorState,
-): Transaction | null {
-  const editorState = useEditorStore.getState()
-  if (
-    !isHumanSuggesting()
-    || editorState.sourceMode
-    || editorState.isRemarkableReadOnly
-    || editorState.isPreviewTab
-  ) {
-    activeGroup = null
-    return null
-  }
+function captureText(
+  view: EditorView,
+  from: number,
+  to: number,
+  text: string,
+): boolean {
+  const context = canSuggest()
+  if (!context || text.includes('\n')) return false
+  return from === to
+    ? captureInsertion(view, from, text, context.documentId)
+    : captureReplacement(view, from, to, text, context.documentId)
+}
 
-  const change = simpleTextChange(transactions, oldState, newState)
-  if (!change) return null
-  const documentId = editorState.document.documentId
-  const markType = newState.schema.marks.aiSuggestion
-  if (!documentId || !markType) return null
+function captureDeletion(
+  view: EditorView,
+  from: number,
+  to: number,
+  direction: 'backward' | 'forward',
+): boolean {
+  const context = canSuggest()
+  const markType = view.state.schema.marks.aiSuggestion
+  if (!context || !markType || from >= to) return false
 
+  const ownInsertion = humanInsertionCoveringRange(view.state.doc, from, to)
+  if (ownInsertion) return updateOwnInsertion(view, ownInsertion, from, to, '', context.documentId)
+
+  const originalText = view.state.doc.textBetween(from, to, '')
+  if (!originalText || originalText.includes('\n')) return false
   const now = Date.now()
-  if (change.changedInsertion) return updateOwnInsertion(change, newState, documentId, markType, now)
-  if (change.originalText.length === 0) return captureInsertion(change, newState, documentId, markType, now)
-  if (change.suggestedText.length === 0) return captureDeletion(change, newState, documentId, markType, now)
-  if (hasSuggestionInRange(newState.doc, change.from, change.to)) return null
-  return captureReplacement(change, newState, documentId, markType, now)
+  const existing = currentGroup(view.state.doc, context.documentId, 'deletion', now)
+  const touches = existing && from <= existing.to && to >= existing.from
+  if (!touches && hasSuggestionInRange(view.state.doc, from, to)) return true
+  const rangeFrom = touches && existing ? Math.min(existing.from, from) : from
+  const rangeTo = touches && existing ? Math.max(existing.to, to) : to
+  const id = touches && existing ? existing.id : crypto.randomUUID()
+  const attrs = humanMarkAttrs({
+    id,
+    type: 'deletion',
+    originalText: view.state.doc.textBetween(rangeFrom, rangeTo, ''),
+    suggestedText: '',
+    createdAt: touches && existing && typeof existing.attrs.createdAt === 'number'
+      ? existing.attrs.createdAt
+      : now,
+    documentId: context.documentId,
+  })
+  const tr = view.state.tr
+  if (touches && existing) tr.removeMark(existing.from, existing.to, markType)
+  tr.addMark(rangeFrom, rangeTo, markType.create(attrs))
+  tr.setSelection(TextSelection.create(tr.doc, direction === 'backward' ? from : to))
+  tr.setStoredMarks([])
+
+  const data = suggestionData(attrs, rangeFrom, rangeTo)
+  activeGroup = { id, type: 'deletion', documentId: context.documentId, lastChangedAt: now }
+  return finishSuggestionTransaction(view, tr, data, !(touches && existing))
+}
+
+function deletionRangeForKey(
+  state: EditorState,
+  key: 'Backspace' | 'Delete',
+): { from: number; to: number; direction: 'backward' | 'forward' } | null {
+  const { from, to } = state.selection
+  if (from !== to) return { from, to, direction: 'backward' }
+
+  const $cursor = state.doc.resolve(from)
+  if (!$cursor.parent.isTextblock) return null
+  if (key === 'Backspace') {
+    if ($cursor.parentOffset === 0) return null
+    return { from: from - 1, to: from, direction: 'backward' }
+  }
+  if ($cursor.parentOffset >= $cursor.parent.content.size) return null
+  return { from, to: from + 1, direction: 'forward' }
 }
 
 export function createHumanSuggestionPlugin(): Plugin {
   return new Plugin({
     key: humanSuggestionPluginKey,
-    appendTransaction: captureHumanChange,
+    props: {
+      handleTextInput: (view, from, to, text) => captureText(view, from, to, text),
+      handleKeyDown: (view, event) => {
+        if (
+          (event.key !== 'Backspace' && event.key !== 'Delete')
+          || event.metaKey
+          || event.ctrlKey
+          || event.altKey
+          || event.isComposing
+        ) return false
+        const range = deletionRangeForKey(view.state, event.key)
+        return range ? captureDeletion(view, range.from, range.to, range.direction) : false
+      },
+      handlePaste: (view, event) => {
+        const text = event.clipboardData?.getData('text/plain') ?? ''
+        if (!text) return false
+        const { from, to } = view.state.selection
+        return captureText(view, from, to, text)
+      },
+      handleDOMEvents: {
+        cut: (view, event) => {
+          const { from, to } = view.state.selection
+          if (from === to) return false
+          const text = view.state.doc.textBetween(from, to, '')
+          if (!text || text.includes('\n') || !event.clipboardData) return false
+          if (!captureDeletion(view, from, to, 'backward')) return false
+          event.clipboardData.setData('text/plain', text)
+          event.preventDefault()
+          return true
+        },
+      },
+    },
   })
 }
