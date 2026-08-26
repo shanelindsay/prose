@@ -1,6 +1,6 @@
 import type { CommandProps } from '@tiptap/core'
 import type { Node as PMNode } from '@tiptap/pm/model'
-import type { EditorState, Transaction } from '@tiptap/pm/state'
+import { TextSelection, type EditorState, type Transaction } from '@tiptap/pm/state'
 import type { AISuggestionData } from './types'
 import type { ReviewActor } from '../review-events'
 import {
@@ -11,6 +11,73 @@ import {
 } from './humanSuggestionShared'
 
 export { findHumanSuggestion as findHumanInlineSuggestion }
+
+export interface InlineInsertionRevisionAttrs {
+  id: string
+  type: 'insertion'
+  originalText: string
+  suggestedText: string
+  explanation: string
+  provenanceModel?: string
+  provenanceConversationId?: string
+  provenanceMessageId?: string
+  provenanceSource?: 'ui' | 'chat' | 'mcp' | 'unknown'
+  provenanceInvocationId?: string
+  documentId?: string
+  supersedes?: string[]
+}
+
+export function reviseHumanInlineInsertion(
+  props: CommandProps,
+  target: HumanSuggestionTarget,
+  attrs: InlineInsertionRevisionAttrs,
+  onAdded?: (suggestion: AISuggestionData) => void,
+): boolean {
+  if (
+    !props.dispatch
+    || target.type !== 'insertion'
+    || !attrs.suggestedText
+    || attrs.suggestedText.includes('\n')
+  ) return false
+
+  const markType = props.state.schema.marks.aiSuggestion
+  if (!markType) return false
+  const createdAt = Date.now()
+  const to = target.from + attrs.suggestedText.length
+  const markAttrs = {
+    id: attrs.id,
+    type: 'insertion',
+    originalText: attrs.originalText,
+    suggestedText: attrs.suggestedText,
+    explanation: attrs.explanation,
+    createdAt,
+    provenanceModel: attrs.provenanceModel || '',
+    provenanceConversationId: attrs.provenanceConversationId || '',
+    provenanceMessageId: attrs.provenanceMessageId || '',
+    provenanceSource: attrs.provenanceSource || 'unknown',
+    provenanceInvocationId: attrs.provenanceInvocationId || '',
+    documentId: attrs.documentId || '',
+    supersedes: attrs.supersedes || null,
+    humanInline: true,
+  }
+
+  props.tr.replaceWith(
+    target.from,
+    target.to,
+    props.state.schema.text(attrs.suggestedText),
+  )
+  props.tr.addMark(target.from, to, markType.create(markAttrs))
+  props.tr.setSelection(TextSelection.create(props.tr.doc, to))
+  props.tr.setStoredMarks([])
+  props.tr.setMeta(HUMAN_SUGGESTION_TRANSACTION, true)
+  props.dispatch(props.tr)
+
+  onAdded?.({
+    ...suggestionData(markAttrs, target.from, to),
+    supersedes: attrs.supersedes,
+  })
+  return true
+}
 
 export function resolveHumanInlineSuggestion(
   props: CommandProps,

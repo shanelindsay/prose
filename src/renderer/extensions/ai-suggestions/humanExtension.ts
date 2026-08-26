@@ -8,6 +8,8 @@ import {
   findHumanInlineSuggestion,
   resolveHumanInlineSuggestion,
   restoreHumanInlineSuggestions,
+  reviseHumanInlineInsertion,
+  type InlineInsertionRevisionAttrs,
 } from './humanSuggestionCommands'
 
 interface ParentSuggestionCommands {
@@ -16,6 +18,7 @@ interface ParentSuggestionCommands {
   acceptAllAISuggestions: (actor?: ReviewActor) => (props: CommandProps) => boolean
   rejectAllAISuggestions: (actor?: ReviewActor) => (props: CommandProps) => boolean
   restoreAISuggestions: (suggestions: AISuggestionData[]) => (props: CommandProps) => boolean
+  reviseAISuggestion: (id: string, attrs: InlineInsertionRevisionAttrs) => (props: CommandProps) => boolean
 }
 
 export const AISuggestion = BaseAISuggestion.extend({
@@ -103,6 +106,19 @@ export const AISuggestion = BaseAISuggestion.extend({
             changed = editor.commands.rejectAISuggestion(id, actor) || changed
           }
           return changed
+        },
+
+      reviseAISuggestion:
+        (id: string, attrs: InlineInsertionRevisionAttrs) =>
+        (props: CommandProps) => {
+          const target = findHumanInlineSuggestion(props.state.doc, id)
+          if (!target) return parent.reviseAISuggestion(id, attrs)(props)
+          return reviseHumanInlineInsertion(
+            props,
+            target,
+            attrs,
+            this.options.onSuggestionAdded,
+          )
         },
 
       restoreAISuggestions:
