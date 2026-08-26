@@ -13,7 +13,7 @@ import { useEditorInstanceStore } from '../../../stores/editorInstanceStore'
 import { useCommentStore } from '../../../extensions/comments/store'
 import { getAISuggestions } from '../../../extensions/ai-suggestions'
 import type { AISuggestionData } from '../../../extensions/ai-suggestions/types'
-import { isEditorReadOnly } from './editor'
+import { isEditorReadOnly, persistActiveSuggestions } from './editor'
 import { generateId } from '../../persistence'
 import {
   awaitReviewDurability,
@@ -68,6 +68,9 @@ function formatSuggestion(record: SuggestionLifecycleRecord, includeFeedback: bo
     to: suggestion.to,
     status: record.status,
     userReply: suggestion.userReply,
+    ...(suggestion.insertionAnchorNodeId ? { insertionAnchorNodeId: suggestion.insertionAnchorNodeId } : {}),
+    ...(suggestion.insertionAnchorText ? { insertionAnchorText: suggestion.insertionAnchorText } : {}),
+    ...(suggestion.deletionNodeId ? { deletionNodeId: suggestion.deletionNodeId } : {}),
     ...(includeFeedback ? { feedback: formatFeedback(record) } : { feedback: [] }),
     ...(record.supersedesId ? { supersedesId: record.supersedesId } : {}),
     ...(record.supersededById ? { supersededById: record.supersededById } : {}),
@@ -152,6 +155,11 @@ export async function executeAddSuggestionFeedback(
   const success = editor.commands.setAISuggestionReply(args.id, text, toReviewActor(attribution))
   if (!success) return toolError('Failed to attach feedback to suggestion', 'FEEDBACK_FAILED')
 
+  // Feedback is part of the active mark while the suggestion remains
+  // reviewable. Persist the updated snapshot before the MCP call returns so a
+  // reload preserves the feedback on the inline mark as well as in history.
+  await persistActiveSuggestions(editor, documentId)
+
   const event = latestReviewEvent(documentId, 'suggestion', args.id, 'suggestion_feedback')
   if (!event) {
     return toolError('Suggestion feedback was applied but its lifecycle event was not recorded', 'LIFECYCLE_EVENT_MISSING')
@@ -201,34 +209,46 @@ export async function executeReviseSuggestion(
 
   const attribution = attributionForTool(context)
   const suggestionId = generateId()
-  const success = editor
-    .chain()
-    .focus()
-    .setTextSelection({ from: range.from, to: range.to })
-    // Remove the predecessor mark without invoking rejectAISuggestion: the
-    // editor callback would record a rejected decision before supersession.
-    .unsetMark('aiSuggestion')
-    .setAISuggestion({
-      id: suggestionId,
-      type: current.type,
-      originalText: current.originalText,
-      suggestedText: args.content,
-      explanation: args.comment ?? current.explanation,
-      provenanceModel: attribution.model ?? current.provenanceModel ?? '',
-      provenanceConversationId: attribution.conversationId ?? current.provenanceConversationId ?? '',
-      provenanceMessageId: attribution.messageId ?? current.provenanceMessageId ?? '',
-      provenanceSource: attribution.origin,
-      provenanceInvocationId: attribution.requestId,
-      documentId,
-      supersedes: [args.id],
-      blockConversionIntent: current.blockConversionIntent ?? null,
-    })
-    .run()
+  const revisedAttrs = {
+    id: suggestionId,
+    type: current.type,
+    originalText: current.originalText,
+    suggestedText: args.content,
+    explanation: args.comment ?? current.explanation,
+    provenanceModel: attribution.model ?? current.provenanceModel ?? '',
+    provenanceConversationId: attribution.conversationId ?? current.provenanceConversationId ?? '',
+    provenanceMessageId: attribution.messageId ?? current.provenanceMessageId ?? '',
+    provenanceSource: attribution.origin,
+    provenanceInvocationId: attribution.requestId,
+    documentId,
+    insertionAnchorNodeId: current.insertionAnchorNodeId,
+    insertionAnchorText: current.insertionAnchorText,
+    deletionNodeId: current.deletionNodeId,
+    supersedes: [args.id],
+    blockConversionIntent: current.blockConversionIntent ?? null,
+  }
+  // Block insertions already contain their candidate paragraphs in the live
+  // document. Their revision must replace those blocks before applying the
+  // new mark; merely changing the mark metadata leaves the old wording on
+  // screen and in the serialized markdown.
+  const success = current.type === 'insertion'
+    ? editor.commands.reviseAISuggestion(args.id, revisedAttrs)
+    : editor
+      .chain()
+      .focus()
+      .setTextSelection({ from: range.from, to: range.to })
+      // Remove the predecessor mark without invoking rejectAISuggestion: the
+      // editor callback would record a rejected decision before supersession.
+      .unsetMark('aiSuggestion')
+      .setAISuggestion(revisedAttrs)
+      .run()
 
   if (!success) return toolError('Failed to create revised suggestion', 'REVISION_FAILED')
 
   const revised = getAISuggestions(editor).find((suggestion) => suggestion.id === suggestionId)
   if (!revised) return toolError('Revised suggestion was not created', 'REVISION_FAILED')
+
+  await persistActiveSuggestions(editor, documentId)
 
   // The new mark's callback owns its created record/event. This single store
   // call owns the predecessor's superseded record/event and links both IDs.
@@ -275,6 +295,11 @@ export async function executeDecideSuggestion(
     ? editor.commands.acceptAISuggestion(args.id, toReviewActor(attribution))
     : editor.commands.rejectAISuggestion(args.id, toReviewActor(attribution))
   if (!success) return toolError(`Failed to ${args.decision} suggestion`, 'DECISION_FAILED')
+
+  // Accept/reject removes the live mark (and, for insertion/deletion, changes
+  // the document structure). Persist that post-decision snapshot immediately
+  // so a reload cannot resurrect a decided suggestion.
+  await persistActiveSuggestions(editor, documentId)
 
   const status = args.decision === 'accept' ? 'accepted' : 'rejected'
   const event = latestReviewEvent(documentId, 'suggestion', args.id, 'suggestion_decided')

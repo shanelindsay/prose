@@ -198,6 +198,7 @@ test.beforeAll(async () => {
     env: {
       PROSE_USER_DATA_DIR: qaUserDataDir,
       PROSE_DOCS_DIR: qaDocsDir,
+      PROSE_REMOTE_DEBUGGING_PORT: '0',
     },
   })
   app = launched.app

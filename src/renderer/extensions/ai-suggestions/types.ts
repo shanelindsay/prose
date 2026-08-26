@@ -4,7 +4,7 @@
 
 import type { ReviewActor } from '../review-events'
 
-export type SuggestionType = 'edit' | 'insertion'
+export type SuggestionType = 'edit' | 'insertion' | 'deletion'
 
 export type SuggestionStatus = 'pending' | 'accepted' | 'rejected' | 'superseded'
 
@@ -22,6 +22,9 @@ export interface AISuggestionMark {
   explanation: string
   createdAt: number
   userReply?: string
+  insertionAnchorNodeId?: string
+  insertionAnchorText?: string
+  deletionNodeId?: string
 }
 
 export interface AISuggestionData {
@@ -42,6 +45,12 @@ export interface AISuggestionData {
   provenanceSource?: 'chat' | 'mcp' | 'unknown'
   /** MCP invocation identity, when the caller supplies one. */
   provenanceInvocationId?: string
+  /** Anchor node ID for a pending block insertion. */
+  insertionAnchorNodeId?: string
+  /** Anchor text used to recover an insertion after node IDs are regenerated. */
+  insertionAnchorText?: string
+  /** Node ID whose complete block is proposed for deletion. */
+  deletionNodeId?: string
   /** IDs of earlier suggestions this suggestion revises. */
   supersedes?: string[]
   /**

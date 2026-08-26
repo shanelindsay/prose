@@ -55,9 +55,12 @@ import { setupFileWatcherHandlers, teardownFileWatcher } from './fileWatcher'
 console.log('[Main] Environment loaded. OCR URL:', process.env.REMARKABLE_OCR_URL ? 'set' : 'not set')
 console.log('[Main] Google configured:', process.env.GOOGLE_CLIENT_ID ? 'ID set' : 'ID missing', process.env.GOOGLE_CLIENT_SECRET ? 'Secret set' : 'Secret missing')
 
-// Enable remote debugging in dev mode for QA automation (Circuit Electron, Playwright)
-if (is.dev) {
-  app.commandLine.appendSwitch('remote-debugging-port', '9222')
+// Enable remote debugging in dev mode for QA automation (Circuit Electron,
+// Playwright). Playwright supplies its own ephemeral port; honour an explicit
+// override so a local browser using the default 9222 port cannot block tests.
+const remoteDebuggingPort = process.env.PROSE_REMOTE_DEBUGGING_PORT ?? '9222'
+if (is.dev && remoteDebuggingPort !== 'disabled') {
+  app.commandLine.appendSwitch('remote-debugging-port', remoteDebuggingPort)
 }
 
 // Write PID file in dev mode for safe process cleanup by Claude Code agents

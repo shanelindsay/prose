@@ -141,6 +141,7 @@ export function Editor() {
   const isPreviewTab = useEditorStore((state) => state.isPreviewTab)
   const annotationsVisible = useEditorStore((state) => state.annotationsVisible)
   const toggleAnnotationsVisible = useEditorStore((state) => state.toggleAnnotationsVisible)
+  const reviewDisplayMode = useEditorStore((state) => state.reviewDisplayMode)
   const sourceMode = useEditorStore((state) => state.sourceMode)
   const setSourceMode = useEditorStore((state) => state.setSourceMode)
   const { settings, effectiveTheme, setDialogOpen, setShortcutsDialogOpen, setModelPickerOpen } = useSettings()
@@ -324,7 +325,17 @@ export function Editor() {
           )
         },
         onSuggestionFeedback: (suggestion, feedback: SuggestionFeedback) => {
-          useSuggestionStore.getState().recordSuggestionFeedback(suggestion, feedback)
+          const store = useSuggestionStore.getState()
+          store.recordSuggestionFeedback(suggestion, feedback)
+          // Keep the active mark's userReply in sync with history for UI
+          // feedback too. This is intentionally fire-and-forget: the store's
+          // persistence layer reports failures and the editor interaction
+          // should remain responsive.
+          const activeEditor = useEditorInstanceStore.getState().editor
+          const activeDocumentId = useEditorStore.getState().document.documentId
+          if (activeEditor && activeDocumentId) {
+            void store.saveSuggestions(activeDocumentId, getAISuggestions(activeEditor))
+          }
         },
         onSuggestionAccepted: (suggestion, actor) => {
           useSuggestionStore.getState().recordSuggestionDecision(suggestion, 'accepted', actor)
@@ -667,9 +678,11 @@ export function Editor() {
 
       // Small delay to ensure editor content is fully loaded
       const timer = setTimeout(() => {
-        editor.commands.restoreAISuggestions(pendingSuggestions)
-        // Clear pending suggestions after restoring
-        useSuggestionStore.getState().clearSuggestions()
+        const restored = editor.commands.restoreAISuggestions(pendingSuggestions)
+        // Keep unresolved records available for a later content/anchor
+        // update. Clearing them after a failed replay made the durable store
+        // say "pending" while the editor had no reviewable mark.
+        if (restored) useSuggestionStore.getState().clearSuggestions()
       }, 100)
 
       return () => clearTimeout(timer)
@@ -1364,7 +1377,10 @@ export function Editor() {
             </div>
           )}
           <TransformAnimation isTransforming={isTransforming} onComplete={completeTransform}>
-            <div className={`max-w-3xl mx-auto prose-editor ${isRemarkableReadOnly && !isTransforming ? 'opacity-80 select-none' : ''} ${!annotationsVisible ? 'hide-annotations' : ''}`}>
+            <div
+              className={`max-w-3xl mx-auto prose-editor review-display-${reviewDisplayMode} ${isRemarkableReadOnly && !isTransforming ? 'opacity-80 select-none' : ''} ${!annotationsVisible ? 'hide-annotations' : ''}`}
+              data-review-display-mode={reviewDisplayMode}
+            >
               {showFrontmatter && (
                 isRemarkableReadOnly || isPreviewTab
                   ? <FrontmatterDisplay content={document.content} frontmatter={document.frontmatter} />

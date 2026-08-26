@@ -25,6 +25,7 @@ import { ReviewContainer } from '../review/ReviewContainer'
 import { AIEditsHistoryPanel, activityItemVisible, DEFAULT_ACTIVITY_FILTER, requestCommentReview, type ActivityFilter } from '../editor/AIEditsHistoryPanel'
 import { useAnnotationStore } from '../../extensions/ai-annotations/store'
 import { useCommentStore } from '../../extensions/comments/store'
+import { useSuggestionStore } from '../../extensions/ai-suggestions/store'
 import { MODE_SWITCH_RUN_EVENT } from './toolResultRenderers/RequestModeSwitchResult'
 import { cn } from '../../lib/utils'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -105,9 +106,13 @@ export function ChatPanel() {
   // Activity feed sources for the tab badge + filter affordance.
   const annotations = useAnnotationStore((s) => s.annotations)
   const pendingComments = useCommentStore((s) => s.pendingComments)
+  const suggestionHistory = useSuggestionStore((s) => s.history)
 
-  // There's something to filter whenever any annotation or comment exists.
-  const hasActivity = annotations.length > 0 || pendingComments.length > 0
+  // There's something to filter whenever any annotation, comment, or durable
+  // suggestion record exists. Suggestion history is the source used by MCP and
+  // survives accept/reject, so it must keep the Activity tab available even
+  // after the live editor mark has been removed.
+  const hasActivity = annotations.length > 0 || pendingComments.length > 0 || suggestionHistory.length > 0
   // Open (unresolved) threads are the Review set.
   const openThreadCount = useMemo(() => pendingComments.filter((c) => !c.resolved).length, [pendingComments])
   // Any category turned off means the filter is engaged (tints the funnel).
@@ -117,8 +122,9 @@ export function ChatPanel() {
   const activityCount = useMemo(() => {
     const a = annotations.filter((an) => activityItemVisible({ kind: 'annotation', annotation: an }, activityFilter)).length
     const c = pendingComments.filter((cm) => activityItemVisible({ kind: 'comment', comment: cm }, activityFilter)).length
-    return a + c
-  }, [annotations, pendingComments, activityFilter])
+    const s = suggestionHistory.filter((suggestion) => activityItemVisible({ kind: 'suggestion', suggestion }, activityFilter)).length
+    return a + c + s
+  }, [annotations, pendingComments, suggestionHistory, activityFilter])
 
   // Track pending suggestion count
   const suggestionCount = useMemo(() => {

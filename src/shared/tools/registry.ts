@@ -106,6 +106,8 @@ export const mcpToolNames = [
   'get_outline',
   'open_file',
   'suggest_edit',
+  'insert_after',
+  'suggest_delete',
   'create_and_open_file',
   'list_comments',
   'add_comment',

@@ -26,6 +26,8 @@ import {
 import {
   executeEdit,
   executeInsert,
+  executeInsertAfter,
+  executeSuggestDelete,
   executeSuggestEdit,
   executeAcceptDiff,
   executeRejectDiff,
@@ -153,6 +155,10 @@ export async function executeTool(
         return executeEdit(validatedArgs, provenance)
       case 'insert':
         return executeInsert(validatedArgs, provenance)
+      case 'insert_after':
+        return await executeInsertAfter(validatedArgs, provenance, executionContext)
+      case 'suggest_delete':
+        return await executeSuggestDelete(validatedArgs, provenance, executionContext)
       case 'suggest_edit':
         return await executeSuggestEdit(validatedArgs, provenance, executionContext)
       case 'accept_diff':

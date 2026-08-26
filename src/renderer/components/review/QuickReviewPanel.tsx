@@ -229,6 +229,19 @@ export function QuickReviewPanel() {
         {/* Title + mode cross-link */}
         <div className="flex items-center gap-2 flex-1 min-w-0">
           <h2 className="text-sm font-medium shrink-0">Quick Review</h2>
+          {(current.type === 'insertion' || current.type === 'deletion') && (
+            <span
+              data-testid={`suggestion-type-${current.type}`}
+              className={cn(
+                'rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
+                current.type === 'insertion'
+                  ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                  : 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400',
+              )}
+            >
+              {current.type.toUpperCase()}
+            </span>
+          )}
           <button
             onClick={() => setReviewMode('side-by-side')}
             className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors truncate"
