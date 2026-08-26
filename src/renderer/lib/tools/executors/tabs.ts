@@ -10,6 +10,7 @@ import { useEditorInstanceStore } from '../../../stores/editorInstanceStore'
 import { useChatStore, setCurrentDocumentId } from '../../../stores/chatStore'
 import { useAnnotationStore } from '../../../extensions/ai-annotations'
 import { useSuggestionStore } from '../../../extensions/ai-suggestions/store'
+import { useReviewEventStore } from '../../../extensions/review-events'
 import { getAISuggestions } from '../../../extensions/ai-suggestions'
 import { useCommentStore } from '../../../extensions/comments/store'
 import { getComments } from '../../../extensions/comments'
@@ -152,6 +153,12 @@ export async function executeSelectTab(args: {
 
     if (liveEditor && activeTab?.documentId) {
       await useSuggestionStore.getState().saveSuggestions(activeTab.documentId, getAISuggestions(liveEditor))
+      const pendingSuggestionHistory = useSuggestionStore.getState().pendingSave
+      if (pendingSuggestionHistory) await pendingSuggestionHistory
+      const pendingReviewEvents = useReviewEventStore.getState().pendingSave
+      if (pendingReviewEvents) await pendingReviewEvents
+      await useSuggestionStore.getState().saveHistory(activeTab.documentId)
+      await useReviewEventStore.getState().saveEvents(activeTab.documentId)
       await useCommentStore.getState().saveComments(activeTab.documentId, getComments(liveEditor))
     }
 

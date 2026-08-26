@@ -11,13 +11,17 @@ import { useChatStore, setCurrentDocumentId } from '../../../stores/chatStore'
 import { useSettingsStore } from '../../../stores/settingsStore'
 import { useFileListStore } from '../../../stores/fileListStore'
 import { useAnnotationStore } from '../../../extensions/ai-annotations'
+import { useCommentStore } from '../../../extensions/comments/store'
+import { getAISuggestions } from '../../../extensions/ai-suggestions'
+import { useReviewEventStore } from '../../../extensions/review-events'
 import { parseMarkdown, serializeMarkdown, prepareTextContent } from '../../markdown'
 import {
   generateId,
   generateIdFromPath,
   clearDraft,
+  migrateReviewState,
   saveConversations,
-  saveAnnotations
+  saveAnnotations,
 } from '../../persistence'
 import { useTabStore, generateUntitledTitle } from '../../../stores/tabStore'
 import { useSuggestionStore } from '../../../extensions/ai-suggestions/store'
@@ -305,7 +309,29 @@ export async function executeSaveFile(args: {
 
     // Update document state if path changed
     if (finalPath !== document.path) {
+      const oldDocumentId = document.documentId
       const newDocumentId = await generateIdFromPath(finalPath)
+
+      // Save-as changes the document identity. Await callback writes before
+      // reading the old key, then migrate the complete review state alongside
+      // the existing conversations/annotations migration.
+      const suggestionStore = useSuggestionStore.getState()
+      if (suggestionStore.pendingSave) await suggestionStore.pendingSave
+      const reviewEventStore = useReviewEventStore.getState()
+      if (reviewEventStore.pendingSave) await reviewEventStore.pendingSave
+
+      const liveEditor = useEditorInstanceStore.getState().editor
+      // The extension's lightweight reader type predates TipTap's concrete
+      // Editor type; keep this boundary explicit while reusing the reader.
+      const migratedReviewState = await migrateReviewState(oldDocumentId, newDocumentId, {
+        liveSuggestions: liveEditor
+          ? getAISuggestions(liveEditor as unknown as Parameters<typeof getAISuggestions>[0])
+          : [],
+        history: suggestionStore.history,
+        events: reviewEventStore.events,
+        comments: useCommentStore.getState().pendingComments,
+      })
+
       const conversations = useChatStore.getState().conversations
 
       // Migrate conversations
@@ -333,6 +359,24 @@ export async function executeSaveFile(args: {
       } else {
         useAnnotationStore.getState().setDocumentId(newDocumentId)
       }
+
+      // Keep renderer stores on the new identity. The current editor still
+      // owns its live marks, so avoid triggering a second mark restoration.
+      useSuggestionStore.setState({
+        documentId: newDocumentId,
+        pendingSuggestions: liveEditor ? [] : migratedReviewState.suggestions,
+        history: migratedReviewState.history,
+      })
+      useReviewEventStore.setState({
+        documentId: newDocumentId,
+        events: migratedReviewState.events,
+        pendingSave: null,
+      })
+      useCommentStore.setState({
+        documentId: newDocumentId,
+        pendingComments: migratedReviewState.comments,
+        needsRestore: false,
+      })
 
       useEditorStore.getState().setDocument({ documentId: newDocumentId, path: finalPath })
       setCurrentDocumentId(newDocumentId)

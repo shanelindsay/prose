@@ -62,6 +62,7 @@ import { extractFirstH1 } from '../../lib/markdown'
 import { handleMissingPath } from '../../lib/stalePath'
 import type { DraftState, SessionState } from '../../lib/persistence'
 import { executeTool } from '../../lib/tools'
+import type { ToolExecutionContext } from '../../../shared/tools/types'
 import { useReviewMode, useWasChatOpenBeforeReview, usePreviousChatWidth, useReviewStore, type ReviewMode } from '../../stores/reviewStore'
 import { chatOpenDefaultPct, reviewChatWidthPct } from '../../hooks/usePanelLayout'
 
@@ -951,12 +952,27 @@ export function App() {
     const unsubscribe = window.api.onMcpToolInvoke(async (requestId, toolName, args) => {
       try {
         const documentId = useEditorStore.getState().document.documentId
+        // The bridge supplies the request ID; the renderer supplies the active
+        // document identity. Keep both the trusted MCP context and the legacy
+        // provenance object so existing suggestion attribution remains intact.
+        const executionContext: ToolExecutionContext = {
+          origin: 'mcp',
+          requestId,
+          expectedDocumentId: documentId,
+          attribution: {
+            actor: 'assistant',
+            origin: 'mcp',
+            label: 'Claude (MCP)',
+            model: 'Claude (MCP)',
+            requestId,
+          },
+        }
         const result = await executeTool(toolName, args, 'create', {
           model: 'Claude (MCP)',
           conversationId: requestId,
           messageId: requestId,
           documentId: documentId ?? '',
-        })
+        }, executionContext)
         window.api.sendMcpToolResult(requestId, result)
       } catch (error) {
         window.api.sendMcpToolResult(requestId, {

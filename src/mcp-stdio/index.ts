@@ -27,7 +27,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 import { spawn } from 'child_process'
-import { getToolsForMCP } from '../shared/tools/registry'
+import { getToolsForMCP, isToolExposedViaMCP } from '../shared/tools/registry'
 
 // Platform-aware userData path (must match Electron's app.getPath('userData'))
 function getUserDataPath(): string {
@@ -339,6 +339,18 @@ async function executeTool(
   name: string,
   args: Record<string, unknown>
 ): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }> {
+  // A client can call a tool directly without first requesting tools/list.
+  // Reject hidden names before opening or using the app socket.
+  if (!isToolExposedViaMCP(name)) {
+    return {
+      content: [{
+        type: 'text',
+        text: `Error: Tool "${name}" is not exposed through MCP (MCP_TOOL_NOT_EXPOSED)`
+      }],
+      isError: true
+    }
+  }
+
   const timeout = TOOL_TIMEOUTS[name] || DEFAULT_TIMEOUT
 
   try {

@@ -11,7 +11,13 @@ import type { Schema, Node as PMNode } from '@tiptap/pm/model'
 import { DOMParser as ProseMirrorDOMParser, Slice } from '@tiptap/pm/model'
 import type { Transaction } from '@tiptap/pm/state'
 import type { MarkSerializerSpec } from 'prosemirror-markdown'
-import type { AISuggestionOptions, AISuggestionData, SuggestionType } from './types'
+import type {
+  AISuggestionOptions,
+  AISuggestionData,
+  SuggestionFeedback,
+  SuggestionType,
+} from './types'
+import type { ReviewActor } from '../review-events'
 import { useAnnotationStore } from '../ai-annotations'
 import { createWordDiffAnnotations } from '../../lib/diffUtils'
 import { pipelineLog } from '../../lib/aiPipelineLog'
@@ -184,6 +190,48 @@ export const aiSuggestionMarkdownSerializer: MarkSerializerSpec = {
   expelEnclosingWhitespace: true,
 }
 
+function suggestionDataFromAttrs(
+  attrs: Record<string, unknown>,
+  from: number,
+  to: number,
+): AISuggestionData {
+  const source = attrs.provenanceSource
+  const provenanceSource = source === 'chat' || source === 'mcp' || source === 'unknown'
+    ? source
+    : undefined
+  const supersedes = Array.isArray(attrs.supersedes)
+    ? attrs.supersedes.filter((id): id is string => typeof id === 'string')
+    : undefined
+
+  return {
+    id: typeof attrs.id === 'string' ? attrs.id : '',
+    type: attrs.type === 'insertion' ? 'insertion' : 'edit',
+    originalText: typeof attrs.originalText === 'string' ? attrs.originalText : '',
+    suggestedText: typeof attrs.suggestedText === 'string' ? attrs.suggestedText : '',
+    explanation: typeof attrs.explanation === 'string' ? attrs.explanation : '',
+    createdAt: typeof attrs.createdAt === 'number' ? attrs.createdAt : Date.now(),
+    from,
+    to,
+    userReply: typeof attrs.userReply === 'string' ? attrs.userReply : undefined,
+    provenanceModel: typeof attrs.provenanceModel === 'string' ? attrs.provenanceModel : undefined,
+    provenanceConversationId: typeof attrs.provenanceConversationId === 'string'
+      ? attrs.provenanceConversationId
+      : undefined,
+    provenanceMessageId: typeof attrs.provenanceMessageId === 'string'
+      ? attrs.provenanceMessageId
+      : undefined,
+    provenanceSource,
+    provenanceInvocationId: typeof attrs.provenanceInvocationId === 'string'
+      ? attrs.provenanceInvocationId
+      : undefined,
+    supersedes,
+    documentId: typeof attrs.documentId === 'string' ? attrs.documentId : undefined,
+    blockConversionIntent: typeof attrs.blockConversionIntent === 'string'
+      ? attrs.blockConversionIntent
+      : null,
+  }
+}
+
 declare module '@tiptap/core' {
   interface Commands<ReturnType> {
     aiSuggestion: {
@@ -200,29 +248,32 @@ declare module '@tiptap/core' {
         provenanceConversationId?: string
         provenanceMessageId?: string
         documentId?: string
+        provenanceSource?: 'chat' | 'mcp' | 'unknown'
+        provenanceInvocationId?: string
+        supersedes?: string[]
         /** Raw markdown for a block-type conversion (#673); null/absent = text replacement */
         blockConversionIntent?: string | null
       }) => ReturnType
       /**
        * Set user reply on an AI suggestion by ID
        */
-      setAISuggestionReply: (id: string, reply: string) => ReturnType
+      setAISuggestionReply: (id: string, reply: string, actor?: ReviewActor) => ReturnType
       /**
        * Accept an AI suggestion by ID - replaces text with suggested text
        */
-      acceptAISuggestion: (id: string) => ReturnType
+      acceptAISuggestion: (id: string, actor?: ReviewActor) => ReturnType
       /**
        * Reject an AI suggestion by ID - removes the mark
        */
-      rejectAISuggestion: (id: string) => ReturnType
+      rejectAISuggestion: (id: string, actor?: ReviewActor) => ReturnType
       /**
        * Accept all AI suggestions
        */
-      acceptAllAISuggestions: () => ReturnType
+      acceptAllAISuggestions: (actor?: ReviewActor) => ReturnType
       /**
        * Reject all AI suggestions
        */
-      rejectAllAISuggestions: () => ReturnType
+      rejectAllAISuggestions: (actor?: ReviewActor) => ReturnType
       /**
        * Restore AI suggestions from persisted data (used after tab switch)
        */
@@ -238,6 +289,7 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
     return {
       HTMLAttributes: {},
       onSuggestionAdded: undefined,
+      onSuggestionFeedback: undefined,
       onSuggestionAccepted: undefined,
       onSuggestionRejected: undefined,
     }
@@ -332,6 +384,39 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
           return { 'data-provenance-message': attributes.provenanceMessageId }
         },
       },
+      provenanceSource: {
+        default: 'unknown',
+        parseHTML: (element) => element.getAttribute('data-provenance-source') || 'unknown',
+        renderHTML: (attributes) => {
+          if (!attributes.provenanceSource) return {}
+          return { 'data-provenance-source': attributes.provenanceSource }
+        },
+      },
+      provenanceInvocationId: {
+        default: '',
+        parseHTML: (element) => element.getAttribute('data-provenance-invocation'),
+        renderHTML: (attributes) => {
+          if (!attributes.provenanceInvocationId) return {}
+          return { 'data-provenance-invocation': attributes.provenanceInvocationId }
+        },
+      },
+      supersedes: {
+        default: null,
+        parseHTML: (element) => {
+          const value = element.getAttribute('data-ai-supersedes')
+          if (!value) return null
+          try {
+            const parsed = JSON.parse(value)
+            return Array.isArray(parsed) ? parsed : null
+          } catch {
+            return null
+          }
+        },
+        renderHTML: (attributes) => {
+          if (!Array.isArray(attributes.supersedes) || attributes.supersedes.length === 0) return {}
+          return { 'data-ai-supersedes': JSON.stringify(attributes.supersedes) }
+        },
+      },
       documentId: {
         default: '',
         parseHTML: (element) => element.getAttribute('data-document-id'),
@@ -379,6 +464,7 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
         (attrs) =>
         ({ commands, state }) => {
           const { from, to } = state.selection
+          const createdAt = Date.now()
 
           const suggestionData: AISuggestionData = {
             id: attrs.id,
@@ -386,9 +472,16 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
             originalText: attrs.originalText,
             suggestedText: attrs.suggestedText,
             explanation: attrs.explanation,
-            createdAt: Date.now(),
+            createdAt,
             from,
             to,
+            provenanceModel: attrs.provenanceModel || undefined,
+            provenanceConversationId: attrs.provenanceConversationId || undefined,
+            provenanceMessageId: attrs.provenanceMessageId || undefined,
+            documentId: attrs.documentId || undefined,
+            provenanceSource: attrs.provenanceSource || 'unknown',
+            provenanceInvocationId: attrs.provenanceInvocationId || undefined,
+            supersedes: attrs.supersedes,
             blockConversionIntent: attrs.blockConversionIntent ?? null,
           }
 
@@ -398,10 +491,13 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
             originalText: attrs.originalText,
             suggestedText: attrs.suggestedText,
             explanation: attrs.explanation,
-            createdAt: Date.now(),
+            createdAt,
             provenanceModel: attrs.provenanceModel || '',
             provenanceConversationId: attrs.provenanceConversationId || '',
             provenanceMessageId: attrs.provenanceMessageId || '',
+            provenanceSource: attrs.provenanceSource || 'unknown',
+            provenanceInvocationId: attrs.provenanceInvocationId || '',
+            supersedes: attrs.supersedes || null,
             documentId: attrs.documentId || '',
             blockConversionIntent: attrs.blockConversionIntent ?? null,
           })
@@ -414,7 +510,7 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
         },
 
       setAISuggestionReply:
-        (id, reply) =>
+        (id, reply, actor = { kind: 'user', source: 'ui' }) =>
         ({ tr, state, dispatch }) => {
           if (!dispatch) return false
 
@@ -435,6 +531,7 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
           })
 
           if (positions.length === 0 || !existingAttrs) return false
+          const attrs = existingAttrs
 
           // Calculate the full range
           const markFrom = positions[0].pos
@@ -447,17 +544,30 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
             markFrom,
             markTo,
             state.schema.marks.aiSuggestion.create({
-              ...existingAttrs,
+              ...attrs,
               userReply: reply
             })
           )
 
           dispatch(tr)
+
+          const updatedSuggestion: AISuggestionData = {
+            ...suggestionDataFromAttrs(attrs, markFrom, markTo),
+            userReply: reply,
+          }
+          const feedback: SuggestionFeedback = {
+            text: reply,
+            createdAt: Date.now(),
+            actor,
+          }
+          if (this.options.onSuggestionFeedback) {
+            this.options.onSuggestionFeedback(updatedSuggestion, feedback)
+          }
           return true
         },
 
       acceptAISuggestion:
-        (id) =>
+        (id, actor = { kind: 'user', source: 'ui' }) =>
         ({ tr, state, dispatch, editor }) => {
           if (!dispatch) return false
 
@@ -484,6 +594,7 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
           const markFrom = positions[0].pos
           const lastPos = positions[positions.length - 1]
           const markTo = lastPos.pos + lastPos.nodeSize
+          const acceptedSuggestion = suggestionDataFromAttrs(suggestionAttrs, markFrom, markTo)
 
           // Get the suggested text
           const suggestedText = (suggestionAttrs as { suggestedText?: string }).suggestedText || ''
@@ -660,18 +771,19 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
           }
 
           if (this.options.onSuggestionAccepted) {
-            this.options.onSuggestionAccepted(id)
+            this.options.onSuggestionAccepted(acceptedSuggestion, actor)
           }
 
           return true
         },
 
       rejectAISuggestion:
-        (id) =>
+        (id, actor = { kind: 'user', source: 'ui' }) =>
         ({ tr, state, dispatch }) => {
           if (!dispatch) return false
 
           const { doc } = state
+          let suggestionAttrs: Record<string, unknown> | null = null
           const positions: Array<{ pos: number; nodeSize: number }> = []
 
           // Find all nodes with this suggestion mark (mark can span multiple text nodes
@@ -679,17 +791,19 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
           doc.descendants((node, pos) => {
             node.marks.forEach((mark) => {
               if (mark.type.name === this.name && mark.attrs.id === id) {
+                if (!suggestionAttrs) suggestionAttrs = mark.attrs
                 positions.push({ pos, nodeSize: node.nodeSize })
               }
             })
           })
 
-          if (positions.length === 0) return false
+          if (positions.length === 0 || !suggestionAttrs) return false
 
           // Calculate the full range from first to last node
           const markFrom = positions[0].pos
           const lastPos = positions[positions.length - 1]
           const markTo = lastPos.pos + lastPos.nodeSize
+          const rejectedSuggestion = suggestionDataFromAttrs(suggestionAttrs, markFrom, markTo)
 
           // Remove the mark across the entire range
           tr.removeMark(markFrom, markTo, state.schema.marks.aiSuggestion)
@@ -697,14 +811,14 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
           dispatch(tr)
 
           if (this.options.onSuggestionRejected) {
-            this.options.onSuggestionRejected(id)
+            this.options.onSuggestionRejected(rejectedSuggestion, actor)
           }
 
           return true
         },
 
       acceptAllAISuggestions:
-        () =>
+        (actor = { kind: 'user', source: 'ui' }) =>
         ({ tr, state, dispatch, editor }) => {
           if (!dispatch) return false
 
@@ -714,6 +828,8 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
           // We need to process from end to start to avoid position shifts
           const suggestions: Array<{
             id: string
+            type: SuggestionType
+            createdAt: number
             from: number
             to: number
             suggestedText: string
@@ -723,12 +839,16 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
             provenanceModel: string
             provenanceConversationId: string
             provenanceMessageId: string
+            provenanceSource: 'chat' | 'mcp' | 'unknown'
+            provenanceInvocationId: string
+            supersedes: string[]
             documentId: string
+            userReply?: string
           }> = []
 
           // First pass: collect all unique suggestion IDs and their ranges
           const seenIds = new Set<string>()
-          doc.descendants((node, pos) => {
+          doc.descendants((node) => {
             node.marks.forEach((mark) => {
               if (mark.type.name === this.name && mark.attrs.id && !seenIds.has(mark.attrs.id)) {
                 seenIds.add(mark.attrs.id)
@@ -750,6 +870,8 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
 
                   suggestions.push({
                     id: mark.attrs.id,
+                    type: mark.attrs.type === 'insertion' ? 'insertion' : 'edit',
+                    createdAt: mark.attrs.createdAt || Date.now(),
                     from,
                     to,
                     suggestedText: mark.attrs.suggestedText || '',
@@ -759,6 +881,10 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
                     provenanceModel: mark.attrs.provenanceModel || '',
                     provenanceConversationId: mark.attrs.provenanceConversationId || '',
                     provenanceMessageId: mark.attrs.provenanceMessageId || '',
+                    provenanceSource: mark.attrs.provenanceSource || 'unknown',
+                    provenanceInvocationId: mark.attrs.provenanceInvocationId || '',
+                    supersedes: Array.isArray(mark.attrs.supersedes) ? mark.attrs.supersedes : [],
+                    userReply: mark.attrs.userReply || undefined,
                     documentId: mark.attrs.documentId || ''
                   })
                 }
@@ -827,12 +953,36 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
               tr.delete(suggestion.from, suggestion.to)
             }
 
-            if (this.options.onSuggestionAccepted) {
-              this.options.onSuggestionAccepted(suggestion.id)
-            }
           }
 
           dispatch(tr)
+
+          if (this.options.onSuggestionAccepted) {
+            for (const suggestion of suggestions) {
+              this.options.onSuggestionAccepted(
+                {
+                  id: suggestion.id,
+                  type: suggestion.type,
+                  originalText: suggestion.originalText,
+                  suggestedText: suggestion.suggestedText,
+                  explanation: suggestion.explanation,
+                  createdAt: suggestion.createdAt,
+                  from: suggestion.from,
+                  to: suggestion.to,
+                  userReply: suggestion.userReply,
+                  provenanceModel: suggestion.provenanceModel || undefined,
+                  provenanceConversationId: suggestion.provenanceConversationId || undefined,
+                  provenanceMessageId: suggestion.provenanceMessageId || undefined,
+                  provenanceSource: suggestion.provenanceSource,
+                  provenanceInvocationId: suggestion.provenanceInvocationId || undefined,
+                  supersedes: suggestion.supersedes,
+                  documentId: suggestion.documentId || undefined,
+                  blockConversionIntent: suggestion.blockConversionIntent,
+                },
+                actor,
+              )
+            }
+          }
 
           // Create annotations in a MICROTASK after the transaction actually
           // applies (see acceptAISuggestion — TipTap applies the tr after the
@@ -908,12 +1058,13 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
         },
 
       rejectAllAISuggestions:
-        () =>
+        (actor = { kind: 'user', source: 'ui' }) =>
         ({ tr, state, dispatch }) => {
           if (!dispatch) return false
 
           const { doc } = state
           let removed = false
+          const rejectedById = new Map<string, AISuggestionData>()
 
           doc.descendants((node, pos) => {
             node.marks.forEach((mark) => {
@@ -921,8 +1072,12 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
                 tr.removeMark(pos, pos + node.nodeSize, mark.type)
                 removed = true
 
-                if (this.options.onSuggestionRejected && mark.attrs.id) {
-                  this.options.onSuggestionRejected(mark.attrs.id)
+                if (mark.attrs.id) {
+                  const existing = rejectedById.get(mark.attrs.id)
+                  const snapshot = suggestionDataFromAttrs(mark.attrs, pos, pos + node.nodeSize)
+                  rejectedById.set(mark.attrs.id, existing
+                    ? { ...existing, to: pos + node.nodeSize }
+                    : snapshot)
                 }
               }
             })
@@ -930,6 +1085,11 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
 
           if (removed) {
             dispatch(tr)
+            if (this.options.onSuggestionRejected) {
+              for (const suggestion of rejectedById.values()) {
+                this.options.onSuggestionRejected(suggestion, actor)
+              }
+            }
             return true
           }
 
@@ -967,7 +1127,6 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
 
             // Convert text index to document position
             // We need to walk the document to find the correct ProseMirror position
-            let pos = 0
             let charCount = 0
             let foundStart = -1
             let foundEnd = -1
@@ -1016,6 +1175,9 @@ export const AISuggestion = Mark.create<AISuggestionOptions>({
               provenanceModel: suggestion.provenanceModel || '',
               provenanceConversationId: suggestion.provenanceConversationId || '',
               provenanceMessageId: suggestion.provenanceMessageId || '',
+              provenanceSource: suggestion.provenanceSource || 'unknown',
+              provenanceInvocationId: suggestion.provenanceInvocationId || '',
+              supersedes: suggestion.supersedes || null,
               documentId: suggestion.documentId || '',
               blockConversionIntent: suggestion.blockConversionIntent ?? null,
             })
@@ -1065,6 +1227,9 @@ export function getAISuggestions(editor: {
                 provenanceConversationId?: string
                 provenanceMessageId?: string
                 documentId?: string
+                provenanceSource?: 'chat' | 'mcp' | 'unknown'
+                provenanceInvocationId?: string
+                supersedes?: string[]
                 blockConversionIntent?: string | null
               }
             }>
@@ -1096,6 +1261,9 @@ export function getAISuggestions(editor: {
           provenanceConversationId: mark.attrs.provenanceConversationId || undefined,
           provenanceMessageId: mark.attrs.provenanceMessageId || undefined,
           documentId: mark.attrs.documentId || undefined,
+          provenanceSource: mark.attrs.provenanceSource || undefined,
+          provenanceInvocationId: mark.attrs.provenanceInvocationId || undefined,
+          supersedes: Array.isArray(mark.attrs.supersedes) ? mark.attrs.supersedes : undefined,
           blockConversionIntent: mark.attrs.blockConversionIntent ?? null,
         })
       }

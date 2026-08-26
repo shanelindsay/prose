@@ -12,9 +12,15 @@ import {
   generateIdFromPath,
   clearDraft,
   saveConversations,
-  saveAnnotations
+  saveAnnotations,
+  migrateReviewState,
 } from '../lib/persistence'
 import { useAnnotationStore } from '../extensions/ai-annotations'
+import { getAISuggestions } from '../extensions/ai-suggestions'
+import { useSuggestionStore } from '../extensions/ai-suggestions/store'
+import { useCommentStore } from '../extensions/comments/store'
+import { useReviewEventStore } from '../extensions/review-events'
+import { useEditorInstanceStore } from '../stores/editorInstanceStore'
 
 // Sanitize filename by removing invalid characters
 function sanitizeFilename(name: string): string {
@@ -35,6 +41,47 @@ function buildSaveContent(
 
 function getPathFilename(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? 'document.md'
+}
+
+/**
+ * Keep the active renderer stores aligned when Save As changes document ID.
+ * The editor still owns live TipTap marks, so the pending suggestion buffer is
+ * only populated when there is no live editor to restore from.
+ */
+async function migrateActiveReviewState(
+  oldDocumentId: string,
+  newDocumentId: string,
+): Promise<void> {
+  const suggestionStore = useSuggestionStore.getState()
+  if (suggestionStore.pendingSave) await suggestionStore.pendingSave
+  const reviewEventStore = useReviewEventStore.getState()
+  if (reviewEventStore.pendingSave) await reviewEventStore.pendingSave
+
+  const liveEditor = useEditorInstanceStore.getState().editor
+  const migratedReviewState = await migrateReviewState(oldDocumentId, newDocumentId, {
+    liveSuggestions: liveEditor
+      ? getAISuggestions(liveEditor as unknown as Parameters<typeof getAISuggestions>[0])
+      : [],
+    history: suggestionStore.history,
+    events: reviewEventStore.events,
+    comments: useCommentStore.getState().pendingComments,
+  })
+
+  useSuggestionStore.setState({
+    documentId: newDocumentId,
+    pendingSuggestions: liveEditor ? [] : migratedReviewState.suggestions,
+    history: migratedReviewState.history,
+  })
+  useReviewEventStore.setState({
+    documentId: newDocumentId,
+    events: migratedReviewState.events,
+    pendingSave: null,
+  })
+  useCommentStore.setState({
+    documentId: newDocumentId,
+    pendingComments: migratedReviewState.comments,
+    needsRestore: false,
+  })
 }
 
 export function useEditor() {
@@ -201,7 +248,9 @@ export function useEditor() {
       const path = await window.api.saveFileAs(content, defaultFilename ?? undefined)
       if (path) {
         // Migrate chat history to path-based ID
+        const oldDocumentId = document.documentId
         const newDocumentId = await generateIdFromPath(path)
+        await migrateActiveReviewState(oldDocumentId, newDocumentId)
         const conversations = useChatStore.getState().conversations
 
         // Save conversations under new path-based ID
@@ -239,7 +288,7 @@ export function useEditor() {
         durationMs: 0
       })
     }
-  }, [setDocument, setDirty])
+  }, [setDocument, setDirty, document.documentId])
 
   const saveFile = useCallback(async () => {
     if (!window.api) return
@@ -370,7 +419,9 @@ export function useEditor() {
       }
 
       // Migrate chat history to path-based ID
+      const oldDocumentId = document.documentId
       const newDocumentId = await generateIdFromPath(finalPath)
+      await migrateActiveReviewState(oldDocumentId, newDocumentId)
       const conversations = useChatStore.getState().conversations
 
       if (conversations.length > 0) {

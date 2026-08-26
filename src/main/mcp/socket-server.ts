@@ -13,7 +13,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as crypto from 'crypto'
 import { app } from 'electron'
-import { getToolsForMCP } from '../../shared/tools/registry'
+import { getToolsForMCP, isToolExposedViaMCP } from '../../shared/tools/registry'
 import type { ToolResult } from '../../shared/tools/types'
 
 // Socket location in app support directory
@@ -222,6 +222,20 @@ export class McpSocketServer {
       } else if (method === 'tools/call') {
         // Execute tool
         const { name, arguments: args } = params as { name: string; arguments?: unknown }
+
+        // Keep the call surface identical to tools/list. A client can send a
+        // direct tools/call without first listing tools, so the allowlist must
+        // be enforced at the execution boundary as well.
+        if (!isToolExposedViaMCP(name)) {
+          this.sendResult(socket, id, {
+            content: [{
+              type: 'text',
+              text: `Error: Tool "${name}" is not exposed through MCP (MCP_TOOL_NOT_EXPOSED)`
+            }],
+            isError: true
+          })
+          return
+        }
 
         if (!this.onToolInvoke) {
           this.sendError(socket, id, -32000, 'No tool handler registered')

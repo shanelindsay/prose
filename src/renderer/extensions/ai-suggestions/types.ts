@@ -1,8 +1,18 @@
 /**
- * AI Suggestion mark types
+ * AI Suggestion mark and lifecycle types.
  */
 
+import type { ReviewActor } from '../review-events'
+
 export type SuggestionType = 'edit' | 'insertion'
+
+export type SuggestionStatus = 'pending' | 'accepted' | 'rejected' | 'superseded'
+
+export interface SuggestionFeedback {
+  text: string
+  createdAt: number
+  actor: ReviewActor
+}
 
 export interface AISuggestionMark {
   id: string
@@ -28,6 +38,12 @@ export interface AISuggestionData {
   provenanceConversationId?: string
   provenanceMessageId?: string
   documentId?: string
+  /** Where the suggestion came from (kept on the active mark for restoration). */
+  provenanceSource?: 'chat' | 'mcp' | 'unknown'
+  /** MCP invocation identity, when the caller supplies one. */
+  provenanceInvocationId?: string
+  /** IDs of earlier suggestions this suggestion revises. */
+  supersedes?: string[]
   /**
    * Raw markdown of a block-type conversion (#673) — present when the
    * suggestion's content opened with block markup differing from the host
@@ -38,9 +54,27 @@ export interface AISuggestionData {
   blockConversionIntent?: string | null
 }
 
+/**
+ * Canonical persisted suggestion state. The TipTap mark is an active anchor;
+ * this record remains after a decision and is the source for MCP history.
+ */
+export interface SuggestionRecord extends AISuggestionData {
+  documentId: string
+  status: SuggestionStatus
+  feedback: SuggestionFeedback[]
+  createdBy?: ReviewActor
+  decisionActor?: ReviewActor
+  decidedAt?: number
+  supersededBy?: string[]
+}
+
 export interface AISuggestionOptions {
   HTMLAttributes?: Record<string, unknown>
   onSuggestionAdded?: (suggestion: AISuggestionData) => void
-  onSuggestionAccepted?: (id: string) => void
-  onSuggestionRejected?: (id: string) => void
+  onSuggestionFeedback?: (
+    suggestion: AISuggestionData,
+    feedback: SuggestionFeedback,
+  ) => void
+  onSuggestionAccepted?: (suggestion: AISuggestionData, actor: ReviewActor) => void
+  onSuggestionRejected?: (suggestion: AISuggestionData, actor: ReviewActor) => void
 }

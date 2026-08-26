@@ -4,5 +4,8 @@ export type {
   AISuggestionMark,
   AISuggestionData,
   AISuggestionOptions,
+  SuggestionFeedback,
+  SuggestionRecord,
+  SuggestionStatus,
   SuggestionType,
 } from './types'

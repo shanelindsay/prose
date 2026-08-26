@@ -32,6 +32,7 @@ import { FocusMode } from '../../lib/focusMode'
 import { Comment } from '../../extensions/comments'
 import { AISuggestion } from '../../extensions/ai-suggestions'
 import { useSuggestionStore } from '../../extensions/ai-suggestions/store'
+import { useReviewEventStore, createReviewEvent, type ReviewActor } from '../../extensions/review-events'
 import { SESSION_ID } from '../../lib/persistence'
 import { AIAnnotations, useAnnotationStore } from '../../extensions/ai-annotations'
 import { NodeIds } from '../../extensions/node-ids'
@@ -71,7 +72,7 @@ import { TransformAnimation, useTransformAnimation } from './TransformAnimation'
 import { AISuggestionPopover } from '../AISuggestionPopover'
 import { CommentPopover } from '../CommentPopover'
 import { getAISuggestions } from '../../extensions/ai-suggestions/extension'
-import type { AISuggestionData } from '../../extensions/ai-suggestions/types'
+import type { AISuggestionData, SuggestionFeedback } from '../../extensions/ai-suggestions/types'
 import { useCommentStore } from '../../extensions/comments/store'
 import { LinkPopover } from './LinkPopover'
 import { SourceEditor, SourceEditorHandle } from './SourceEditor'
@@ -90,6 +91,21 @@ function shouldPromptForAIPaste(text: string): boolean {
   const trimmed = text.trim()
   if (!trimmed) return false
   return trimmed.length >= AI_PASTE_PROMPT_MIN_CHARS || trimmed.includes('\n')
+}
+
+function actorForSuggestion(suggestion: AISuggestionData): ReviewActor {
+  const source = suggestion.provenanceSource ?? (
+    suggestion.provenanceModel === 'Claude (MCP)' ? 'mcp' :
+      suggestion.provenanceModel ? 'chat' : 'system'
+  )
+  return {
+    kind: 'agent',
+    source,
+    model: suggestion.provenanceModel || undefined,
+    conversationId: suggestion.provenanceConversationId || undefined,
+    messageId: suggestion.provenanceMessageId || undefined,
+    invocationId: suggestion.provenanceInvocationId || undefined,
+  }
 }
 
 // Lowlight instance with a curated set of common languages.
@@ -270,9 +286,52 @@ export function Editor() {
           ]
           useCommentStore.setState({ pendingComments: updated })
           if (store.documentId) store.saveComments(store.documentId, updated)
+          if (store.documentId) {
+            useReviewEventStore.getState().appendEvent(createReviewEvent({
+              documentId: store.documentId,
+              target: 'comment',
+              targetId: commentData.id,
+              kind: 'created',
+              actor: {
+                kind: commentData.author === 'ai' ? 'agent' : 'user',
+                source: commentData.author === 'ai' ? 'chat' : 'ui',
+              },
+              payload: {
+                comment: commentData.comment,
+                markedText: commentData.markedText,
+              },
+            }))
+          }
+        },
+        onCommentRemoved: (id) => {
+          const documentId = useCommentStore.getState().documentId
+          if (!documentId) return
+          useReviewEventStore.getState().appendEvent(createReviewEvent({
+            documentId,
+            target: 'comment',
+            targetId: id,
+            kind: 'resolved',
+            actor: { kind: 'user', source: 'ui' },
+          }))
         },
       }),
-      AISuggestion,
+      AISuggestion.configure({
+        onSuggestionAdded: (suggestion) => {
+          useSuggestionStore.getState().recordSuggestionAdded(
+            suggestion,
+            actorForSuggestion(suggestion),
+          )
+        },
+        onSuggestionFeedback: (suggestion, feedback: SuggestionFeedback) => {
+          useSuggestionStore.getState().recordSuggestionFeedback(suggestion, feedback)
+        },
+        onSuggestionAccepted: (suggestion, actor) => {
+          useSuggestionStore.getState().recordSuggestionDecision(suggestion, 'accepted', actor)
+        },
+        onSuggestionRejected: (suggestion, actor) => {
+          useSuggestionStore.getState().recordSuggestionDecision(suggestion, 'rejected', actor)
+        },
+      }),
       AIAnnotations.configure({
         showTooltip: true,
       }),

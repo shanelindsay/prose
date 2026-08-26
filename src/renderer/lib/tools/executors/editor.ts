@@ -3,7 +3,7 @@
  */
 
 import type { Editor } from '@tiptap/core'
-import type { ToolResult } from '../../../../shared/tools/types'
+import type { ToolResult, ToolExecutionContext } from '../../../../shared/tools/types'
 import { toolSuccess, toolError } from '../../../../shared/tools/types'
 import { useEditorStore } from '../../../stores/editorStore'
 import { useEditorInstanceStore } from '../../../stores/editorInstanceStore'
@@ -16,6 +16,11 @@ import { getAISuggestions, parseMarkdownToSlice, sliceVisibleText } from '../../
 import { parseMarkdown, FRONTMATTER_REGEX } from '../../markdown'
 import { pipelineLog } from '../../aiPipelineLog'
 import { load as parseYaml } from 'js-yaml'
+import {
+  awaitReviewDurability,
+  latestReviewEvent,
+  verifyExpectedDocumentId,
+} from '../reviewLifecycle'
 
 /**
  * Target visible duration for a chunked streaming insertion. The number of
@@ -667,15 +672,16 @@ interface ToolProvenance {
  * The user can click the highlighted text to see the suggestion and accept/reject it.
  * Falls back to content matching if the nodeId is stale.
  */
-export function executeSuggestEdit(
+export async function executeSuggestEdit(
   args: {
     nodeId: string
     content: string
     comment?: string
     search?: string
   },
-  provenance?: ToolProvenance
-): ToolResult<{ suggested: boolean; suggestionId: string }> {
+  provenance?: ToolProvenance,
+  context?: ToolExecutionContext,
+): Promise<ToolResult<{ suggested: boolean; suggestionId: string }>> {
   const editor = getEditor()
 
   if (!editor) {
@@ -685,6 +691,10 @@ export function executeSuggestEdit(
   if (isEditorReadOnly()) {
     return toolError('Document is read-only in this mode', 'EDITOR_READ_ONLY')
   }
+
+  const documentId = useEditorStore.getState().document.documentId
+  const identityError = verifyExpectedDocumentId(context, documentId)
+  if (identityError) return identityError
 
   const { nodeId, comment, search } = args
   let { content } = args
@@ -924,8 +934,18 @@ export function executeSuggestEdit(
   // Select the text content of the node and apply the AI suggestion mark
   const contentStart = pos + 1
   const contentEnd = pos + node.nodeSize - 1
+  const contextAttribution = context?.attribution
+  const isMcpProvenance =
+    context?.origin === 'mcp' ||
+    contextAttribution?.origin === 'mcp' ||
+    provenance?.model === 'Claude (MCP)'
+  const provenanceSource: 'chat' | 'mcp' | 'unknown' | undefined = isMcpProvenance
+    ? 'mcp'
+    : provenance
+      ? 'chat'
+      : undefined
 
-  editor
+  const success = editor
     .chain()
     .focus()
     .setTextSelection({ from: contentStart, to: contentEnd })
@@ -935,13 +955,31 @@ export function executeSuggestEdit(
       originalText,
       suggestedText,
       explanation: comment || '',
-      provenanceModel: provenance?.model || '',
-      provenanceConversationId: provenance?.conversationId || '',
-      provenanceMessageId: provenance?.messageId || '',
-      documentId: provenance?.documentId || '',
+      provenanceModel: contextAttribution?.model || provenance?.model || '',
+      provenanceConversationId: contextAttribution?.conversationId || provenance?.conversationId || '',
+      provenanceMessageId: contextAttribution?.messageId || provenance?.messageId || '',
+      provenanceSource,
+      provenanceInvocationId: context?.requestId ?? contextAttribution?.requestId,
+      documentId: (context?.expectedDocumentId ?? provenance?.documentId) || '',
       blockConversionIntent,
     })
     .run()
+
+  if (!success) {
+    return toolError('Failed to apply suggestion mark', 'SUGGESTION_FAILED')
+  }
+
+  const event = latestReviewEvent(documentId, 'suggestion', suggestionId, 'suggestion_created')
+  if (!event) {
+    return toolError('Suggestion was applied but its lifecycle event was not recorded', 'LIFECYCLE_EVENT_MISSING')
+  }
+
+  // The callback is the sole lifecycle writer. Wait for its history/event
+  // queues before reporting success, then reject a tab switch that raced the
+  // persistence boundary for an MCP call.
+  await awaitReviewDurability()
+  const afterDurabilityError = verifyExpectedDocumentId(context, documentId)
+  if (afterDurabilityError) return afterDurabilityError
 
   pipelineLog('suggest_edit:result', {
     suggestionId,
