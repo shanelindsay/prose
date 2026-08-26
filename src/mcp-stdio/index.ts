@@ -31,6 +31,12 @@ import { getToolsForMCP, isToolExposedViaMCP } from '../shared/tools/registry'
 
 // Platform-aware userData path (must match Electron's app.getPath('userData'))
 function getUserDataPath(): string {
+  // Keep the bridge on the same isolated profile as the Electron process when
+  // a QA/live-test harness supplies an explicit user-data directory.
+  if (process.env.PROSE_USER_DATA_DIR) {
+    return process.env.PROSE_USER_DATA_DIR
+  }
+
   switch (process.platform) {
     case 'darwin':
       return path.join(os.homedir(), 'Library', 'Application Support', 'Prose')
