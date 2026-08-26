@@ -351,6 +351,14 @@ test('decide_suggestion accepts and rejects explicit IDs with durable status/eve
   expect((accepted.data as { eventId: string }).eventId).toBeTruthy()
   expect((rejected.data as { eventId: string }).eventId).toBeTruthy()
 
+  // An accepted durable decision must be immediately reflected in the
+  // document read, even before the editor's debounced store update runs.
+  const afterDecisions = await executeProseTool(page, 'read_document', {})
+  expect(afterDecisions.success, `read_document: ${JSON.stringify(afterDecisions)}`).toBe(true)
+  const afterDecisionMarkdown = (afterDecisions.data as { markdown: string }).markdown
+  expect(afterDecisionMarkdown).toContain('The first sentence is ready for publication.')
+  expect(afterDecisionMarkdown).not.toContain('The first sentence is ready for acceptance.')
+
   const all = await listSuggestions(page, 'all', 'mcp-decisions-all')
   expect(all).toEqual(expect.arrayContaining([
     expect.objectContaining({ id: acceptedId, status: 'accepted' }),

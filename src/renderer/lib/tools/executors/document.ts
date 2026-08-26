@@ -16,6 +16,7 @@ import { getAISuggestions } from '../../../extensions/ai-suggestions'
 import { isEditorReadOnly } from './editor'
 import { getApi } from '../../browserApi'
 import { generateId } from '../../persistence'
+import { serializeMarkdown } from '../../markdown'
 import { dump as dumpYaml } from 'js-yaml'
 import {
   appendReviewEvent,
@@ -92,9 +93,22 @@ export function executeReadDocument(): ToolResult<{
   // Map to DocumentNode tree
   const nodes: DocumentNode[] = nodesWithIds.map(toDocumentNode)
 
+  // The editor store deliberately debounces content updates so normal typing
+  // does not write on every transaction. Review decisions, however, dispatch
+  // synchronously and can be followed immediately by an MCP read. Read the
+  // live editor body here so `markdown` cannot lag behind the nodes above.
+  // Source mode owns its raw content separately, so the store remains the
+  // authoritative value while that editor is active.
+  const liveBody = !store.sourceMode
+    ? editor.storage.markdown?.getMarkdown?.()
+    : undefined
+  const markdown = typeof liveBody === 'string'
+    ? serializeMarkdown(liveBody, store.pendingFrontmatter ?? store.document.frontmatter)
+    : store.document.content
+
   return toolSuccess({
     nodes: prependFrontmatterNode(nodes, store.document.frontmatter, store.pendingFrontmatter),
-    markdown: store.document.content
+    markdown
   })
 }
 
