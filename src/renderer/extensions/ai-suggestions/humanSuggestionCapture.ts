@@ -207,6 +207,7 @@ function captureReplacement(
   const tr = view.state.tr
   tr.addMark(from, to, markType.create(attrs))
   tr.setSelection(TextSelection.create(tr.doc, to))
+  tr.setStoredMarks([])
   return finishSuggestionTransaction(view, tr, suggestionData(attrs, from, to), true)
 }
 

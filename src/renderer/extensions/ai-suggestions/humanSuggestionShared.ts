@@ -107,18 +107,30 @@ export function findHumanSuggestion(doc: PMNode, id: string): HumanSuggestionTar
 export function hasSuggestionInRange(doc: PMNode, from: number, to: number): boolean {
   const safeFrom = Math.max(0, Math.min(from, doc.content.size))
   const safeTo = Math.max(safeFrom, Math.min(to, doc.content.size))
-  if (doc.resolve(safeFrom).marks().some((mark) => mark.type.name === 'aiSuggestion')) return true
-  if (safeFrom === safeTo) return false
+  const ranges = new Map<string, { from: number; to: number }>()
 
-  let found = false
-  doc.nodesBetween(safeFrom, safeTo, (node) => {
-    if (node.marks.some((mark) => mark.type.name === 'aiSuggestion')) {
-      found = true
-      return false
+  doc.descendants((node, pos) => {
+    for (const mark of node.marks) {
+      if (mark.type.name !== 'aiSuggestion' || typeof mark.attrs.id !== 'string') continue
+      const existing = ranges.get(mark.attrs.id)
+      ranges.set(mark.attrs.id, existing
+        ? { from: Math.min(existing.from, pos), to: Math.max(existing.to, pos + node.nodeSize) }
+        : { from: pos, to: pos + node.nodeSize })
     }
-    return !found
   })
-  return found
+
+  if (safeFrom === safeTo) {
+    // A cursor exactly at the start or end of a suggestion is beside it, not
+    // inside it. This lets users continue typing around pending changes while
+    // still protecting the suggestion's interior.
+    return Array.from(ranges.values()).some((range) =>
+      safeFrom > range.from && safeFrom < range.to
+    )
+  }
+
+  return Array.from(ranges.values()).some((range) =>
+    safeFrom < range.to && safeTo > range.from
+  )
 }
 
 export function humanInsertionAt(doc: PMNode, position: number): HumanSuggestionTarget | null {
