@@ -225,3 +225,41 @@ test('replacement and deletion reuse the shared review commands', async () => {
   expect(await decideSuggestion(page, deletion.id, 'accept')).toBe(true)
   expect((await editorSnapshot(page)).text).toBe('ab')
 })
+
+test('an agent can revise a human insertion and preserve the review lifecycle', async () => {
+  await page.locator(selectors.editor).click()
+  await page.keyboard.type('hello')
+
+  const human = await pendingSuggestion(page)
+  const revised = await executeProseTool(page, 'revise_suggestion', {
+    id: human.id,
+    content: 'hullo',
+    comment: 'Agent revision',
+  })
+  expect(revised.success, JSON.stringify(revised)).toBe(true)
+  const revisedId = (revised.data as { suggestionId: string }).suggestionId
+
+  await expect.poll(async () => (await listSuggestions(page)).length).toBe(1)
+  const pending = (await listSuggestions(page))[0]
+  expect(pending).toMatchObject({
+    id: revisedId,
+    type: 'insertion',
+    originalText: '',
+    suggestedText: 'hullo',
+    attribution: { actor: 'assistant', origin: 'chat' },
+  })
+
+  const snapshot = await editorSnapshot(page)
+  expect(snapshot.text).toBe('hullo')
+  expect(snapshot.marks).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: revisedId, type: 'insertion', humanInline: true }),
+  ]))
+
+  const superseded = await listSuggestions(page, 'superseded')
+  expect(superseded).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: human.id, status: 'superseded' }),
+  ]))
+
+  expect(await decideSuggestion(page, revisedId, 'reject')).toBe(true)
+  expect((await editorSnapshot(page)).text).toBe('')
+})
