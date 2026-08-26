@@ -22,7 +22,7 @@ const GROUP_WINDOW_MS = 1500
 
 interface ActiveGroup {
   id: string
-  type: 'insertion' | 'deletion'
+  type: 'insertion' | 'deletion' | 'edit'
   documentId: string
   lastChangedAt: number
 }
@@ -47,7 +47,7 @@ function canSuggest(): { documentId: string } | null {
 function currentGroup(
   doc: PMNode,
   documentId: string,
-  type: 'insertion' | 'deletion',
+  type: 'insertion' | 'deletion' | 'edit',
   now: number,
 ): HumanSuggestionTarget | null {
   if (
@@ -57,6 +57,38 @@ function currentGroup(
     || now - activeGroup.lastChangedAt > GROUP_WINDOW_MS
   ) return null
   return findHumanSuggestion(doc, activeGroup.id)
+}
+
+function updateOwnEdit(
+  view: EditorView,
+  target: HumanSuggestionTarget,
+  text: string,
+  documentId: string,
+): boolean {
+  const markType = view.state.schema.marks.aiSuggestion
+  if (!markType || target.type !== 'edit' || !text) return false
+
+  const now = Date.now()
+  const attrs = {
+    ...target.attrs,
+    id: target.id,
+    type: 'edit' as const,
+    originalText: typeof target.attrs.originalText === 'string'
+      ? target.attrs.originalText
+      : '',
+    suggestedText: `${typeof target.attrs.suggestedText === 'string' ? target.attrs.suggestedText : ''}${text}`,
+    createdAt: typeof target.attrs.createdAt === 'number' ? target.attrs.createdAt : now,
+    documentId,
+    humanInline: true,
+  }
+  const tr = view.state.tr
+  tr.removeMark(target.from, target.to, markType)
+  tr.addMark(target.from, target.to, markType.create(attrs))
+  tr.setSelection(TextSelection.create(tr.doc, target.to))
+  tr.setStoredMarks([])
+
+  activeGroup = { id: target.id, type: 'edit', documentId, lastChangedAt: now }
+  return finishSuggestionTransaction(view, tr, suggestionData(attrs, target.from, target.to), false)
 }
 
 function finishSuggestionTransaction(
@@ -88,6 +120,17 @@ function updateOwnInsertion(
   let mapped = findHumanSuggestion(tr.doc, target.id)
   if (!mapped && text && insertedFrom < insertedTo) {
     mapped = { ...target, from: insertedFrom, to: insertedTo }
+  }
+
+  // ProseMirror does not necessarily inherit a mark when text is inserted at
+  // the edge of a marked range. Include the inserted span explicitly so a
+  // contiguous edit to the user's own insertion remains one suggestion.
+  if (mapped && insertedFrom < insertedTo) {
+    mapped = {
+      ...mapped,
+      from: Math.min(mapped.from, insertedFrom),
+      to: Math.max(mapped.to, insertedTo),
+    }
   }
 
   if (!mapped || mapped.from >= mapped.to) {
@@ -127,6 +170,11 @@ function captureInsertion(
 ): boolean {
   const markType = view.state.schema.marks.aiSuggestion
   if (!markType || !text) return false
+
+  const activeEdit = currentGroup(view.state.doc, documentId, 'edit', Date.now())
+  if (activeEdit && position === activeEdit.to) {
+    return updateOwnEdit(view, activeEdit, text, documentId)
+  }
 
   const ownInsertion = humanInsertionAt(view.state.doc, position)
   if (ownInsertion) {
@@ -192,7 +240,6 @@ function captureReplacement(
   if (ownInsertion) return updateOwnInsertion(view, ownInsertion, from, to, text, documentId)
   if (hasSuggestionInRange(view.state.doc, from, to)) return true
 
-  activeGroup = null
   const originalText = view.state.doc.textBetween(from, to, '')
   if (!originalText) return false
   const now = Date.now()
@@ -208,6 +255,7 @@ function captureReplacement(
   tr.addMark(from, to, markType.create(attrs))
   tr.setSelection(TextSelection.create(tr.doc, to))
   tr.setStoredMarks([])
+  activeGroup = { id: attrs.id, type: 'edit', documentId, lastChangedAt: now }
   return finishSuggestionTransaction(view, tr, suggestionData(attrs, from, to), true)
 }
 

@@ -26,6 +26,10 @@ import { useEditorStore } from '../../stores/editorStore'
 import { useEditorInstanceStore } from '../../stores/editorInstanceStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { getAISuggestions } from '../../extensions/ai-suggestions/extension'
+import {
+  suggestionAuthorLabel,
+  suggestionExplanation,
+} from '../../extensions/ai-suggestions/presentation'
 import { formatAge } from '../../types/annotations'
 import type { AIAnnotation, AnnotationType } from '../../types/annotations'
 import type { CommentData, CommentReply } from '../../extensions/comments/types'
@@ -392,7 +396,7 @@ function SuggestionActivityRow({ suggestion, onReview }: SuggestionActivityRowPr
   const preview = (suggestion.type === 'deletion' ? suggestion.originalText : suggestion.suggestedText)
     .trim()
     .replace(/\n/g, ' ')
-  const model = suggestion.createdBy?.model ?? suggestion.provenanceModel ?? suggestion.createdBy?.source ?? 'AI'
+  const explanation = suggestionExplanation(suggestion)
   const statusLabel = suggestion.status === 'superseded' ? 'superseded' : suggestion.status
 
   const activate = () => {
@@ -423,14 +427,14 @@ function SuggestionActivityRow({ suggestion, onReview }: SuggestionActivityRowPr
         <span className="rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider bg-muted text-muted-foreground">
           {statusLabel}
         </span>
-        <span className="min-w-0 truncate text-xs text-muted-foreground">{formatModelName(model)}</span>
+        <span className="min-w-0 truncate text-xs text-muted-foreground">{suggestionAuthorLabel(suggestion)}</span>
         <span className="ml-auto shrink-0 text-xs text-muted-foreground/60">{formatAge(suggestion.createdAt)}</span>
       </div>
       <p className="line-clamp-2 break-words text-[15px] leading-snug text-foreground">
         {preview || (suggestion.type === 'deletion' ? 'Deleted block' : 'Suggested block')}
       </p>
-      {suggestion.explanation && (
-        <p className="mt-1.5 line-clamp-2 text-xs italic leading-snug text-muted-foreground">{suggestion.explanation}</p>
+      {explanation && (
+        <p className="mt-1.5 line-clamp-2 text-xs italic leading-snug text-muted-foreground">{explanation}</p>
       )}
     </div>
   )

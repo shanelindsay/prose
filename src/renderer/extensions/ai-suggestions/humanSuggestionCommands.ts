@@ -185,7 +185,7 @@ export function restoreHumanInlineSuggestions(
       explanation: suggestion.explanation,
       createdAt: suggestion.createdAt,
       userReply: suggestion.userReply || null,
-      provenanceModel: suggestion.provenanceModel || 'Human',
+      provenanceModel: suggestion.provenanceModel || '',
       provenanceConversationId: suggestion.provenanceConversationId || '',
       provenanceMessageId: suggestion.provenanceMessageId || '',
       provenanceSource: suggestion.provenanceSource || 'ui',

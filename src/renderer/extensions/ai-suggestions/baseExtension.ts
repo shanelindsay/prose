@@ -482,6 +482,9 @@ interface SuggestionProposalAttrs {
   suggestedText: string
   explanation: string
   userReply?: string
+  humanInline?: boolean
+  provenanceSource?: 'ui' | 'chat' | 'mcp' | 'unknown'
+  provenanceModel?: string
 }
 
 /** Build a widget that exposes a replacement's proposed wording at its anchor. */
@@ -493,6 +496,9 @@ function createProposalWidget(attrs: SuggestionProposalAttrs): HTMLElement {
   element.setAttribute('data-ai-original', attrs.originalText)
   element.setAttribute('data-ai-suggested', attrs.suggestedText)
   element.setAttribute('data-ai-explanation', attrs.explanation)
+  if (attrs.humanInline) element.setAttribute('data-human-inline', 'true')
+  if (attrs.provenanceSource) element.setAttribute('data-provenance-source', attrs.provenanceSource)
+  if (attrs.provenanceModel) element.setAttribute('data-provenance-model', attrs.provenanceModel)
   if (attrs.userReply) element.setAttribute('data-ai-user-reply', attrs.userReply)
   element.setAttribute('aria-label', `Proposed text: ${attrs.suggestedText}`)
   element.textContent = attrs.suggestedText
@@ -513,6 +519,9 @@ function suggestionProposalDecorations(doc: PMNode): Decoration[] {
       suggestedText: mark.attrs.suggestedText || '',
       explanation: mark.attrs.explanation || '',
       userReply: mark.attrs.userReply || undefined,
+      humanInline: mark.attrs.humanInline === true,
+      provenanceSource: mark.attrs.provenanceSource || undefined,
+      provenanceModel: mark.attrs.provenanceModel || undefined,
     }
     ranges.set(mark.attrs.id, existing
       ? { ...existing, to: Math.max(existing.to, pos + node.nodeSize) }

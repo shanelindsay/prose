@@ -1238,6 +1238,13 @@
   z-index: 100;
 }
 
+.ai-suggestion-popover .suggestion-attribution {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+  margin-bottom: 0.35rem;
+}
+
 .ai-suggestion-popover .suggested-label {
   font-size: 0.75rem;
   color: hsl(var(--muted-foreground));

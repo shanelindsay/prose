@@ -6,6 +6,10 @@ import { useReviewStore, useCurrentSuggestionIndex } from '../../stores/reviewSt
 import { getAISuggestions } from '../../extensions/ai-suggestions/extension'
 import { computeWordDiff, scrollSelectionIntoCenter, type DiffSegment } from '../../lib/diffUtils'
 import type { AISuggestionData } from '../../extensions/ai-suggestions/types'
+import {
+  suggestionAuthorLabel,
+  suggestionExplanation,
+} from '../../extensions/ai-suggestions/presentation'
 import { cn } from '../../lib/utils'
 
 /**
@@ -216,6 +220,7 @@ export function QuickReviewPanel() {
   }
 
   const diff = computeWordDiff(current.originalText, current.suggestedText)
+  const explanation = suggestionExplanation(current)
 
   return (
     <div className="flex flex-col h-full">
@@ -242,6 +247,12 @@ export function QuickReviewPanel() {
               {current.type.toUpperCase()}
             </span>
           )}
+          <span
+            data-testid="suggestion-attribution"
+            className="min-w-0 truncate text-xs text-muted-foreground"
+          >
+            {suggestionAuthorLabel(current)}
+          </span>
           <button
             onClick={() => setReviewMode('side-by-side')}
             className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors truncate"
@@ -372,9 +383,9 @@ export function QuickReviewPanel() {
           </div>
 
           {/* Explanation */}
-          {current.explanation && (
+          {explanation && (
             <div className="text-xs text-muted-foreground bg-muted/40 rounded-md px-3 py-2 leading-relaxed mb-3">
-              {current.explanation}
+              {explanation}
             </div>
           )}
 

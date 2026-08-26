@@ -146,12 +146,19 @@ test('typed text becomes one attributed insertion that can be accepted', async (
     suggestedText: 'hello',
     attribution: { actor: 'human', origin: 'ui' },
   })
-
   const pending = await editorSnapshot(page)
   expect(pending.text).toBe('hello')
   expect(pending.marks).toEqual(expect.arrayContaining([
     expect.objectContaining({ id: suggestion.id, type: 'insertion', humanInline: true }),
   ]))
+
+  const reviewButton = page.getByRole('button', { name: /1 suggestion/ }).first()
+  await reviewButton.click()
+  const reviewPanel = page.getByRole('heading', { name: 'Quick Review' }).locator('xpath=../../..')
+  await expect(reviewPanel.getByTestId('suggestion-attribution')).toHaveText('You')
+  await expect(reviewPanel).not.toContainText('Human change')
+  await expect(reviewPanel.getByText('Explanation:', { exact: true })).toHaveCount(0)
+  await reviewPanel.getByRole('button', { name: /Close review/ }).click()
 
   expect(await decideSuggestion(page, suggestion.id, 'accept')).toBe(true)
   const accepted = await editorSnapshot(page)
@@ -192,6 +199,9 @@ test('replacement and deletion reuse the shared review commands', async () => {
     const editor = (window as any).__prose_editor
     editor.chain().focus().setTextSelection({ from: 7, to: 11 }).run()
   })
+  // The toolbar toggle retains DOM focus; explicitly return focus to the
+  // editor before sending the replacement keystrokes.
+  await page.locator(selectors.editor).focus()
   await page.keyboard.type('gamma')
 
   const replacement = await pendingSuggestion(page)

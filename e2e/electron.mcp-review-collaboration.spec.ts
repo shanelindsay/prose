@@ -122,7 +122,10 @@ async function currentDocumentId(testPage: Page): Promise<string | null> {
 async function openFreshFile(testPage: Page, name: string, content: string): Promise<string> {
   // Review panels hold focus in the sidebar; close one before changing the
   // active document so the next test starts from the normal editor surface.
-  await testPage.locator('[aria-label^="Close review"]').first().click().catch(() => {})
+  const closeReview = testPage.locator('[aria-label^="Close review"]').first()
+  if (await closeReview.isVisible({ timeout: 500 }).catch(() => false)) {
+    await closeReview.click()
+  }
 
   const filePath = join(qaDocsDir, name)
   writeFileSync(filePath, content)
@@ -269,6 +272,8 @@ test('suggestions expose rationale and attribution; Quick Review feedback is vis
   // (panel -> header row -> title row -> heading).
   const reviewPanel = page.getByRole('heading', { name: 'Quick Review' }).locator('xpath=../../..')
   await expect(reviewPanel).toBeVisible()
+  await expect(reviewPanel.getByTestId('suggestion-attribution')).toHaveText('Claude (MCP)')
+  await expect(reviewPanel).toContainText('Clarify the claim before publication.')
   await page.getByRole('button', { name: 'Add feedback' }).click()
   const feedbackBox = page.locator('textarea[placeholder="Tell the AI what to change..."]')
   await feedbackBox.fill('Preserve the cautious tone.')
