@@ -13,6 +13,11 @@ import {
   deleteComments as removeComments
 } from '../../lib/persistence'
 
+// A document can be loaded by both the tab lifecycle and Editor's recovery
+// effect. Keep only the newest request authoritative so an older response
+// cannot replace live comments from the current document.
+let latestLoadGeneration = 0
+
 interface CommentPersistenceState {
   /** Current document ID being tracked */
   documentId: string | null
@@ -58,6 +63,7 @@ export const useCommentStore = create<CommentPersistenceState>((set, get) => ({
   needsRestore: false,
 
   setDocumentId: (documentId: string) => {
+    latestLoadGeneration += 1
     set({ documentId, pendingComments: [], needsRestore: false })
   },
 
@@ -78,11 +84,37 @@ export const useCommentStore = create<CommentPersistenceState>((set, get) => ({
   loadComments: async (documentId: string) => {
     console.log('[CommentStore] Loading comments for:', documentId)
 
+    const generation = ++latestLoadGeneration
+
+    // Set the identity before awaiting IndexedDB. A comment created while the
+    // load is in flight must be saved against this document, and the editor's
+    // recovery effect should not start a second load for the same identity.
+    if (get().documentId !== documentId) {
+      set({ documentId, pendingComments: [], needsRestore: false })
+    }
+
     const comments = await fetchComments(documentId)
+
+    // A tab switch may have started a newer load while this one was pending.
+    // Its result belongs to the old request and must not touch the current
+    // document's Activity feed.
+    if (generation !== latestLoadGeneration || get().documentId !== documentId) {
+      return
+    }
+
+    // Preserve comments created while IndexedDB was being read. The persisted
+    // snapshot can legitimately pre-date the live store by a few milliseconds.
+    // Put the fetched snapshot first so a live entry with the same ID remains
+    // authoritative for replies, resolution, and anchor positions.
+    const mergedById = new Map(comments.map((comment) => [comment.id, comment]))
+    for (const comment of get().pendingComments) {
+      mergedById.set(comment.id, comment)
+    }
+    const mergedComments = Array.from(mergedById.values())
 
     set({
       documentId,
-      pendingComments: comments,
+      pendingComments: mergedComments,
       // Marks aren't serialized into the document, so the Editor must re-apply
       // them after each load. Flag it; the Editor restore effect consumes this.
       needsRestore: true
@@ -90,7 +122,7 @@ export const useCommentStore = create<CommentPersistenceState>((set, get) => ({
 
     console.log('[CommentStore] Loaded comments:', {
       documentId,
-      count: comments.length
+      count: mergedComments.length
     })
   },
 

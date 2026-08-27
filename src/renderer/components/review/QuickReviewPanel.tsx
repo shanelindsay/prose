@@ -12,6 +12,12 @@ import {
 } from '../../extensions/ai-suggestions/presentation'
 import { cn } from '../../lib/utils'
 
+/** Keyboard review shortcuts only apply when focus is outside an editor field. */
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  return target.isContentEditable || Boolean(target.closest('input, textarea, [contenteditable="true"], [role="textbox"]'))
+}
+
 /**
  * Card-based quick review component — redesigned (#385).
  *
@@ -143,7 +149,12 @@ export function QuickReviewPanel() {
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      // Comment/reply/feedback fields live in portals or alongside the editor
+      // while Quick Review remains mounted. Their Enter keys belong to the
+      // field, never to the review action. Check defaultPrevented as well so a
+      // field handler that submits or inserts a newline wins even if its target
+      // is wrapped by a textbox component.
+      if (e.defaultPrevented || e.isComposing || isEditableTarget(e.target)) return
       switch (e.key) {
         case 'ArrowRight':
           e.preventDefault()

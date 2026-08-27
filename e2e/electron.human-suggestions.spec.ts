@@ -273,3 +273,67 @@ test('an agent can revise a human insertion and preserve the review lifecycle', 
   expect(await decideSuggestion(page, revisedId, 'reject')).toBe(true)
   expect((await editorSnapshot(page)).text).toBe('')
 })
+
+test('commenting beside Quick Review keeps the suggestion pending and updates Activity', async () => {
+  await setEditorContent(page, '<p>alpha beta</p>')
+  await page.locator(selectors.editor).click()
+  await page.keyboard.press('End')
+  await page.keyboard.type(' hello')
+
+  const suggestion = await pendingSuggestion(page)
+  const chatTab = page.getByRole('tab', { name: 'Chat' })
+  if (!await chatTab.isVisible({ timeout: 500 }).catch(() => false)) {
+    await page.keyboard.press('ControlOrMeta+Shift+L')
+    await chatTab.waitFor({ state: 'visible', timeout: 5_000 })
+  }
+  await page.getByRole('button', { name: /1 suggestion/ }).first().click()
+  const reviewPanel = page.getByRole('heading', { name: 'Quick Review' }).locator('xpath=../../..')
+  await expect(reviewPanel).toBeVisible()
+  await expect(reviewPanel.getByTestId('suggestion-attribution')).toHaveText('You')
+
+  // Open the real Add Comment dialog while Quick Review is still mounted.
+  // This is the interaction that previously let the review window shortcut
+  // consume Enter from a comment field and accept the suggestion underneath.
+  await page.evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const editor = (window as any).__prose_editor
+    editor.chain().focus().setTextSelection({ from: 1, to: 6 }).run()
+  })
+  const addCommentButton = page.getByTitle('Add comment (Cmd+Shift+A)')
+  await expect(addCommentButton).toBeVisible()
+  await addCommentButton.click({ force: true })
+  const dialog = page.getByRole('dialog', { name: 'Add Comment' })
+  await expect(dialog).toBeVisible()
+  const commentText = 'Please check this sentence.'
+  const commentBox = dialog.getByPlaceholder(/Enter your instruction/)
+  await commentBox.fill(commentText)
+  await commentBox.press('ControlOrMeta+Enter')
+  await expect(dialog).not.toBeVisible()
+
+  // After the dialog closes focus returns to the editor. Enter is a normal
+  // editor key there, even while Quick Review is mounted; it must not trigger
+  // the panel's global accept shortcut.
+  await page.locator(selectors.editor).dispatchEvent('keydown', {
+    key: 'Enter',
+    bubbles: true,
+    cancelable: true,
+  })
+  await page.waitForTimeout(300)
+
+  // The comment submit must not dispatch Quick Review's accept command.
+  await expect.poll(async () => (await listSuggestions(page, 'pending'))
+    .filter((entry) => entry.id === suggestion.id).length).toBe(1)
+  const suggestionEvents = await executeProseTool(page, 'list_review_events', { targetType: 'suggestion' })
+  expect(suggestionEvents.success, JSON.stringify(suggestionEvents)).toBe(true)
+  expect((suggestionEvents.data as { events: Array<{ targetId: string; eventType: string }> }).events)
+    .not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ targetId: suggestion.id, eventType: 'suggestion_decided' }),
+    ]))
+
+  // Activity is driven by the live comment store. Waiting for the row here
+  // also covers the load-vs-create race that previously hid a freshly-added
+  // thread after the persisted comment_created event had already been written.
+  await reviewPanel.getByRole('button', { name: /Close review/ }).click()
+  await page.getByRole('tab', { name: /Activity/ }).click()
+  await expect(page.getByText(commentText, { exact: true })).toBeVisible()
+})
