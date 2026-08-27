@@ -33,7 +33,7 @@ import {
 import { formatAge } from '../../types/annotations'
 import type { AIAnnotation, AnnotationType } from '../../types/annotations'
 import type { CommentData, CommentReply } from '../../extensions/comments/types'
-import type { SuggestionRecord } from '../../extensions/ai-suggestions/types'
+import type { SuggestionFeedback, SuggestionRecord } from '../../extensions/ai-suggestions/types'
 import { PROSE_ICONS, IconThumb } from '../../lib/prose-icons'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip'
 import { renderMarkdown } from '../chat/ChatMessage'
@@ -409,6 +409,18 @@ function SuggestionActivityRow({ suggestion, onReview }: SuggestionActivityRowPr
     .trim()
     .replace(/\n/g, ' ')
   const explanation = suggestionExplanation(suggestion)
+  // Lifecycle records carry the complete feedback thread. Keep the legacy
+  // userReply field as a display fallback for records written before feedback
+  // was promoted to its own durable collection.
+  const feedback = suggestion.feedback.length > 0
+    ? suggestion.feedback
+    : suggestion.userReply?.trim()
+      ? [{
+          text: suggestion.userReply,
+          createdAt: suggestion.createdAt,
+          actor: { kind: 'user' as const, source: 'ui' as const },
+        }]
+      : []
   const statusLabel = suggestion.status === 'superseded' ? 'superseded' : suggestion.status
 
   const activate = () => {
@@ -448,6 +460,35 @@ function SuggestionActivityRow({ suggestion, onReview }: SuggestionActivityRowPr
       {explanation && (
         <p className="mt-1.5 line-clamp-2 text-xs italic leading-snug text-muted-foreground">{explanation}</p>
       )}
+      {feedback.length > 0 && (
+        <div
+          data-testid={`suggestion-feedback-${suggestion.id}`}
+          className="mt-2 flex flex-col gap-2 border-t border-border/60 pt-2"
+        >
+          {feedback.map((entry, index) => (
+            <SuggestionFeedbackRow key={`${entry.createdAt}-${index}`} feedback={entry} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SuggestionFeedbackRow({ feedback }: { feedback: SuggestionFeedback }) {
+  const isUser = feedback.actor.kind === 'user'
+  const author = isUser ? 'Your feedback' : feedback.actor.model?.trim() || 'Prose'
+
+  return (
+    <div className="flex items-start gap-2">
+      <MiniAvatar kind={isUser ? 'user' : 'ai'} />
+      <div className="min-w-0 flex-1">
+        <div className="mb-0.5 text-[11px] text-muted-foreground">
+          {author} · {formatAge(feedback.createdAt)}
+        </div>
+        <div className="whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-foreground/85">
+          {feedback.text}
+        </div>
+      </div>
     </div>
   )
 }

@@ -373,6 +373,33 @@ test('commenting beside Quick Review keeps the suggestion pending and updates Ac
   await expect(page.getByText(commentText, { exact: true })).toBeVisible()
 })
 
+test('mounted Activity updates with UI suggestion feedback while the suggestion stays pending', async () => {
+  await page.locator(selectors.editor).click()
+  await page.keyboard.type('hello')
+
+  const suggestion = await pendingSuggestion(page)
+  await ensureActivityVisible(page)
+  const activityCard = page.getByTestId(`suggestion-activity-${suggestion.id}`)
+  await expect(activityCard).toBeVisible()
+
+  // Submit feedback through the editor's suggestion popover while Activity is
+  // already mounted. The Activity card should consume the same live history
+  // update without requiring a tab switch, reload, or another review load.
+  await page.locator('.ai-suggestion-mark').first().click()
+  const popover = page.locator('.ai-suggestion-popover')
+  await expect(popover).toBeVisible()
+  await popover.getByRole('button', { name: 'Feedback' }).click()
+  const feedbackText = 'Please keep this concise.'
+  await popover.locator('textarea').fill(feedbackText)
+  await popover.getByRole('button', { name: 'Submit' }).click()
+  await expect(popover).toHaveCount(0)
+
+  await expect(activityCard).toContainText('Your feedback')
+  await expect(activityCard).toContainText(feedbackText)
+  await expect.poll(async () => (await listSuggestions(page, 'pending'))
+    .filter((entry) => entry.id === suggestion.id).length).toBe(1)
+})
+
 test('Activity follows the active document and updates for a human comment', async () => {
   const firstComment = 'First document comment.'
   const secondComment = 'Second document comment.'
