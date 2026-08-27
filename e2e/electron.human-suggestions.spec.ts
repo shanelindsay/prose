@@ -400,6 +400,62 @@ test('mounted Activity updates with UI suggestion feedback while the suggestion 
     .filter((entry) => entry.id === suggestion.id).length).toBe(1)
 })
 
+test('Activity opens Quick Review on the clicked non-first suggestion', async () => {
+  const path = join(activityDocsDir, 'activity-navigation.md')
+  writeFileSync(path, 'one two three four five six\n')
+  const opened = await executeProseTool(page, 'open_file', { path })
+  expect(opened.success, JSON.stringify(opened)).toBe(true)
+  await waitForEditor(page)
+  await setSuggesting(page, true)
+  await setEditorContent(page, '<p>one two three four five six</p>')
+
+  // Create the sixth document suggestion first so it is the oldest Activity
+  // card, then add the preceding five. Activity is newest-first while
+  // Quick Review follows document order; the clicked card should therefore
+  // open at 6/6, not the default 1/6.
+  await page.evaluate(async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const editor = (window as any).__prose_editor
+    const words = ['one', 'two', 'three', 'four', 'five', 'six']
+    const positions = words.map((word, index) => {
+      const from = 1 + words.slice(0, index).reduce((total, previous) => total + previous.length + 1, 0)
+      return { word, from, to: from + word.length }
+    })
+    for (const index of [5, 0, 1, 2, 3, 4]) {
+      const position = positions[index]
+      editor.commands.setTextSelection({ from: position.from, to: position.to })
+      editor.commands.setAISuggestion({
+        id: `activity-navigation-${index}`,
+        type: 'edit',
+        originalText: position.word,
+        suggestedText: `${position.word}-suggested`,
+        explanation: '',
+        provenanceModel: 'Navigation test',
+        provenanceSource: 'mcp',
+      })
+      await new Promise((resolve) => setTimeout(resolve, 8))
+    }
+  })
+
+  await expect.poll(async () => (await listSuggestions(page)).length).toBe(6)
+  await ensureActivityVisible(page)
+  const cards = page.locator('[data-testid^="suggestion-activity-"]')
+  await expect(cards).toHaveCount(6)
+  const targetId = 'suggestion-activity-activity-navigation-5'
+  const cardIds = await cards.evaluateAll((elements) => elements.map((element) => element.getAttribute('data-testid')))
+  expect(cardIds.indexOf(targetId)).toBeGreaterThan(0)
+
+  const targetCard = page.getByTestId(targetId)
+  await expect(targetCard).toContainText('six-suggested')
+  await targetCard.click()
+
+  const reviewPanel = page.getByRole('heading', { name: 'Quick Review' }).locator('xpath=../../..')
+  await expect(reviewPanel).toBeVisible()
+  await expect(reviewPanel).toContainText('six-suggested')
+  await expect(reviewPanel.getByText('6/6', { exact: true })).toBeVisible()
+  await expect.poll(async () => (await listSuggestions(page)).length).toBe(6)
+})
+
 test('Activity follows the active document and updates for a human comment', async () => {
   const firstComment = 'First document comment.'
   const secondComment = 'Second document comment.'

@@ -195,8 +195,9 @@ export function AIEditsHistoryPanel({ filter, onShowAll, onReviewThread }: AIEdi
       if (!editor) return
       const index = getAISuggestions(editor).findIndex((suggestion) => suggestion.id === id)
       if (index < 0) return
-      useReviewStore.getState().setCurrentSuggestionIndex(index)
-      useReviewStore.getState().setReviewMode('quick')
+      // Pass the index with the mode change. setReviewMode resets the review
+      // cursor, so setting it beforehand would be overwritten at this point.
+      useReviewStore.getState().setReviewMode('quick', index)
     },
     [editor]
   )
