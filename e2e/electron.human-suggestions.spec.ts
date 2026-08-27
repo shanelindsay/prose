@@ -419,7 +419,29 @@ test('Activity follows the active document and updates for a human comment', asy
   await page.keyboard.press('End')
   await page.keyboard.type(' pending')
   const secondSuggestion = await pendingSuggestion(page)
+
+  // A duplicate same-path tab can leave a late comment load in flight. It
+  // must not repoint the live store while Activity is already mounted; the
+  // next UI-created comment must remain visible for the active document.
+  const activeCommentDocId = await page.evaluate(() =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).__prose_tools.getCommentDocId() as string | null
+  )
+  expect(activeCommentDocId).toBeTruthy()
+  await page.evaluate(async (staleDocumentId) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (window as any).__prose_tools.loadCommentsForTesting(staleDocumentId)
+  }, 'inactive-duplicate-tab-document')
+  await expect.poll(async () => page.evaluate(() =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).__prose_tools.getCommentDocId() as string | null
+  )).toBe(activeCommentDocId)
+
   await addHumanComment(page, { from: 1, to: 7 }, secondComment)
+  await expect.poll(async () => page.evaluate(() =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).__prose_tools.getCommentStore() as Array<{ comment: string }>
+  ).then((comments) => comments.some((comment) => comment.comment === secondComment))).toBe(true)
   await expect.poll(async () => (await listSuggestions(page, 'pending'))
     .filter((entry) => entry.id === secondSuggestion.id).length).toBe(1)
   await expect(page.getByText(secondComment, { exact: true })).toBeVisible()

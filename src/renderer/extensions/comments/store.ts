@@ -84,14 +84,20 @@ export const useCommentStore = create<CommentPersistenceState>((set, get) => ({
   loadComments: async (documentId: string) => {
     console.log('[CommentStore] Loading comments for:', documentId)
 
-    const generation = ++latestLoadGeneration
-
-    // Set the identity before awaiting IndexedDB. A comment created while the
-    // load is in flight must be saved against this document, and the editor's
-    // recovery effect should not start a second load for the same identity.
+    // Changing document identity is an explicit lifecycle operation. A late
+    // recovery/tab-load request for an inactive tab must not repoint the live
+    // store before it awaits IndexedDB; doing so makes Activity hide a newly
+    // created comment from the active document. All current callers establish
+    // the identity with setDocumentId before starting a load.
     if (get().documentId !== documentId) {
-      set({ documentId, pendingComments: [], needsRestore: false })
+      console.warn('[CommentStore] Ignoring load for inactive document:', {
+        requestedDocumentId: documentId,
+        currentDocumentId: get().documentId,
+      })
+      return
     }
+
+    const generation = ++latestLoadGeneration
 
     const comments = await fetchComments(documentId)
 

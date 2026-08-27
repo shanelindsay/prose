@@ -738,7 +738,9 @@ export function Editor() {
   useEffect(() => {
     if (!editor || !document.documentId) return
     if (commentStoreDocumentId !== document.documentId) {
-      useCommentStore.getState().loadComments(document.documentId)
+      const commentStore = useCommentStore.getState()
+      commentStore.setDocumentId(document.documentId)
+      commentStore.loadComments(document.documentId)
     }
   }, [editor, document.documentId, commentStoreDocumentId])
 

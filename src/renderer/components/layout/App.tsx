@@ -51,6 +51,7 @@ import { useChatStore, setCurrentDocumentId } from '../../stores/chatStore'
 import { useTabStore, createTab, restoreSession, clearSavedSession, hasUnsavedTabs } from '../../stores/tabStore'
 import { useFileListStore } from '../../stores/fileListStore'
 import { useSettingsStore, AI_CONSENT_VERSION } from '../../stores/settingsStore'
+import { useCommentStore } from '../../extensions/comments/store'
 import { useAutosave } from '../../hooks/useAutosave'
 import {
   loadDraft,
@@ -276,6 +277,12 @@ export function App() {
         // If this is the active tab, hydrate the editor
         if (isActiveTab) {
           const documentContent = tabDraft.content
+          // Session recovery bypasses the normal tab-switch lifecycle, so
+          // establish the active review identity before hydrating the editor.
+          // Loading here also prevents a late request for an inactive duplicate
+          // tab from taking ownership of the live Activity feed.
+          useCommentStore.getState().setDocumentId(tabDraft.documentId)
+          await useCommentStore.getState().loadComments(tabDraft.documentId)
           // Use setDocument (not a raw setState) so reMarkable read-only state is
           // derived from the restored path. A raw setState bypasses that derivation,
           // which left a restored OCR tab editable — a stray save there would clobber
