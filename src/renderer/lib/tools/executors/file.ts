@@ -96,6 +96,11 @@ export async function executeOpenFile(args: {
       const parsed = parseMarkdown(isTxt ? prepareTextContent(content) : content)
       const docId = await generateIdFromPath(path)
 
+      // Reset document-scoped review stores before rendering the selected
+      // file. This keeps Activity aligned while persistence loads complete.
+      useSuggestionStore.getState().setDocumentId(docId)
+      useCommentStore.getState().setDocumentId(docId)
+
       useEditorStore.getState().setDocument({
         documentId: docId,
         path,
@@ -107,6 +112,7 @@ export async function executeOpenFile(args: {
       await useChatStore.getState().loadForDocument(docId)
       await useAnnotationStore.getState().loadAnnotations(docId)
       await useSuggestionStore.getState().loadSuggestions(docId)
+      await useCommentStore.getState().loadComments(docId)
       useEditorStore.getState().setEditing(true)
 
       return toolSuccess({ opened: true, path })
@@ -124,6 +130,11 @@ export async function executeOpenFile(args: {
     const isTxt = path.endsWith('.txt')
     const parsed = parseMarkdown(isTxt ? prepareTextContent(content) : content)
     const newDocumentId = await generateIdFromPath(path)
+
+    // Reset document-scoped review stores before rendering the selected file.
+    // This keeps Activity aligned while persistence loads complete.
+    useSuggestionStore.getState().setDocumentId(newDocumentId)
+    useCommentStore.getState().setDocumentId(newDocumentId)
 
     // Extract title from path
     const fullFileName = path.split('/').pop() || 'Untitled'
@@ -175,6 +186,7 @@ export async function executeOpenFile(args: {
     await useChatStore.getState().loadForDocument(newDocumentId)
     await useAnnotationStore.getState().loadAnnotations(newDocumentId)
     await useSuggestionStore.getState().loadSuggestions(newDocumentId)
+    await useCommentStore.getState().loadComments(newDocumentId)
 
     // Clear reMarkable read-only state
     useEditorStore.getState().setRemarkableReadOnly(false, null)
@@ -218,6 +230,9 @@ export async function executeNewFile(args: {
     // Create a new tab
     const newDocumentId = generateId()
     const title = generateUntitledTitle()
+
+    useSuggestionStore.getState().setDocumentId(newDocumentId)
+    useCommentStore.getState().setDocumentId(newDocumentId)
 
     useTabStore.getState().addTab({
       documentId: newDocumentId,

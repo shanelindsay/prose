@@ -138,6 +138,12 @@ export function useEditor() {
       const parsed = parseMarkdown(isTxt ? prepareTextContent(raw) : raw)
       const newDocumentId = await generateIdFromPath(filePath)
 
+      // Clear document-scoped review records before the editor changes
+      // identity. Activity must never render the previous document while its
+      // async review loads are in flight.
+      useSuggestionStore.getState().setDocumentId(newDocumentId)
+      useCommentStore.getState().setDocumentId(newDocumentId)
+
       setDocument({
         documentId: newDocumentId,
         path: filePath,
@@ -157,6 +163,8 @@ export function useEditor() {
 
       // Load annotations for the document
       await useAnnotationStore.getState().loadAnnotations(newDocumentId)
+      await useSuggestionStore.getState().loadSuggestions(newDocumentId)
+      await useCommentStore.getState().loadComments(newDocumentId)
 
       // Clear draft since we opened a file
       await clearDraft()
@@ -206,6 +214,12 @@ export function useEditor() {
       // Use path-based ID for saved files so chat history persists
       const newDocumentId = await generateIdFromPath(result.path)
 
+      // Clear document-scoped review records before the editor changes
+      // identity. Activity must never render the previous document while its
+      // async review loads are in flight.
+      useSuggestionStore.getState().setDocumentId(newDocumentId)
+      useCommentStore.getState().setDocumentId(newDocumentId)
+
       setDocument({
         documentId: newDocumentId,
         path: result.path,
@@ -222,6 +236,8 @@ export function useEditor() {
 
       // Load annotations for the document
       await useAnnotationStore.getState().loadAnnotations(newDocumentId)
+      await useSuggestionStore.getState().loadSuggestions(newDocumentId)
+      await useCommentStore.getState().loadComments(newDocumentId)
 
       // Clear draft since we opened a file
       await clearDraft()
@@ -335,6 +351,9 @@ export function useEditor() {
 
     // Reset creates a new documentId
     resetDocument()
+    const newDocumentId = useEditorStore.getState().document.documentId
+    useSuggestionStore.getState().setDocumentId(newDocumentId)
+    useCommentStore.getState().setDocumentId(newDocumentId)
 
     // Clear conversations and context for the new document
     useChatStore.setState({

@@ -59,6 +59,7 @@ interface ReviewEventPersistenceState {
 }
 
 let saveQueue: Promise<void> = Promise.resolve()
+let latestLoadGeneration = 0
 
 function queueSave(
   documentId: string,
@@ -109,11 +110,14 @@ export const useReviewEventStore = create<ReviewEventPersistenceState>((set, get
   pendingSave: null,
 
   setDocumentId: (documentId: string) => {
+    latestLoadGeneration += 1
     set({ documentId, events: [], pendingSave: null })
   },
 
   loadEvents: async (documentId: string) => {
+    const generation = ++latestLoadGeneration
     const events = await loadReviewEvents(documentId)
+    if (generation !== latestLoadGeneration || get().documentId !== documentId) return
     set({ documentId, events })
   },
 

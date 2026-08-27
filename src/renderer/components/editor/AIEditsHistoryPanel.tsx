@@ -119,19 +119,31 @@ interface AIEditsHistoryPanelProps {
 
 export function AIEditsHistoryPanel({ filter, onShowAll, onReviewThread }: AIEditsHistoryPanelProps) {
   const annotations = useAnnotationStore((s) => s.annotations)
+  const annotationDocumentId = useAnnotationStore((s) => s.documentId)
   const removeAnnotation = useAnnotationStore((s) => s.removeAnnotation)
   const pendingComments = useCommentStore((s) => s.pendingComments)
+  const commentDocumentId = useCommentStore((s) => s.documentId)
   const suggestionHistory = useSuggestionStore((s) => s.history)
-  const documentId = useCommentStore((s) => s.documentId)
+  const suggestionDocumentId = useSuggestionStore((s) => s.documentId)
   const saveComments = useCommentStore((s) => s.saveComments)
+  const documentId = useEditorStore((s) => s.document.documentId)
   const editor = useEditorInstanceStore((s) => s.editor)
+
+  // Store loads are asynchronous, while the editor's document identity changes
+  // synchronously. Render only records owned by that identity so a previous
+  // tab cannot remain visible during a handoff or late IndexedDB response.
+  const currentAnnotations = annotationDocumentId === documentId
+    ? annotations.filter((annotation) => annotation.documentId === documentId)
+    : []
+  const currentComments = commentDocumentId === documentId ? pendingComments : []
+  const currentSuggestions = suggestionDocumentId === documentId ? suggestionHistory : []
 
   // Build the unified, filtered feed (newest-first).
   const items: ActivityItem[] = useMemo(() => {
-    const annotationItems: ActivityItem[] = annotations
+    const annotationItems: ActivityItem[] = currentAnnotations
       .filter((a) => activityItemVisible({ kind: 'annotation', annotation: a }, filter))
       .map((a) => ({ kind: 'annotation', annotation: a, createdAt: a.createdAt }))
-    const commentItems: ActivityItem[] = pendingComments
+    const commentItems: ActivityItem[] = currentComments
       .filter((c) => activityItemVisible({ kind: 'comment', comment: c }, filter))
       .map((c) => ({
         kind: 'comment',
@@ -141,13 +153,13 @@ export function AIEditsHistoryPanel({ filter, onShowAll, onReviewThread }: AIEdi
             ? c.replies[c.replies.length - 1].createdAt
             : c.createdAt,
       }))
-    const suggestionItems: ActivityItem[] = suggestionHistory
+    const suggestionItems: ActivityItem[] = currentSuggestions
       .filter((s) => activityItemVisible({ kind: 'suggestion', suggestion: s }, filter))
       .map((suggestion) => ({ kind: 'suggestion', suggestion, createdAt: suggestion.createdAt }))
     return [...annotationItems, ...commentItems, ...suggestionItems].sort((a, b) => b.createdAt - a.createdAt)
-  }, [annotations, pendingComments, suggestionHistory, filter])
+  }, [currentAnnotations, currentComments, currentSuggestions, filter])
 
-  const hasAnyActivity = annotations.length > 0 || pendingComments.length > 0 || suggestionHistory.length > 0
+  const hasAnyActivity = currentAnnotations.length > 0 || currentComments.length > 0 || currentSuggestions.length > 0
   const nothingVisible = items.length === 0
   const groups = useMemo(() => groupActivityByDate(items), [items])
 

@@ -8,7 +8,7 @@
 
 import { test, expect } from '@playwright/test'
 import type { ElectronApplication, Page } from '@playwright/test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -25,6 +25,7 @@ import {
 let app: ElectronApplication
 let page: Page
 let userDataDir: string
+let activityDocsDir: string
 
 interface ListedSuggestion {
   id: string
@@ -102,9 +103,42 @@ async function editorSnapshot(testPage: Page): Promise<{
   })
 }
 
+async function ensureActivityVisible(testPage: Page): Promise<void> {
+  const activityTab = testPage.getByRole('tab', { name: /Activity/ })
+  if (!await activityTab.isVisible({ timeout: 500 }).catch(() => false)) {
+    await testPage.keyboard.press('ControlOrMeta+Shift+L')
+    await activityTab.waitFor({ state: 'visible', timeout: 5_000 })
+  }
+  await activityTab.click()
+}
+
+async function addHumanComment(
+  testPage: Page,
+  selection: { from: number; to: number },
+  text: string,
+): Promise<void> {
+  // A newly-mounted document schedules one-time editor autofocus. Let that
+  // settle before applying the selection used by the comment popover.
+  await testPage.waitForTimeout(100)
+  await testPage.evaluate(({ from, to }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const editor = (window as any).__prose_editor
+    editor.chain().focus().setTextSelection({ from, to }).run()
+  }, selection)
+  const addCommentButton = testPage.getByTitle('Add comment (Cmd+Shift+A)')
+  await expect(addCommentButton).toBeVisible()
+  await addCommentButton.click({ force: true })
+  const dialog = testPage.getByRole('dialog', { name: 'Add Comment' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByPlaceholder(/Enter your instruction/).fill(text)
+  await dialog.getByPlaceholder(/Enter your instruction/).press('ControlOrMeta+Enter')
+  await expect(dialog).not.toBeVisible()
+}
+
 test.beforeAll(async () => {
   test.setTimeout(60_000)
   userDataDir = mkdtempSync(join(tmpdir(), 'prose-human-suggestions-'))
+  activityDocsDir = mkdtempSync(join(tmpdir(), 'prose-human-suggestions-docs-'))
   const launched = await launchApp({
     env: {
       PROSE_USER_DATA_DIR: userDataDir,
@@ -128,6 +162,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await app?.close().catch(() => {})
   rmSync(userDataDir, { recursive: true, force: true })
+  rmSync(activityDocsDir, { recursive: true, force: true })
 })
 
 test.beforeEach(async () => {
@@ -336,4 +371,64 @@ test('commenting beside Quick Review keeps the suggestion pending and updates Ac
   await reviewPanel.getByRole('button', { name: /Close review/ }).click()
   await page.getByRole('tab', { name: /Activity/ }).click()
   await expect(page.getByText(commentText, { exact: true })).toBeVisible()
+})
+
+test('Activity follows the active document and updates for a human comment', async () => {
+  const firstComment = 'First document comment.'
+  const secondComment = 'Second document comment.'
+  const firstPath = join(activityDocsDir, 'activity-first.md')
+  const secondPath = join(activityDocsDir, 'activity-second.md')
+  writeFileSync(firstPath, 'First document text.\n')
+  writeFileSync(secondPath, 'Second document text.\n')
+
+  const openedFirst = await executeProseTool(page, 'open_file', { path: firstPath })
+  expect(openedFirst.success, JSON.stringify(openedFirst)).toBe(true)
+  await waitForEditor(page)
+  await setSuggesting(page, true)
+
+  await page.locator(selectors.editor).click()
+  await page.keyboard.press('End')
+  await page.keyboard.type(' pending')
+  const firstSuggestion = await pendingSuggestion(page)
+  await addHumanComment(page, { from: 1, to: 6 }, firstComment)
+  await expect.poll(async () => (await listSuggestions(page, 'pending'))
+    .filter((entry) => entry.id === firstSuggestion.id).length).toBe(1)
+
+  const tabsAfterFirst = await executeProseTool(page, 'list_tabs', {})
+  expect(tabsAfterFirst.success, JSON.stringify(tabsAfterFirst)).toBe(true)
+  const firstTab = (tabsAfterFirst.data as { tabs: Array<{ tabId: string; isActive: boolean }> }).tabs
+    .find((tab) => tab.isActive)
+  expect(firstTab).toBeTruthy()
+
+  await ensureActivityVisible(page)
+  await expect(page.getByText(firstComment, { exact: true })).toBeVisible()
+
+  // Allow the comment and the debounced human suggestion snapshot to reach
+  // persistence before opening the second document.
+  await page.waitForTimeout(700)
+  const openedSecond = await executeProseTool(page, 'open_file', { path: secondPath })
+  expect(openedSecond.success, JSON.stringify(openedSecond)).toBe(true)
+  await waitForEditor(page)
+  await setSuggesting(page, true)
+
+  // The Activity panel remains mounted while the active document changes. A
+  // previous tab's thread must disappear before the new human comment arrives.
+  await expect(page.getByText(firstComment, { exact: true })).toHaveCount(0)
+
+  await page.locator(selectors.editor).click()
+  await page.keyboard.press('End')
+  await page.keyboard.type(' pending')
+  const secondSuggestion = await pendingSuggestion(page)
+  await addHumanComment(page, { from: 1, to: 7 }, secondComment)
+  await expect.poll(async () => (await listSuggestions(page, 'pending'))
+    .filter((entry) => entry.id === secondSuggestion.id).length).toBe(1)
+  await expect(page.getByText(secondComment, { exact: true })).toBeVisible()
+
+  const switchedBack = await executeProseTool(page, 'select_tab', { tabId: firstTab!.tabId })
+  expect(switchedBack.success, JSON.stringify(switchedBack)).toBe(true)
+  await waitForEditor(page)
+  await expect(page.getByText(firstComment, { exact: true })).toBeVisible()
+  await expect(page.getByText(secondComment, { exact: true })).toHaveCount(0)
+  await expect.poll(async () => (await listSuggestions(page, 'pending'))
+    .filter((entry) => entry.id === firstSuggestion.id).length).toBe(1)
 })

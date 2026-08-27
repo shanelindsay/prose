@@ -95,6 +95,7 @@ interface SuggestionPersistenceState {
 }
 
 let historySaveQueue: Promise<void> = Promise.resolve()
+let latestLoadGeneration = 0
 
 function suggestionActor(suggestion: AISuggestionData): ReviewActor {
   const source = suggestion.provenanceSource ?? (
@@ -200,6 +201,7 @@ export const useSuggestionStore = create<SuggestionPersistenceState>((set, get) 
   pendingSave: null,
 
   setDocumentId: (documentId: string) => {
+    latestLoadGeneration += 1
     set({ documentId, pendingSuggestions: [], history: [], pendingSave: null })
     useReviewEventStore.getState().setDocumentId(documentId)
   },
@@ -214,11 +216,23 @@ export const useSuggestionStore = create<SuggestionPersistenceState>((set, get) 
   },
 
   loadSuggestions: async (documentId: string) => {
+    const generation = ++latestLoadGeneration
+
+    // Clear the previous document's review records before awaiting IndexedDB.
+    // Activity renders from these stores, so leaving them populated during a
+    // tab handoff makes the feed appear to belong to the wrong document.
+    if (get().documentId !== documentId) {
+      set({ documentId, pendingSuggestions: [], history: [], pendingSave: null })
+      useReviewEventStore.getState().setDocumentId(documentId)
+    }
+
     const [loadedSuggestions, loadedHistory] = await Promise.all([
       fetchSuggestions(documentId),
       loadSuggestionHistory(documentId),
       useReviewEventStore.getState().loadEvents(documentId),
     ])
+
+    if (generation !== latestLoadGeneration || get().documentId !== documentId) return
 
     const history = loadedHistory.map((record) => normaliseRecord(record, documentId))
     const terminalIds = new Set(

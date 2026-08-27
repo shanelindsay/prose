@@ -185,18 +185,19 @@ export function useTabs() {
     // This prevents the plugin from deleting annotations when doc content changes
     useAnnotationStore.getState().setLoadingDocument(true)
 
-    // Pre-set the annotation store's documentId BEFORE setDocument (#674):
-    // Editor.tsx's recovery effect fires its own (unguarded) loadAnnotations
-    // whenever annotationStoreDocumentId !== document.documentId — pre-
-    // setting makes the effect see a match immediately, killing the
-    // double-load race with the awaited loadAnnotations below.
-    useAnnotationStore.getState().setDocumentId(targetTab.documentId)
+    // Pre-set the review stores' document IDs BEFORE setDocument. Activity
+    // renders from these stores, so clearing the previous document here keeps
+    // its feed aligned during the asynchronous loads below. This also stops
+    // Editor.tsx recovery effects from starting competing loads.
+    const newDocumentId = targetTab.documentId
+    useAnnotationStore.getState().setDocumentId(newDocumentId)
+    useSuggestionStore.getState().setDocumentId(newDocumentId)
+    useCommentStore.getState().setDocumentId(newDocumentId)
 
     // Activate the new tab
     setActiveTab(tabId)
 
     // Load target tab's document into editorStore
-    const newDocumentId = targetTab.documentId
     setDocument({
       documentId: newDocumentId,
       path: targetTab.path,
@@ -290,9 +291,11 @@ export function useTabs() {
       cursorPosition: { line: 1, column: 1 }
     })
 
-    // Pre-set the annotation store's documentId before setDocument so the
-    // Editor.tsx recovery effect doesn't fire a competing load (#674).
+    // Pre-set the review stores' document IDs before setDocument so Activity
+    // cannot briefly display the previous document while these loads run.
     useAnnotationStore.getState().setDocumentId(newDocumentId)
+    useSuggestionStore.getState().setDocumentId(newDocumentId)
+    useCommentStore.getState().setDocumentId(newDocumentId)
 
     // Set up new document in editorStore
     setDocument({
@@ -316,12 +319,6 @@ export function useTabs() {
 
     // Clear annotations
     useAnnotationStore.getState().clearAnnotations()
-
-    // Clear suggestions
-    useSuggestionStore.getState().setDocumentId(newDocumentId)
-
-    // Clear comment marks
-    useCommentStore.getState().setDocumentId(newDocumentId)
 
     // Clear reMarkable read-only state
     useEditorStore.getState().setRemarkableReadOnly(false, null)
@@ -449,9 +446,11 @@ export function useTabs() {
       })
     }
 
-    // Pre-set the annotation store's documentId before setDocument so the
-    // Editor.tsx recovery effect doesn't fire a competing load (#674).
+    // Pre-set the review stores' document IDs before setDocument so Activity
+    // cannot briefly display the previous document while these loads run.
     useAnnotationStore.getState().setDocumentId(newDocumentId)
+    useSuggestionStore.getState().setDocumentId(newDocumentId)
+    useCommentStore.getState().setDocumentId(newDocumentId)
 
     // Set up document in editorStore
     setDocument({
@@ -579,9 +578,11 @@ export function useTabs() {
 
       setActiveTab(previewTab.id)
 
-      // Pre-set the annotation store's documentId before setDocument so the
-      // Editor.tsx recovery effect doesn't fire a competing load (#674).
+      // Pre-set the review stores' document IDs before setDocument so Activity
+      // cannot briefly display the previous document while these loads run.
       useAnnotationStore.getState().setDocumentId(newDocumentId)
+      useSuggestionStore.getState().setDocumentId(newDocumentId)
+      useCommentStore.getState().setDocumentId(newDocumentId)
 
       // Load document into editor
       setDocument({
@@ -646,9 +647,11 @@ export function useTabs() {
       })
     }
 
-    // Pre-set the annotation store's documentId before setDocument so the
-    // Editor.tsx recovery effect doesn't fire a competing load (#674).
+    // Pre-set the review stores' document IDs before setDocument so Activity
+    // cannot briefly display the previous document while these loads run.
     useAnnotationStore.getState().setDocumentId(newDocumentId)
+    useSuggestionStore.getState().setDocumentId(newDocumentId)
+    useCommentStore.getState().setDocumentId(newDocumentId)
 
     setDocument({
       documentId: newDocumentId,
@@ -1105,9 +1108,11 @@ export function useTabs() {
     // Create the new tab in the store (store sets activeTabId internally)
     reopenLastClosedTabStore(snapshot, documentId)
 
-    // Pre-set the annotation store's documentId before setDocument so the
-    // Editor.tsx recovery effect doesn't fire a competing load (#674).
+    // Pre-set the review stores' document IDs before setDocument so Activity
+    // cannot briefly display the previous document while these loads run.
     useAnnotationStore.getState().setDocumentId(documentId)
+    useSuggestionStore.getState().setDocumentId(documentId)
+    useCommentStore.getState().setDocumentId(documentId)
 
     // Load the restored content into editorStore
     setDocument({

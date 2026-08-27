@@ -173,10 +173,12 @@ export async function executeSelectTab(args: {
     // Pause annotation position updates during document loading
     useAnnotationStore.getState().setLoadingDocument(true)
 
-    // Pre-set the annotation store's documentId before setDocument so the
-    // Editor.tsx recovery effect doesn't fire a competing load (#674).
+    // Pre-set the review stores' document IDs before setDocument so Activity
+    // cannot briefly display the previous document while these loads run.
     const newDocumentId = targetTab.documentId
     useAnnotationStore.getState().setDocumentId(newDocumentId)
+    useSuggestionStore.getState().setDocumentId(newDocumentId)
+    useCommentStore.getState().setDocumentId(newDocumentId)
 
     // Activate the new tab
     useTabStore.getState().setActiveTab(targetTab.id)
